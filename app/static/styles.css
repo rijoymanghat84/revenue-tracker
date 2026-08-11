@@ -324,15 +324,19 @@ tr.p-edit .rate-inp, tr.p-edit .cur-sel { border-color: var(--accent); }
 #utilTable { background: #0b101f; font-size: 12.5px; }
 #utilTable th { position: sticky; top: 0; z-index: 20; background: #0d1326; text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border-strong); font-size: 11px; color: var(--muted); }
 #utilTable th.num { text-align: right; }
-#utilTable td { padding: 6px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
-.u-name { font-weight: 600; position: sticky; left: 0; z-index: 5; background: #0e1428; }
+#utilTable td { padding: 6px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; background: #0b101f; }
+/* Resource-name column: fully opaque + always paints above scrolled cells */
+.u-name-td { position: sticky; left: 0; z-index: 4; background: #0b101f; }
+.u-name { display: block; position: sticky; left: 0; z-index: 5; background: #0e1428; padding: 6px 10px; margin: -6px -10px; font-weight: 600; }
 #utilTable tbody tr:hover .u-name { background: #1a2238; }
 .u-proj { color: var(--muted); max-width: 340px; overflow: hidden; text-overflow: ellipsis; }
 .u-cell { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
-.u-cell.red { color: var(--red); background: rgba(248,113,113,0.14); }
-.u-cell.green { color: var(--green); background: rgba(52,211,153,0.12); }
-.u-cell.yellow { color: var(--amber); background: rgba(251,191,36,0.12); }
-.u-cell.orange { color: #fb923c; background: rgba(251,146,60,0.12); }
+/* SOLID backgrounds everywhere — no rgba, nothing can show through.
+   (Higher specificity than the base td rule so colors actually apply.) */
+#utilTable td.u-cell.red { color: #f87171; background: #3a1b22; }
+#utilTable td.u-cell.green { color: #34d399; background: #10301f; }
+#utilTable td.u-cell.yellow { color: #fbbf24; background: #332a12; }
+#utilTable td.u-cell.orange { color: #fb923c; background: #33200f; }
 
 /* ---------- toast / modal ---------- */
 .toast {

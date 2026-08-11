@@ -1,14 +1,16 @@
 /* Revenue Tracker — service worker
    Strategy:
-   - Static app shell (/, /styles.css, /app.js, /manifest.webmanifest, icons):
-     cache-first once fetched successfully (they are cache-busted with ?v= so
-     updates always reach the browser via a new URL).
-   - API calls (/api/*, /healthz): NEVER cached — always network, so data is
-     always fresh and private. Offline, API calls fail gracefully.
-   - Only 200 responses are ever stored — never 401s, so the basic-auth gate
-     can't be poisoned into an offline "login required" loop.
+   - Navigations (HTML shell): NETWORK-FIRST — always fetch fresh HTML, fall
+     back to cache only when offline. This guarantees every load picks up the
+     latest version (no stale installed-PWA shells).
+   - Static assets (/styles.css?v=…, /app.js?v=…, icons, manifest):
+     cache-first; they are cache-busted with ?v= so updates reach the browser
+     via new URLs.
+   - API calls (/api/*, /healthz): NEVER cached — always network, data stays
+     fresh and private. Only 200 responses are ever stored — never 401s — so
+     the basic-auth gate can't be poisoned.
 */
-const CACHE = "revenue-v1";
+const CACHE = "revenue-v2";
 const SHELL = ["/", "/styles.css", "/app.js", "/manifest.webmanifest",
                "/icons/icon-192.png", "/icons/icon-512.png"];
 
@@ -23,9 +25,8 @@ self.addEventListener("activate", (e) => {
   e.waitUntil(
     caches.keys().then((keys) =>
       Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))
-    )
+    ).then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
 self.addEventListener("fetch", (e) => {
@@ -35,7 +36,23 @@ self.addEventListener("fetch", (e) => {
   // API + healthz: network only
   if (url.pathname.startsWith("/api/") || url.pathname === "/healthz") return;
 
-  // Static shell: cache-first
+  // HTML navigations: network-first (fresh shell every load), cache fallback offline
+  if (e.request.mode === "navigate") {
+    e.respondWith(
+      fetch(e.request)
+        .then((res) => {
+          if (res.ok) {
+            const clone = res.clone();
+            caches.open(CACHE).then((c) => c.put(e.request, clone));
+          }
+          return res;
+        })
+        .catch(() => caches.match(e.request).then((hit) => hit || caches.match("/")))
+    );
+    return;
+  }
+
+  // Static assets: cache-first
   e.respondWith(
     caches.match(e.request).then((hit) => {
       if (hit) return hit;

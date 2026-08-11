@@ -709,7 +709,7 @@ function renderUtilization() {
     let rows = "";
     for (const row of data.rows) {
       rows += `<tr>
-        <td class="u-name">${esc(row.name)}</td>
+        <td class="u-name-td"><div class="u-name">${esc(row.name)}</div></td>
         <td class="u-proj">${esc(row.projects.join(", ") || "—")}</td>`;
       for (const mo of row.months) {
         const cls = utilClass(mo.utilization);
