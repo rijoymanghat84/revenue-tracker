@@ -705,7 +705,7 @@ function utilClass(v) {
 function renderUtilization() {
   api("/api/utilization").then((data) => {
     const months = data.months;
-    let head = `<tr><th>Resource</th><th>Projects</th>${months.map((m) => `<th class="num">${esc(m)}</th>`).join("")}<th class="num">Overall</th></tr>`;
+    let head = `<tr><th class="u-th-name">Resource</th><th>Projects</th>${months.map((m) => `<th class="num">${esc(m)}</th>`).join("")}<th class="num">Overall</th></tr>`;
     let rows = "";
     for (const row of data.rows) {
       rows += `<tr>
