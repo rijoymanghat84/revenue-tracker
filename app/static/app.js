@@ -14,7 +14,7 @@
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
-const state = { resources: [], weeks: [], months: [], pricing: [], view: "dash" };
+const state = { resources: [], weeks: [], months: [], pricing: [], view: "dash", gridEdit: { onsite: true, offshore: false } };
 const dirty = new Map();   // resource rid -> {fields:{}, hours:bool}
 const pDirty = new Map();  // pricing pid -> {title?, rate?, offshore_rate?}
 let flushTimer = null, pFlushTimer = null;
@@ -132,27 +132,43 @@ function effByField(r, field) {
   return field === "offshore_rate" ? effOffshore(r) : effRate(r);
 }
 
+/** per-view edit state: the Edit/Done toggle is the single source of truth.
+    Onsite defaults unlocked (the entry surface); Offshore defaults locked.
+    Locked = fully read-only; unlocked = everything editable. */
+function gridEditState() {
+  const unlocked = !!state.gridEdit[state.view];
+  return { meta: unlocked, hours: unlocked, rates: unlocked };
+}
+
 function gridRowHTML(r) {
+  const es = gridEditState();
   const mode = MODES[state.view];
   const hours = r.hours || Array(state.weeks.length).fill(0);
   const rate = r[mode.rateField];
   const total = hours.reduce((a, b) => a + b, 0);
   const rev = (rate || 0) * total;
-  const weekCell = (h, i) => mode.hoursEditable
+  const weekCell = (h, i) => es.hours
     ? `<input class="inp" type="number" step="0.25" min="0" data-week="${i}" value="${h ? h : ""}" placeholder="0" inputmode="decimal">`
     : `<input class="inp mirror" type="number" step="0.25" min="0" disabled value="${h ? h : ""}" data-week="${i}">`;
   let weekCells = "";
-  hours.forEach((h, i) => { weekCells += `<td class="week${mode.hoursEditable ? "" : " mirror-cell"}">${weekCell(h, i)}</td>`; });
+  hours.forEach((h, i) => { weekCells += `<td class="week${es.hours ? "" : " mirror-cell"}">${weekCell(h, i)}</td>`; });
 
-  const delBtn = mode.metaEditable ? `<button class="del" title="Delete resource">✕</button>` : "";
+  const delBtn = es.meta ? `<button class="del" title="Delete resource">✕</button>` : "";
   const cur = gridCurrencyTag(r);
+  const titleCell = es.meta
+    ? titleSelectHTML(r)
+    : `<span class="mirror-val">${esc(r.role || "—")}</span>`;
+  const rateVal = effByField(r, mode.rateField);
+  const rateCell = es.meta
+    ? `${cur}<input class="inp num" type="number" min="0" step="any" data-field="${mode.rateField}" value="${rateVal ?? ""}" placeholder="—" title="${mode.rateLabel} (auto-fills from Title)">`
+    : `<span class="mirror-val">${cur}${rateVal !== null && rateVal !== undefined ? fmt(rateVal) : "—"}</span>`;
   return `<tr class="resource-row" data-rid="${r.id}">
-    <td class="sticky-l sc1 meta-col">${metaCell(r, "country", mode.metaEditable)}</td>
-    <td class="sticky-l sc2 meta-col">${metaCell(r, "client", mode.metaEditable)}</td>
-    <td class="sticky-l sc3 meta-col">${metaCell(r, "project", mode.metaEditable)}</td>
-    <td class="sticky-l sc4 meta-col">${metaCell(r, "name", mode.metaEditable)}</td>
-    <td class="sticky-l sc5 meta-col">${titleSelectHTML(r)}</td>
-    <td class="sticky-l sc6 meta-col num-cell">${cur}<input class="inp num" type="number" min="0" step="any" data-field="${mode.rateField}" value="${effByField(r, mode.rateField) ?? ""}" placeholder="—" title="${mode.rateLabel} (auto-fills from Title)"></td>
+    <td class="sticky-l sc1 meta-col">${metaCell(r, "country", es.meta)}</td>
+    <td class="sticky-l sc2 meta-col">${metaCell(r, "client", es.meta)}</td>
+    <td class="sticky-l sc3 meta-col">${metaCell(r, "project", es.meta)}</td>
+    <td class="sticky-l sc4 meta-col">${metaCell(r, "name", es.meta)}</td>
+    <td class="sticky-l sc5 meta-col">${titleCell}</td>
+    <td class="sticky-l sc6 meta-col num-cell">${rateCell}</td>
     <td class="sticky-l sc7 calc dim" data-calc="total_hrs">${fmt(total, 1)}</td>
     <td class="sticky-l sc8 calc" data-calc="total_rev">${fmt(rev)}</td>
     ${weekCells}
@@ -161,7 +177,7 @@ function gridRowHTML(r) {
 }
 
 function renderGrid() {
-  const weeks = state.weeks, mode = MODES[state.view];
+  const weeks = state.weeks, mode = MODES[state.view], es = gridEditState();
   const groups = [];
   for (const r of state.resources) {
     const client = (r.client || "").trim();
@@ -172,8 +188,11 @@ function renderGrid() {
     }
   }
   const filter = ($("#filter").value || "").toLowerCase();
-  $("#gridNote").innerHTML = `<span class="dot ${mode.dot}"></span>${mode.note}`;
+  const lockHint = es.meta ? "" : " · LOCKED — click Edit to make changes";
+  $("#gridNote").innerHTML = `<span class="dot ${mode.dot}"></span>${mode.note}${lockHint}`;
   $("#btnAdd").style.display = "initial";
+  $("#btnEditGrid").textContent = es.meta ? "Done · Lock" : "Edit";
+  $("#btnEditGrid").classList.toggle("edit-active", es.meta);
 
   $("#gridHead").innerHTML = gridHeadHTML();
   let html = "<tbody>";
@@ -412,6 +431,7 @@ $("#gridBody").addEventListener("paste", (e) => {
   if (!text.includes("\t") && !text.includes("\n")) return;
   e.preventDefault();
   const mode = MODES[state.view];
+  const es = gridEditState();
   const tr = inp.closest("tr[data-rid]");
   const anchorCol = inp.closest("td").cellIndex;
   const lines = text.replace(/\r/g, "").split("\n");
@@ -428,7 +448,7 @@ $("#gridBody").addEventListener("paste", (e) => {
       if (col < N_META) {
         // meta columns 0..4
         const f = META[col];
-        if (f && mode.metaEditable) {
+        if (f && es.meta) {
           const mi = $(`input[data-field="${f}"]`, rowEl);
           if (mi) { mi.value = val; markDirty(rid, "fields", f, val); }
         }
@@ -437,7 +457,7 @@ $("#gridBody").addEventListener("paste", (e) => {
         const ri = $(`input[data-field="${mode.rateField}"]`, rowEl);
         if (ri) { ri.value = val; markDirty(rid, "fields", mode.rateField, num(val) ?? null); }
       } else if (col >= WEEKS_START && col < WEEKS_START + state.weeks.length) {
-        if (!mode.hoursEditable) continue;
+        if (!es.hours) continue;
         const w = col - WEEKS_START;
         const wi = $(`input[data-week="${w}"]`, rowEl);
         if (wi) { wi.value = val; markDirty(rid, "hours"); }
@@ -648,6 +668,10 @@ $("#btnAdd").addEventListener("click", async () => {
     await loadState();
     toast("Resource added — fill in client, project, name, title & hours");
   } catch (e) { toast(`Add failed: ${e.message}`, true); }
+});
+$("#btnEditGrid").addEventListener("click", () => {
+  state.gridEdit[state.view] = !state.gridEdit[state.view];
+  renderGrid();
 });
 $("#btnCollapseAll").addEventListener("click", () => {
   $$("#gridBody tr.group-row").forEach((g) => toggleGroupRows(g, true));

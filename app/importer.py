@@ -283,10 +283,9 @@ def build_workbook(weeks: list[str], months: list[dict],
     # --- On-Site / Off-Shore sheets ---
     _build_timesheet_sheet(wb, "On-Site", weeks, months, resources, billed=True)
     _build_timesheet_sheet(wb, "Off-Shore", weeks, months, resources, billed=False)
-    # protect Off-Shore like the original (password from the VBA const)
-    ws_off = wb["Off-Shore"]
-    ws_off.protection.sheet = True
-    ws_off.protection.password = "offshore2024"
+    # NOTE: Off-Shore is intentionally NOT sheet-protected — exports must be
+    # fully editable (the original workbook protected this sheet, but the user
+    # asked for unlocked exports).
 
     # --- Dashboard sheet ---
     ws_d = wb.active
