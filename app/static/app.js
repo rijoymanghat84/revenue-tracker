@@ -176,6 +176,35 @@ function gridRowHTML(r) {
   </tr>`;
 }
 
+/**
+ * Pin each sticky column to its NATURAL layout position. Must run whenever
+ * column widths can change (initial render AND group collapse/expand — hidden
+ * rows stop contributing width, so offsets go stale). Measures with any stale
+ * inline offsets cleared, at scrollLeft 0.
+ */
+function alignSticky() {
+  const wrap = document.querySelector("#gridWrap");
+  const table = document.querySelector("#gridTable");
+  const probe = document.querySelector("#gridBody tr.resource-row");
+  if (!wrap || !table || !probe) return;
+  const prev = wrap.scrollLeft;
+  wrap.scrollLeft = 0;
+  // clear previous inline offsets so getBoundingClientRect reflects real layout
+  document.querySelectorAll("#gridHead [class*=sc], #gridBody [class*=sc]").forEach((el) => {
+    el.style.left = "";
+  });
+  const tLeft = table.getBoundingClientRect().left;
+  for (let i = 1; i <= N_LOCKED; i++) {
+    const cell = probe.children[i];
+    if (!cell) continue;
+    const x = Math.round(cell.getBoundingClientRect().left - tLeft);
+    document.querySelectorAll(`#gridHead .sc${i}, #gridBody .sc${i}`).forEach((el) => {
+      el.style.left = `${x}px`;
+    });
+  }
+  wrap.scrollLeft = prev;
+}
+
 function renderGrid() {
   const weeks = state.weeks, mode = MODES[state.view], es = gridEditState();
   const groups = [];
@@ -219,6 +248,7 @@ function renderGrid() {
   });
   html += "</tbody>";
   $("#gridBody").innerHTML = html;
+  alignSticky();
 }
 
 /* ---------------- grid live math ---------------- */
@@ -485,6 +515,8 @@ function toggleGroupRows(gr, force) {
     if (nxt.classList.contains("resource-row")) nxt.classList.toggle("collapsed", collapsed);
     nxt = nxt.nextElementSibling;
   }
+  // hidden resource rows change the table's column widths → re-align sticky
+  alignSticky();
 }
 
 $("#gridBody").addEventListener("click", async (e) => {
