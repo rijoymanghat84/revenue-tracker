@@ -10,6 +10,7 @@ Run:  /usr/bin/python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8802
 from __future__ import annotations
 
 import base64
+import datetime as dt
 import hmac
 import io
 import json
@@ -17,7 +18,7 @@ import os
 import sqlite3
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -545,7 +546,7 @@ def api_pricing_apply(pid: int):
 
 # ---------------- Import ----------------
 @app.post("/api/import")
-async def api_import(file: UploadFile = File(...)):
+async def api_import(file: UploadFile = File(...), mode: str = Form("merge")):
     data = await file.read()
     try:
         parsed = importer.parse_workbook_bytes(data)
@@ -553,7 +554,21 @@ async def api_import(file: UploadFile = File(...)):
         raise HTTPException(400, f"Could not read workbook: {e}")
 
     conn = get_db()
+    backup_path = None
     try:
+        # Replace mode: this file becomes the whole database. Backup first,
+        # then wipe resources + hours. Pricing (the rate card) and the week
+        # layout are kept — they're configuration, not data.
+        if mode == "replace":
+            backups_dir = DATA_DIR / "backups"
+            backups_dir.mkdir(parents=True, exist_ok=True)
+            stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+            import shutil
+            backup_path = backups_dir / f"revenue-before-replace-{stamp}.db"
+            shutil.copy2(DB_PATH, backup_path)
+            conn.execute("DELETE FROM weekly_hours")
+            conn.execute("DELETE FROM resources")
+            conn.commit()
         # Map incoming roles to existing canonical Pricing spellings so the
         # vocabulary stays stable across imports (old Excel files won't
         # reintroduce non-canonical titles).
@@ -664,6 +679,8 @@ async def api_import(file: UploadFile = File(...)):
             "updated": updated,
             "skipped": skipped,
             "pricing_added": pricing_added,
+            "mode": mode,
+            "backup": str(backup_path) if backup_path else None,
             "warnings": parsed["warnings"],
             "dashboard": build_dashboard_rows(resources, weeks),
             "resources": resources,

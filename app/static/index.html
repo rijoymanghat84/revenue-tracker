@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Revenue 2026</title>
-<link rel="stylesheet" href="/styles.css?v=9">
+<link rel="stylesheet" href="/styles.css?v=11">
 </head>
 <body>
 <div class="bg-glow"></div>
@@ -25,6 +25,10 @@
       <button class="tab" data-tab="offshore">Offshore</button>
     </div>
     <input type="file" id="fileInput" accept=".xlsm,.xlsx" hidden>
+    <select id="importMode" class="cur-sel" title="How the upload should apply to existing data">
+      <option value="merge">Import: Merge (keep existing, add/update)</option>
+      <option value="replace">Import: Replace (wipe &amp; load this file)</option>
+    </select>
     <button class="btn ghost" id="btnImport" title="Upload an Excel file (same layout) to update data">Import Excel</button>
     <a class="btn ghost" id="btnExport" href="/api/export" title="Download an Excel file (Dashboard + On-Site + Off-Shore + Pricing tabs)">Export Excel</a>
     <button class="btn primary" id="btnAdd">+ Add Resource</button>
@@ -86,6 +90,6 @@
   </div>
 </div>
 
-<script src="/app.js?v=10"></script>
+<script src="/app.js?v=11"></script>
 </body>
 </html>
