@@ -12,10 +12,15 @@ password as your other WebUIs; stored in `/opt/data/revenue-tracker/.password`)
 Four tabs (in order): **Dashboard · Pricing · Onsite · Offshore**
 - **Onsite** — Country, Client, Project, Resource Name, Title (dropdown),
   **Rate**, Total Hours, Total Revenue, then Month+Week columns. Master sheet:
-  hours and resources entered here (UI or Excel upload).
+  hours and resources entered here (UI, paste, or Excel upload). Unlocked by
+  default; the **Edit/Done** toggle in the toolbar locks it read-only when you
+  want to prevent accidental changes.
 - **Offshore** — same columns with your **Offshore Rate** (cost side). Created
-  automatically from Onsite — hours mirror (read-only) and both rates come from
-  the Pricing tab; pick a Title anywhere and BOTH rates auto-fill and persist.
+  automatically from Onsite; hours & metadata mirror it. **Locked by default** —
+  click **Edit** to unlock everything (hours/names/rates — same data as
+  Onsite), make quick fixes without Excel, then Done re-locks.
+- Exported Excel sheets are NOT protected — the downloaded file is fully
+  editable everywhere.
 - **Pricing** — the title library: **Title / Rate / Offshore Rate**. Pre-set to
   Rijoy's canonical list: Project manager, Solution Architect, Principal
   Architect, Quadient Developer, Sr. Quadient Developer, Java Developer, Sr.
@@ -39,8 +44,8 @@ Four tabs (in order): **Dashboard · Pricing · Onsite · Offshore**
   confirm + automatic DB backup to `data/backups/`, pricing kept) so the file
   becomes the whole database. Reads the original Revenue_2026 layout too;
   full-year files (≥50 weeks) rewire the week layout, short files don't.
-- **Export Excel** — Dashboard + On-Site + Off-Shore (formulas, Off-Shore
-  protected `offshore2024`) + Pricing, with the same headings so it
+- **Export Excel** — Dashboard + On-Site + Off-Shore (formulas, **no sheet
+  protection — fully editable**) + Pricing, with the same headings so it
   round-trips.
 
 ## Replicating this app elsewhere (another machine/agent)

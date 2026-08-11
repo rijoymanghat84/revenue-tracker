@@ -84,6 +84,10 @@ body {
 .btn.primary:hover { filter: brightness(1.1); }
 .btn.ghost { background: transparent; }
 .btn.mini { padding: 4px 10px; font-size: 12px; }
+.btn.edit-active {
+  background: rgba(34,211,238,0.18); border-color: var(--accent); color: var(--accent);
+  box-shadow: 0 0 10px rgba(34,211,238,0.25);
+}
 .btn.danger { color: var(--red); background: rgba(248,113,113,0.08); border-color: rgba(248,113,113,0.35); }
 .btn.danger:hover { background: rgba(248,113,113,0.18); }
 
