@@ -403,13 +403,15 @@ def build_dashboard_rows(resources: list[dict], weeks: list[str]) -> dict:
     order: list[tuple] = []
     for r in resources:
         client = (r["client"] or "").strip()
+        project = (r["project"] or "").strip()
         country = (r["country"] or "").strip()
         if not client:
             continue
-        key = (_norm(country), _norm(client))
+        key = (_norm(country), _norm(client), _norm(project))
         g = groups.setdefault(key, {
             "country": country or "—",
             "client": client,
+            "project": project or "—",
             "revenue": 0.0,
             "expense": 0.0,
             "difference": 0.0,
@@ -592,7 +594,14 @@ async def api_import(file: UploadFile = File(...), mode: str = Form("merge")):
             "SELECT id, country, client, project, name, rate, offshore_rate FROM resources"
         ).fetchall()
         by_key = {(_norm(r["client"]), _norm(r["name"])): r for r in existing}
-        added = updated = skipped = 0
+        # Name index for rename detection: if a row no longer matches by
+        # (client,name) but its name matches EXACTLY ONE existing resource on a
+        # DIFFERENT client, treat it as a rename (client/project changed) and
+        # update that row instead of adding a duplicate.
+        by_name: dict[str, list] = {}
+        for r in existing:
+            by_name.setdefault(_norm(r["name"]), []).append(r)
+        added = updated = skipped = renamed = 0
         for pr in parsed["resources"]:
             key = (_norm(pr["client"]), _norm(pr["name"]))
             cur = by_key.get(key)
@@ -614,6 +623,31 @@ async def api_import(file: UploadFile = File(...), mode: str = Form("merge")):
                 )
                 updated += 1
             else:
+                # No (client,name) match — maybe the row was RENAMED (new
+                # client and/or project on the same person).
+                cand = by_name.get(_norm(pr["name"]), [])
+                if len(cand) == 1 and _norm(cand[0]["client"]) != _norm(pr["client"]):
+                    cur = cand[0]
+                    conn.execute(
+                        "UPDATE resources SET country=?, client=?, project=?, role=?, rate=?, offshore_rate=? WHERE id=?",
+                        (
+                            pr["country"], pr["client"],
+                            pr["project"] if parsed.get("has_project") else cur["project"],
+                            pr["role"],
+                            pr["rate"] if pr["rate"] is not None else cur["rate"],
+                            pr["offshore_rate"] if pr["offshore_rate"] is not None else cur["offshore_rate"],
+                            cur["id"],
+                        ),
+                    )
+                    conn.execute("DELETE FROM weekly_hours WHERE resource_id=?", (cur["id"],))
+                    conn.executemany(
+                        "INSERT INTO weekly_hours (resource_id, week, hours) VALUES (?,?,?)",
+                        [(cur["id"], i, h) for i, h in enumerate(pr["hours"]) if h],
+                    )
+                    by_key[(_norm(pr["client"]), _norm(pr["name"]))] = cur
+                    by_name.setdefault(_norm(pr["name"]), []).append(cur)
+                    renamed += 1
+                    continue
                 cur2 = conn.execute(
                     "INSERT INTO resources (country, client, project, name, role, rate, offshore_rate, sort_order) "
                     "VALUES (?,?,?,?,?,?,?, COALESCE((SELECT MAX(sort_order)+1 FROM resources),0))",
@@ -677,6 +711,7 @@ async def api_import(file: UploadFile = File(...), mode: str = Form("merge")):
         return {
             "added": added,
             "updated": updated,
+            "renamed": renamed,
             "skipped": skipped,
             "pricing_added": pricing_added,
             "mode": mode,
