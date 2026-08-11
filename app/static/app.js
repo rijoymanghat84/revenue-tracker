@@ -96,14 +96,20 @@ function gridHeadHTML() {
   const headCells = colHeads.map(([h, sc]) =>
     `<th${sc ? ` class="sticky-h ${sc} colh"` : ` class="colh"`}>${h}</th>`).join("");
   const headBlank = (n) => (n > 0 ? "<th></th>".repeat(n) : "");
+  // month/week rows: pin the SAME frozen block (Client..TR = sc1..sc7) plus one
+  // plain cell for Country, so the whole 3-row header stays one solid unit
+  // while the month/week labels scroll away to the right.
+  const countrySpacer = "<th></th>";
+  const stickySpacers = Array.from({ length: N_LOCKED }, (_, i) =>
+    `<th class="sticky-h sc${i + 1}"></th>`).join("");
   const monthCells = months.map((m) => `<th colspan="${m.end - m.start + 1}">${esc(m.name)}</th>`).join("");
   const weekCells = weeks.map((w) => `<th class="week-h">${esc(w)}</th>`).join("");
   return `<tr class="head-row">
             ${headCells}
             ${headBlank(weeks.length)}
           </tr>
-          <tr class="month-row">${headBlank(N_LOCKED + 1)}${monthCells}</tr>
-          <tr class="week-row">${headBlank(N_LOCKED + 1)}${weekCells}</tr>`;
+          <tr class="month-row">${countrySpacer}${stickySpacers}${monthCells}</tr>
+          <tr class="week-row">${countrySpacer}${stickySpacers}${weekCells}</tr>`;
 }
 
 function titleSelectHTML(r) {
