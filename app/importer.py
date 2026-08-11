@@ -277,7 +277,8 @@ def parse_pricing_sheet(data: bytes) -> list[dict]:
 # ---------------- Export ----------------
 def build_workbook(weeks: list[str], months: list[dict],
                    resources: list[dict], dashboard: dict,
-                   pricing: list[dict] | None = None) -> io.BytesIO:
+                   pricing: list[dict] | None = None,
+                   utilization: dict | None = None) -> io.BytesIO:
     wb = openpyxl.Workbook()
 
     # --- On-Site / Off-Shore sheets ---
@@ -341,6 +342,30 @@ def build_workbook(weeks: list[str], months: list[dict],
         rp += 1
     for col, width in zip("ABCD", (34, 12, 14, 10)):
         ws_p.column_dimensions[col].width = width
+
+    # --- Utilization sheet (auto-calculated; locked so it can't be edited) ---
+    if utilization:
+        ws_u = wb.create_sheet("Utilization")
+        headers = ["Resource", "Projects"] + utilization["months"] + ["Overall"]
+        for c, h in enumerate(headers, start=1):
+            cell = ws_u.cell(1, c, h)
+            cell.font = Font(bold=True)
+        ur = 2
+        for row in utilization["rows"]:
+            ws_u.cell(ur, 1, row["name"])
+            ws_u.cell(ur, 2, ", ".join(row["projects"]))
+            for j, mo in enumerate(row["months"]):
+                c = ws_u.cell(ur, 3 + j, mo["utilization"] / 100)
+                c.number_format = "0%"
+            c = ws_u.cell(ur, 3 + len(row["months"]), row["overall"] / 100)
+            c.number_format = "0%"
+            ur += 1
+        ws_u.column_dimensions["A"].width = 26
+        ws_u.column_dimensions["B"].width = 44
+        for col in range(3, 3 + len(utilization["months"]) + 1):
+            ws_u.column_dimensions[openpyxl.utils.get_column_letter(col)].width = 9
+        ws_u.protection.sheet = True
+        ws_u.protection.password = "utilization"
 
     buf = io.BytesIO()
     wb.save(buf)

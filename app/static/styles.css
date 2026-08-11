@@ -123,7 +123,7 @@ thead th {
   position: sticky; z-index: 30;
   background: #0d1326;   /* SOLID — no see-through under any header cell */
   border-bottom: 1px solid var(--border-strong);
-  border-right: 1px solid var(--border);
+  border-right: 1px solid rgba(255,255,255,0.26);
   text-align: center; font-size: 11px; color: var(--muted);
   padding: 4px 6px; white-space: nowrap; font-weight: 600;
 }
@@ -136,19 +136,19 @@ thead .week-row th { top: 58px; height: 28px; }
 td.sticky-l, th.sticky-h {
   position: sticky; z-index: 10;
   background: #0e1428;
-  border-right: 1px solid var(--border);
+  border-right: 1px solid rgba(255,255,255,0.26);
 }
 tbody tr:hover td.sticky-l { background: #1a2238; }
 /* sticky offsets are set inline by alignSticky() to each column's natural
-   layout position — the CSS below is only a fallback before JS runs */
+   layout position — CSS fallbacks are all 0 so pre-JS rendering stays natural */
 td.sc1, th.sc1 { left: 0; }
-td.sc2, th.sc2 { left: 96px; }
-td.sc3, th.sc3 { left: 246px; }
-td.sc4, th.sc4 { left: 386px; }
-td.sc5, th.sc5 { left: 536px; }
-td.sc6, th.sc6 { left: 626px; }
-td.sc7, th.sc7 { left: 716px; }
-td.sc8, th.sc8 { left: 816px; }
+td.sc2, th.sc2 { left: 0; }
+td.sc3, th.sc3 { left: 0; }
+td.sc4, th.sc4 { left: 0; }
+td.sc5, th.sc5 { left: 0; }
+td.sc6, th.sc6 { left: 0; }
+td.sc7, th.sc7 { left: 0; }
+td.sc8, th.sc8 { left: 0; }
 thead th.sticky-h { z-index: 35; background: #0e1428; }
 thead .head-row th.sticky-h { font-size: 12px; color: var(--text); font-weight: 700; text-align: left; padding: 6px 8px; }
 thead .month-row th.sticky-h { z-index: 33; }
@@ -171,22 +171,21 @@ thead .week-row th.sticky-h { z-index: 33; }
    show the page through, while scrolling horizontally or vertically */
 #gridWrap, #dashWrap, #pricingWrap { background: #0b101f; }
 #gridTable, #dashTable, #pricingTable { background: #0b101f; }
+/* fixed layout: columns follow the <colgroup> exactly — no phantom columns,
+   no content-driven gaps/overlaps, even widths */
+#gridTable { table-layout: fixed; }
 
-td, th { border-right: 1px solid var(--border); }
-/* floor widths for the 8 leading columns so they stay readable even when
-   resource rows are hidden (collapsed groups shrink auto-layout widths) */
-#gridTable td:nth-child(1), #gridTable th:nth-child(1) { min-width: 70px; }
-#gridTable td:nth-child(2), #gridTable th:nth-child(2) { min-width: 150px; }
-#gridTable td:nth-child(3), #gridTable th:nth-child(3) { min-width: 140px; }
-#gridTable td:nth-child(4), #gridTable th:nth-child(4) { min-width: 150px; }
-#gridTable td:nth-child(5), #gridTable th:nth-child(5) { min-width: 150px; }
-#gridTable td:nth-child(6), #gridTable th:nth-child(6) { min-width: 90px; }
-#gridTable td:nth-child(7), #gridTable th:nth-child(7) { min-width: 90px; }
-#gridTable td:nth-child(8), #gridTable th:nth-child(8) { min-width: 100px; }
+td, th { border-right: 1px solid rgba(255,255,255,0.26); }
 tbody td { padding: 0; height: 30px; white-space: nowrap; }
 tbody tr { border-bottom: 1px solid var(--border); }
 tbody tr:nth-child(even):not(.group-row):not(.subtotal-row) > td:not(.sticky-l) { background: rgba(255,255,255,0.015); }
 td.calc { text-align: right; padding: 3px 6px; font-variant-numeric: tabular-nums; color: var(--text); }
+/* consistent alignment: meta left, numbers right, weeks centered */
+td.num-cell, td.num-cell .inp, td.num-cell .mirror-val { text-align: right; }
+td.num-cell .mirror-val { display: inline-block; width: 100%; }
+td.meta-col .inp { text-align: left; }
+td.week .inp { text-align: center; }
+.mirror-val { overflow: hidden; text-overflow: ellipsis; }
 
 /* group header row — SOLID band (was a translucent gradient that read as
    see-through under the header) */
@@ -315,6 +314,21 @@ input[type=number] { -moz-appearance: textfield; appearance: textfield; }
 .cur-tag { color: var(--amber); font-size: 11.5px; font-weight: 700; margin-right: 3px; }
 tr.p-edit td { background: rgba(34,211,238,0.06); }
 tr.p-edit .rate-inp, tr.p-edit .cur-sel { border-color: var(--accent); }
+
+/* ---------- utilization board ---------- */
+#utilWrap { background: #0b101f; }
+#utilTable { background: #0b101f; font-size: 12.5px; }
+#utilTable th { position: sticky; top: 0; z-index: 20; background: #0d1326; text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border-strong); font-size: 11px; color: var(--muted); }
+#utilTable th.num { text-align: right; }
+#utilTable td { padding: 6px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.u-name { font-weight: 600; position: sticky; left: 0; background: #0e1428; }
+#utilTable tbody tr:hover .u-name { background: #1a2238; }
+.u-proj { color: var(--muted); max-width: 340px; overflow: hidden; text-overflow: ellipsis; }
+.u-cell { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+.u-cell.red { color: var(--red); background: rgba(248,113,113,0.14); }
+.u-cell.green { color: var(--green); background: rgba(52,211,153,0.12); }
+.u-cell.yellow { color: var(--amber); background: rgba(251,191,36,0.12); }
+.u-cell.orange { color: #fb923c; background: rgba(251,146,60,0.12); }
 
 /* ---------- toast / modal ---------- */
 .toast {
