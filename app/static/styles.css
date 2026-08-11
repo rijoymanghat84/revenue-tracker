@@ -139,17 +139,25 @@ td.sticky-l, th.sticky-h {
 }
 tbody tr:hover td.sticky-l { background: #1a2238; }
 td.sc1, th.sc1 { left: 0; }
-td.sc2, th.sc2 { left: 96px; }
-td.sc3, th.sc3 { left: 246px; }
-td.sc4, th.sc4 { left: 386px; }
-td.sc5, th.sc5 { left: 536px; }
-td.sc6, th.sc6 { left: 626px; }
-td.sc7, th.sc7 { left: 716px; }
-td.sc8, th.sc8 { left: 816px; }
+td.sc2, th.sc2 { left: 150px; }
+td.sc3, th.sc3 { left: 290px; }
+td.sc4, th.sc4 { left: 440px; }
+td.sc5, th.sc5 { left: 590px; }
+td.sc6, th.sc6 { left: 680px; }
+td.sc7, th.sc7 { left: 770px; }
 thead th.sticky-h { z-index: 35; background: #0e1428; }
 thead .head-row th.sticky-h { font-size: 12px; color: var(--text); font-weight: 700; text-align: left; padding: 6px 8px; }
 thead .month-row th.sticky-h { z-index: 33; }
 thead .week-row th.sticky-h { z-index: 33; }
+
+/* visible scrollbars (dark theme) — scrolling must never look "gone" */
+.table-wrap::-webkit-scrollbar { width: 12px; height: 12px; }
+.table-wrap::-webkit-scrollbar-track { background: rgba(255,255,255,0.04); border-radius: 8px; }
+.table-wrap::-webkit-scrollbar-thumb {
+  background: rgba(148,163,184,0.4); border-radius: 8px; border: 2px solid #0b1020;
+}
+.table-wrap::-webkit-scrollbar-thumb:hover { background: rgba(148,163,184,0.65); }
+.table-wrap::-webkit-scrollbar-corner { background: transparent; }
 
 @media (max-width: 640px) {
   td.sticky-l, th.sticky-h { position: static; }

@@ -85,16 +85,16 @@ const MODES = {
    Column order (per spec): Country, Client, Project, Name, Title, Rate,
    Total Hours, Total Revenue, then Month + Week columns. The first 8 columns
    are sticky-left (never move when scrolling right); weeks scroll. */
-const N_META = 5;          // Country, Client, Project, Name, Title
-const N_LOCKED = 8;        // + Rate, Total Hours, Total Revenue
-const WEEKS_START = 9;     // cell index where weeks begin (0-based children)
+const N_META = 5;          // Client-adjacent fields under the group label (Client..Rate zone)
+const N_LOCKED = 7;        // sticky-left: Client, Project, Name, Title, Rate, TH, TR (Country scrolls away)
+const WEEKS_START = 8;     // cell index where weeks begin (0-based children)
 
 function gridHeadHTML() {
   const weeks = state.weeks, months = state.months, mode = MODES[state.view];
-  const colHeads = ["Country", "Client", "Project", "Resource Name", "Title",
-                    esc(mode.rateLabel), "Total Hours", "Total Revenue"];
-  const headCells = colHeads.map((h, i) =>
-    `<th class="sticky-h sc${i + 1} colh">${h}</th>`).join("");
+  const colHeads = [["Country", ""], ["Client", "sc1"], ["Project", "sc2"], ["Resource Name", "sc3"],
+                    ["Title", "sc4"], [esc(mode.rateLabel), "sc5"], ["Total Hours", "sc6"], ["Total Revenue", "sc7"]];
+  const headCells = colHeads.map(([h, sc]) =>
+    `<th${sc ? ` class="sticky-h ${sc} colh"` : ` class="colh"`}>${h}</th>`).join("");
   const headBlank = (n) => (n > 0 ? "<th></th>".repeat(n) : "");
   const monthCells = months.map((m) => `<th colspan="${m.end - m.start + 1}">${esc(m.name)}</th>`).join("");
   const weekCells = weeks.map((w) => `<th class="week-h">${esc(w)}</th>`).join("");
@@ -102,8 +102,8 @@ function gridHeadHTML() {
             ${headCells}
             ${headBlank(weeks.length)}
           </tr>
-          <tr class="month-row">${headBlank(N_LOCKED)}${monthCells}</tr>
-          <tr class="week-row">${headBlank(N_LOCKED)}${weekCells}</tr>`;
+          <tr class="month-row">${headBlank(N_LOCKED + 1)}${monthCells}</tr>
+          <tr class="week-row">${headBlank(N_LOCKED + 1)}${weekCells}</tr>`;
 }
 
 function titleSelectHTML(r) {
@@ -163,14 +163,14 @@ function gridRowHTML(r) {
     ? `${cur}<input class="inp num" type="number" min="0" step="any" data-field="${mode.rateField}" value="${rateVal ?? ""}" placeholder="—" title="${mode.rateLabel} (auto-fills from Title)">`
     : `<span class="mirror-val">${cur}${rateVal !== null && rateVal !== undefined ? fmt(rateVal) : "—"}</span>`;
   return `<tr class="resource-row" data-rid="${r.id}">
-    <td class="sticky-l sc1 meta-col">${metaCell(r, "country", es.meta)}</td>
-    <td class="sticky-l sc2 meta-col">${metaCell(r, "client", es.meta)}</td>
-    <td class="sticky-l sc3 meta-col">${metaCell(r, "project", es.meta)}</td>
-    <td class="sticky-l sc4 meta-col">${metaCell(r, "name", es.meta)}</td>
-    <td class="sticky-l sc5 meta-col">${titleCell}</td>
-    <td class="sticky-l sc6 meta-col num-cell">${rateCell}</td>
-    <td class="sticky-l sc7 calc dim" data-calc="total_hrs">${fmt(total, 1)}</td>
-    <td class="sticky-l sc8 calc" data-calc="total_rev">${fmt(rev)}</td>
+    <td class="meta-col">${metaCell(r, "country", es.meta)}</td>
+    <td class="sticky-l sc1 meta-col">${metaCell(r, "client", es.meta)}</td>
+    <td class="sticky-l sc2 meta-col">${metaCell(r, "project", es.meta)}</td>
+    <td class="sticky-l sc3 meta-col">${metaCell(r, "name", es.meta)}</td>
+    <td class="sticky-l sc4 meta-col">${titleCell}</td>
+    <td class="sticky-l sc5 meta-col num-cell">${rateCell}</td>
+    <td class="sticky-l sc6 calc dim" data-calc="total_hrs">${fmt(total, 1)}</td>
+    <td class="sticky-l sc7 calc" data-calc="total_rev">${fmt(rev)}</td>
     ${weekCells}
     <td>${delBtn}</td>
   </tr>`;
@@ -203,10 +203,10 @@ function renderGrid() {
       hrs += total; rev += (m[mode.rateField] || 0) * total;
     }
     html += `<tr class="group-row" data-group="${gi}" title="Expand / collapse">
+      <td class="meta-col"></td>
       <td class="sticky-l sc1" colspan="${N_META}"><span class="group-chevron">▼</span>${esc(g.client || "—")}<span class="proj-count-chip">${g.members.length} resource(s)</span></td>
-      <td class="sticky-l sc6"></td>
-      <td class="sticky-l sc7 calc dim" data-calc="total_hrs">${fmt(hrs, 1)}</td>
-      <td class="sticky-l sc8 calc" data-calc="total_rev">${fmt(rev)}</td>
+      <td class="sticky-l sc6 calc dim" data-calc="total_hrs">${fmt(hrs, 1)}</td>
+      <td class="sticky-l sc7 calc" data-calc="total_rev">${fmt(rev)}</td>
       ${weeks.map(() => "<td></td>").join("")}
       <td></td></tr>`;
 
