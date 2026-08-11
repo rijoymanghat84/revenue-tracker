@@ -14,7 +14,7 @@
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
-const state = { resources: [], weeks: [], months: [], pricing: [], view: "dash", gridEdit: { onsite: true, offshore: false } };
+const state = { resources: [], weeks: [], months: [], pricing: [], view: "dash", gridEdit: { onsite: false, offshore: false } };
 const dirty = new Map();   // resource rid -> {fields:{}, hours:bool}
 const pDirty = new Map();  // pricing pid -> {title?, rate?, offshore_rate?}
 let flushTimer = null, pFlushTimer = null;
@@ -210,10 +210,12 @@ function renderGrid() {
   const groups = [];
   for (const r of state.resources) {
     const client = (r.client || "").trim();
-    if (groups.length && groups[groups.length - 1].client === client) {
+    const project = (r.project || "").trim();
+    const key = client + "|" + project;
+    if (groups.length && groups[groups.length - 1].key === key) {
       groups[groups.length - 1].members.push(r);
     } else {
-      groups.push({ client, members: [r] });
+      groups.push({ key, client, project, members: [r] });
     }
   }
   const filter = ($("#filter").value || "").toLowerCase();
@@ -233,7 +235,7 @@ function renderGrid() {
     }
     html += `<tr class="group-row" data-group="${gi}" title="Expand / collapse">
       <td class="meta-col"></td>
-      <td class="sticky-l sc1" colspan="${N_META}"><span class="group-chevron">▼</span>${esc(g.client || "—")}<span class="proj-count-chip">${g.members.length} resource(s)</span></td>
+      <td class="sticky-l sc1" colspan="${N_META}"><span class="group-chevron">▼</span>${esc(g.client || "—")}${g.project ? ` · ${esc(g.project)}` : ""}<span class="proj-count-chip">${g.members.length} resource(s)</span></td>
       <td class="sticky-l sc6 calc dim" data-calc="total_hrs">${fmt(hrs, 1)}</td>
       <td class="sticky-l sc7 calc" data-calc="total_rev">${fmt(rev)}</td>
       ${weeks.map(() => "<td></td>").join("")}
@@ -670,20 +672,20 @@ function renderDashboard() {
       <div class="card glass"><div class="k">Profit</div><div class="v ${profit >= 0 ? "green" : "red"}">$${fmt(profit)}</div></div>
       <div class="card glass"><div class="k">By currency</div>
         <div class="v" style="font-size:14px;line-height:1.5">${(totals.length ? totals : []).map((t) => `TOTAL ${t.currency}: $${fmt(t.revenue)}`).join("<br>") || "—"}</div></div>`;
-    let rows = `<thead><tr><th>Country</th><th>Client</th><th>Resource(s)</th><th>Revenue (Onsite)</th><th>Expense (Offshore)</th><th>Difference</th><th>Cur</th></tr></thead><tbody>`;
+    let rows = `<thead><tr><th>Country</th><th>Client</th><th>Project</th><th>Resource(s)</th><th>Revenue (Onsite)</th><th>Expense (Offshore)</th><th>Difference</th><th>Cur</th></tr></thead><tbody>`;
     const maxDiff = Math.max(...groups.map((g) => Math.abs(g.difference)), 1);
     for (const g of groups) {
       const pct = Math.min(100, Math.max(4, (Math.abs(g.difference) / maxDiff) * 100));
       const bar = `<span class="diffbar ${g.difference >= 0 ? "pos" : "neg"}" style="width:${pct}%"></span>`;
       rows += `<tr>
-        <td>${esc(g.country)}</td><td>${esc(g.client)}</td><td>${g.resources}</td>
+        <td>${esc(g.country)}</td><td>${esc(g.client)}</td><td>${esc(g.project)}</td><td>${g.resources}</td>
         <td>$${fmt(g.revenue)}</td><td>$${fmt(g.expense)}</td>
         <td style="color:${g.difference >= 0 ? "var(--green)" : "var(--red)"}">$${fmt(g.difference)} ${bar}</td>
         <td><span class="cur-chip">${g.currency}</span></td></tr>`;
     }
     for (const t of totals) {
       rows += `<tr class="total-row">
-        <td>TOTAL ${t.currency}</td><td>—</td><td>—</td>
+        <td>TOTAL ${t.currency}</td><td>—</td><td>—</td><td>—</td>
         <td>$${fmt(t.revenue)}</td><td>$${fmt(t.expense)}</td>
         <td style="color:${t.difference >= 0 ? "var(--green)" : "var(--red)"}">$${fmt(t.difference)}</td>
         <td><span class="cur-chip">${t.currency}</span></td></tr>`;
@@ -744,7 +746,7 @@ $("#fileInput").addEventListener("change", async (e) => {
     const replaceNote = data.mode === "replace"
       ? `\n\nReplaced all data — ${data.resources.length} resource(s) loaded from this file. Backup saved to ${data.backup}`
       : "";
-    showModal("Import complete", `${data.added} added, ${data.updated} updated from “${file.name}”.${pricingNote}${replaceNote}${warn}`);
+    showModal("Import complete", `${data.added} added, ${data.updated} updated, ${data.renamed || 0} renamed from “${file.name}”.${pricingNote}${replaceNote}${warn}`);
     toast(`Import ${data.mode === "replace" ? "(replace) " : ""}done`);
   } catch (err) { toast(`Import failed: ${err.message}`, true); }
   btn.disabled = false; btn.textContent = "Import Excel";
