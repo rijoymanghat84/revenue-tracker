@@ -120,15 +120,15 @@ main { padding: 0 14px 40px; }
 table { border-collapse: separate; border-spacing: 0; font-size: 12.5px; width: max-content; min-width: 100%; }
 thead th {
   position: sticky; z-index: 30;
-  background: var(--sticky-bg);
+  background: #0d1326;   /* SOLID — no see-through under any header cell */
   border-bottom: 1px solid var(--border-strong);
   border-right: 1px solid var(--border);
   text-align: center; font-size: 11px; color: var(--muted);
   padding: 4px 6px; white-space: nowrap; font-weight: 600;
 }
-/* three-row header: headings (0), months (34), weeks (58) */
+/* three-row header: headings (0), months (34), weeks (58) — solid everywhere */
 thead .head-row th { top: 0; height: 34px; }
-thead .month-row th { top: 34px; height: 24px; color: var(--text); font-size: 11.5px; background: var(--corner-bg); }
+thead .month-row th { top: 34px; height: 24px; color: var(--text); font-size: 11.5px; background: #101831; }
 thead .week-row th { top: 58px; height: 28px; }
 
 /* SOLID opaque sticky cells — no transparency, nothing shows through on scroll */
@@ -164,6 +164,11 @@ thead .week-row th.sticky-h { z-index: 33; }
 @media (max-width: 640px) {
   td.sticky-l, th.sticky-h { position: static; }
 }
+
+/* the whole grid surface is opaque — blank cells, spacer cells and gaps never
+   show the page through, while scrolling horizontally or vertically */
+#gridWrap, #dashWrap, #pricingWrap { background: #0b101f; }
+#gridTable, #dashTable, #pricingTable { background: #0b101f; }
 
 td, th { border-right: 1px solid var(--border); }
 /* floor widths for the 8 leading columns so they stay readable even when
