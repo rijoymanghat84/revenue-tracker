@@ -1,0 +1,21 @@
+# ---- runtime data — NEVER commit (user data + secrets) ----
+data/
+*.db
+*.sqlite
+*.sqlite3
+.password
+.env
+*.env
+
+# ---- python ----
+__pycache__/
+*.pyc
+.venv/
+
+# ---- logs / state ----
+logs/
+*.log
+*.tmp
+
+# ---- os ----
+.DS_Store
