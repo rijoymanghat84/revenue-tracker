@@ -8,6 +8,15 @@ password as your other WebUIs; stored in `/opt/data/revenue-tracker/.password`)
 **Local:** http://127.0.0.1:8802 (healthz open, everything else behind auth)
 **Stack:** FastAPI + SQLite + vanilla JS (dark frost-glass theme, no build step)
 
+## PWA / Mobile
+Installable progressive web app: manifest + icons (`static/icons/`), service
+worker `static/sw.js` (caches the app shell only — API calls are never cached,
+so data is always fresh and the basic-auth gate can't be poisoned). Open the
+site on a phone → browser "Add to Home Screen" → installs standalone with
+notch-safe padding and bigger touch targets. The installed app works exactly
+like the browser version (online); offline it shows the shell with graceful
+"Load failed" toasts for data.
+
 ## What it does
 Four tabs (in order): **Dashboard · Pricing · Utilization · Onsite · Offshore**
 - **Utilization** — auto-calculated (never editable): booked hours ÷ capacity
