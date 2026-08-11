@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Revenue 2026</title>
-<link rel="stylesheet" href="/styles.css?v=20">
+<link rel="stylesheet" href="/styles.css?v=21">
 </head>
 <body>
 <div class="bg-glow"></div>
@@ -69,8 +69,9 @@
     <div class="toolbar glass">
       <div class="sheet-note" id="pricingNote"><span class="dot off"></span>Title library — rows are locked until you click <b>Edit</b>; set Title, both rates &amp; currency ($/£/CA$) together, then Save. Apply pushes rates to every resource using the title.</div>
       <div class="toolbar-right">
+        <button class="btn mini" id="btnApplyAll" title="Push every title's rates to all resources using them — totals update everywhere">Update All Pricing</button>
         <button class="btn mini" id="btnAddTitle">+ Add Title</button>
-        <span class="hint">“Apply” pushes the title's rates to every resource using it.</span>
+        <span class="hint">“Apply” pushes one title's rates; “Update All Pricing” pushes every title.</span>
       </div>
     </div>
     <div class="table-wrap glass narrow" id="pricingWrap">
@@ -91,6 +92,6 @@
   </div>
 </div>
 
-<script src="/app.js?v=18"></script>
+<script src="/app.js?v=21"></script>
 </body>
 </html>
