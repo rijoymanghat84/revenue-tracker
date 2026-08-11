@@ -435,6 +435,78 @@ def build_dashboard_rows(resources: list[dict], weeks: list[str]) -> dict:
     return {"groups": rows, "totals": list(totals.values())}
 
 
+# ---------------- Utilization ----------------
+CAP_WEEK_HOURS = 40.0  # 40 hrs/week = 100% (per Rijoy's spec)
+
+
+def compute_utilization(weeks, months, resources) -> dict:
+    """Booked hours ÷ capacity. Monthly capacity = weeks-in-month × 40;
+    overall = total hours ÷ (53 weeks × 40). Grouped by resource name with the
+    projects each resource works on."""
+    month_weeks = {m["name"]: list(range(m["start"], m["end"] + 1)) for m in months}
+    by_name: dict[str, dict] = {}
+    order: list[str] = []
+    for r in resources:
+        name = (r["name"] or "").strip()
+        if not name:
+            continue
+        if name not in by_name:
+            by_name[name] = {
+                "name": name,
+                "projects": [],
+                "month_hours": {m["name"]: 0.0 for m in months},
+                "total_hours": 0.0,
+            }
+            order.append(name)
+        e = by_name[name]
+        proj = "/".join(x for x in ((r["client"] or "").strip(), (r["project"] or "").strip()) if x)
+        if proj and proj not in e["projects"]:
+            e["projects"].append(proj)
+        for i, h in enumerate(r["hours"]):
+            if not h:
+                continue
+            e["total_hours"] += h
+            for m in months:
+                if m["start"] <= i <= m["end"]:
+                    e["month_hours"][m["name"]] += h
+                    break
+    total_capacity = sum(len(idx) for idx in month_weeks.values()) * CAP_WEEK_HOURS
+    rows = []
+    for name in order:
+        e = by_name[name]
+        months_out = []
+        for m in months:
+            cap = len(month_weeks[m["name"]]) * CAP_WEEK_HOURS
+            hrs = e["month_hours"][m["name"]]
+            months_out.append({
+                "month": m["name"],
+                "hours": round(hrs, 1),
+                "capacity": cap,
+                "utilization": round(hrs / cap * 100, 1) if cap else 0.0,
+            })
+        rows.append({
+            "name": name,
+            "projects": e["projects"],
+            "months": months_out,
+            "total_hours": round(e["total_hours"], 1),
+            "overall": round(e["total_hours"] / total_capacity * 100, 1) if total_capacity else 0.0,
+        })
+    return {"months": [m["name"] for m in months], "rows": rows}
+
+
+@app.get("/api/utilization")
+def api_utilization():
+    conn = get_db()
+    try:
+        weeks, months = _load_layout()
+        resources = _all_resources(conn, weeks)
+        data = compute_utilization(weeks, months, resources)
+        data["capacity_week"] = CAP_WEEK_HOURS
+        return data
+    finally:
+        conn.close()
+
+
 # ---------------- Pricing library ----------------
 def _pricing_dict(row: sqlite3.Row, conn: sqlite3.Connection) -> dict:
     used = conn.execute(
@@ -795,7 +867,8 @@ def api_export():
         pricing = conn.execute(
             "SELECT title, rate, offshore_rate, currency FROM pricing ORDER BY sort_order, title"
         ).fetchall()
-        buf = importer.build_workbook(weeks, months, resources, dash, [dict(r) for r in pricing])
+        util = compute_utilization(weeks, months, resources)
+        buf = importer.build_workbook(weeks, months, resources, dash, [dict(r) for r in pricing], util)
         buf.seek(0)
         return StreamingResponse(
             buf,

@@ -9,7 +9,13 @@ password as your other WebUIs; stored in `/opt/data/revenue-tracker/.password`)
 **Stack:** FastAPI + SQLite + vanilla JS (dark frost-glass theme, no build step)
 
 ## What it does
-Four tabs (in order): **Dashboard · Pricing · Onsite · Offshore**
+Four tabs (in order): **Dashboard · Pricing · Utilization · Onsite · Offshore**
+- **Utilization** — auto-calculated (never editable): booked hours ÷ capacity
+  (40 hrs/week = 100%, monthly capacity = weeks-in-month × 40, overall =
+  total ÷ 53 weeks × 40). One row per resource: name, projects they work on,
+  12 monthly columns + Overall. Colors: 🔴 &gt;100% · 🟢 80–100% · 🟡 50–80% ·
+  🟠 &lt;50%. Multi-project people are aggregated. Exported as a locked
+  "Utilization" sheet (password `utilization`); uploads ignore it entirely.
 - **Onsite** — Country, Client, Project, Resource Name, Title (dropdown),
   **Rate**, Total Hours, Total Revenue, then Month+Week columns. Master sheet:
   hours and resources entered here (UI, paste, or Excel upload). Unlocked by

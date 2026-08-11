@@ -102,12 +102,23 @@ function gridHeadHTML() {
     `<th class="sticky-h sc${i + 1}"></th>`).join("");
   const monthCells = months.map((m) => `<th colspan="${m.end - m.start + 1}">${esc(m.name)}</th>`).join("");
   const weekCells = weeks.map((w) => `<th class="week-h">${esc(w)}</th>`).join("");
+  const actionBlank = "<th></th>";
   return `<tr class="head-row">
             ${headCells}
-            ${headBlank(weeks.length)}
+            ${headBlank(weeks.length)}${actionBlank}
           </tr>
-          <tr class="month-row">${stickySpacers}${monthCells}</tr>
-          <tr class="week-row">${stickySpacers}${weekCells}</tr>`;
+          <tr class="month-row">${stickySpacers}${monthCells}${actionBlank}</tr>
+          <tr class="week-row">${stickySpacers}${weekCells}${actionBlank}</tr>`;
+}
+
+/** Deterministic column widths via <colgroup> — no phantom gaps, even columns. */
+function colgroupHTML() {
+  const metaW = [70, 150, 140, 160, 160, 90, 90, 110];
+  let s = "<colgroup>";
+  metaW.forEach((w) => { s += `<col style="width:${w}px">`; });
+  for (let i = 0; i < state.weeks.length; i++) s += '<col style="width:54px">';
+  s += '<col style="width:40px">';
+  return s + "</colgroup>";
 }
 
 function titleSelectHTML(r) {
@@ -193,17 +204,22 @@ function alignSticky() {
   if (!wrap || !table || !probe) return;
   const prev = wrap.scrollLeft;
   wrap.scrollLeft = 0;
-  // clear previous inline offsets so getBoundingClientRect reflects real layout
-  document.querySelectorAll("#gridHead [class*=sc], #gridBody [class*=sc]").forEach((el) => {
-    el.style.left = "";
-  });
+  // Measure NATURAL positions: temporarily drop position:sticky too, because
+  // Chromium renders sticky cells at their `left` offset even at rest — so a
+  // cleared inline left exposes the CSS fallback and poisons the measurement.
+  const els = document.querySelectorAll("#gridHead [class*=sc], #gridBody [class*=sc]");
+  els.forEach((el) => { el.style.left = ""; el.style.position = "static"; });
   const tLeft = table.getBoundingClientRect().left;
+  const xs = [];
   for (let i = 1; i <= N_LOCKED; i++) {
     const cell = probe.children[i - 1];  // children[0]=Country(sc1) .. children[7]=Total Revenue(sc8)
-    if (!cell) continue;
-    const x = Math.round(cell.getBoundingClientRect().left - tLeft);
+    xs.push(cell ? Math.round(cell.getBoundingClientRect().left - tLeft) : null);
+  }
+  els.forEach((el) => { el.style.position = ""; });
+  for (let i = 1; i <= N_LOCKED; i++) {
+    if (xs[i - 1] === null) continue;
     document.querySelectorAll(`#gridHead .sc${i}, #gridBody .sc${i}`).forEach((el) => {
-      el.style.left = `${x}px`;
+      el.style.left = `${xs[i - 1]}px`;
     });
   }
   wrap.scrollLeft = prev;
@@ -230,6 +246,9 @@ function renderGrid() {
   $("#btnEditGrid").classList.toggle("edit-active", es.meta);
 
   $("#gridHead").innerHTML = gridHeadHTML();
+  let oldCols = document.querySelector("#gridTable colgroup");
+  if (oldCols) oldCols.remove();
+  document.querySelector("#gridTable").insertAdjacentHTML("afterbegin", colgroupHTML());
   let html = "<tbody>";
   groups.forEach((g, gi) => {
     let hrs = 0, rev = 0;
@@ -675,6 +694,35 @@ $("#btnApplyAll").addEventListener("click", async () => {
   btn.disabled = false; btn.textContent = "Update All Pricing";
 });
 
+/* ---------------- utilization tab ---------------- */
+function utilClass(v) {
+  if (v > 100) return "red";
+  if (v >= 80) return "green";
+  if (v >= 50) return "yellow";
+  return "orange";
+}
+
+function renderUtilization() {
+  api("/api/utilization").then((data) => {
+    const months = data.months;
+    let head = `<tr><th>Resource</th><th>Projects</th>${months.map((m) => `<th class="num">${esc(m)}</th>`).join("")}<th class="num">Overall</th></tr>`;
+    let rows = "";
+    for (const row of data.rows) {
+      rows += `<tr>
+        <td class="u-name">${esc(row.name)}</td>
+        <td class="u-proj">${esc(row.projects.join(", ") || "—")}</td>`;
+      for (const mo of row.months) {
+        const cls = utilClass(mo.utilization);
+        rows += `<td class="u-cell ${cls}" title="${mo.hours.toLocaleString()}h / ${mo.capacity}h">${fmt(mo.utilization, 0)}%</td>`;
+      }
+      const oc = utilClass(row.overall);
+      rows += `<td class="u-cell ${oc}" title="${row.total_hours.toLocaleString()}h total">${fmt(row.overall, 0)}%</td></tr>`;
+    }
+    $("#utilHead").innerHTML = head;
+    $("#utilBody").innerHTML = rows;
+  }).catch((e) => toast(`Utilization failed: ${e.message}`, true));
+}
+
 /* ---------------- dashboard ---------------- */
 function renderDashboard() {
   api("/api/dashboard").then((data) => {
@@ -785,9 +833,11 @@ function renderView() {
   $("#gridView").classList.toggle("hidden", !isGrid);
   $("#dashView").classList.toggle("hidden", state.view !== "dash");
   $("#pricingView").classList.toggle("hidden", state.view !== "pricing");
+  $("#utilView").classList.toggle("hidden", state.view !== "util");
   $("#btnAdd").style.display = isGrid ? "initial" : "none";
   if (isGrid) renderGrid();
   else if (state.view === "dash") renderDashboard();
+  else if (state.view === "util") renderUtilization();
   else renderPricing();
 }
 
