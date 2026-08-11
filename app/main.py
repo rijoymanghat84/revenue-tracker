@@ -524,15 +524,24 @@ def api_pricing_delete(pid: int):
 
 @app.post("/api/pricing/{pid}/apply")
 def api_pricing_apply(pid: int):
-    """Push this title's rates onto every resource using it."""
+    """Push this title's rates onto every resource using it (null rates kept
+    as-is so an unpriced title can't zero out resources)."""
     conn = get_db()
     try:
         row = conn.execute("SELECT * FROM pricing WHERE id=?", (pid,)).fetchone()
         if not row:
             raise HTTPException(404, "pricing title not found")
+        sets, params = [], []
+        if row["rate"] is not None:
+            sets.append("rate=?"); params.append(row["rate"])
+        if row["offshore_rate"] is not None:
+            sets.append("offshore_rate=?"); params.append(row["offshore_rate"])
+        if not sets:
+            return {"ok": True, "title": row["title"], "updated": 0,
+                    "rate": row["rate"], "offshore_rate": row["offshore_rate"]}
+        params.append(row["title"])
         cur = conn.execute(
-            "UPDATE resources SET rate=?, offshore_rate=? WHERE TRIM(role)=?",
-            (row["rate"], row["offshore_rate"], row["title"]),
+            f"UPDATE resources SET {', '.join(sets)} WHERE TRIM(role)=?", params
         )
         conn.commit()
         return {
@@ -542,6 +551,38 @@ def api_pricing_apply(pid: int):
             "rate": row["rate"],
             "offshore_rate": row["offshore_rate"],
         }
+    finally:
+        conn.close()
+
+
+@app.post("/api/pricing/apply-all")
+def api_pricing_apply_all():
+    """Push EVERY title's rates onto all resources using them, then every
+    total (Onsite/Offshore/Dashboard) reflects the Pricing tab."""
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT id, title, rate, offshore_rate FROM pricing ORDER BY sort_order, title"
+        ).fetchall()
+        total = 0
+        per_title = []
+        for r in rows:
+            sets, params = [], []
+            if r["rate"] is not None:
+                sets.append("rate=?"); params.append(r["rate"])
+            if r["offshore_rate"] is not None:
+                sets.append("offshore_rate=?"); params.append(r["offshore_rate"])
+            if not sets:
+                continue
+            params.append(r["title"])
+            cur = conn.execute(
+                f"UPDATE resources SET {', '.join(sets)} WHERE TRIM(role)=?", params
+            )
+            if cur.rowcount:
+                per_title.append({"title": r["title"], "updated": cur.rowcount})
+                total += cur.rowcount
+        conn.commit()
+        return {"ok": True, "updated": total, "per_title": per_title}
     finally:
         conn.close()
 
@@ -696,14 +737,27 @@ async def api_import(file: UploadFile = File(...), mode: str = Form("merge")):
                 (t, rate, off_rate, norm_currency(currency)),
             )
             pricing_added += 1
-        # Resource roles do NOT auto-add to the Pricing library — the library
-        # is the canonical list + manual '+ Add Title' entries. Only an
-        # explicit Pricing sheet in the uploaded file adds titles.
+        # Resource roles map to the canonical Pricing spellings so imports
+        # keep the vocabulary stable.
         for pr in parsed["resources"]:
             role = _canon_title(pr["role"])
             pr["role"] = role  # canonical spelling for storage
+        # An explicit Pricing sheet in the uploaded file UPDATES existing
+        # titles too (rate / offshore rate / currency), or adds new ones.
+        pricing_updated = 0
         for p in parsed_pricing:
-            _upsert_pricing(p["title"], p["rate"], p["offshore_rate"], p.get("currency", "USD"))
+            t = _canon_title(p["title"])
+            if not t:
+                continue
+            row = conn.execute("SELECT id FROM pricing WHERE title=?", (t,)).fetchone()
+            if row:
+                conn.execute(
+                    "UPDATE pricing SET rate=?, offshore_rate=?, currency=? WHERE id=?",
+                    (p["rate"], p["offshore_rate"], p.get("currency", "USD"), row["id"]),
+                )
+                pricing_updated += 1
+            else:
+                _upsert_pricing(t, p["rate"], p["offshore_rate"], p.get("currency", "USD"))
         conn.commit()
 
         weeks, months = _load_layout()
@@ -714,6 +768,7 @@ async def api_import(file: UploadFile = File(...), mode: str = Form("merge")):
             "renamed": renamed,
             "skipped": skipped,
             "pricing_added": pricing_added,
+            "pricing_updated": pricing_updated,
             "mode": mode,
             "backup": str(backup_path) if backup_path else None,
             "warnings": parsed["warnings"],

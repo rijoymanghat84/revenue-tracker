@@ -659,6 +659,19 @@ $("#btnAddTitle").addEventListener("click", () => {
   renderPricing();
 });
 
+$("#btnApplyAll").addEventListener("click", async () => {
+  const used = state.pricing.reduce((a, p) => a + (p.used_by || 0), 0);
+  if (!confirm(`Push EVERY title's rates onto all ${used} resource(s) using them?\n\nAll Onsite/Offshore rates will match the Pricing tab and every total will recompute.`)) return;
+  const btn = $("#btnApplyAll");
+  btn.disabled = true; btn.textContent = "Updating…";
+  try {
+    const res = await api("/api/pricing/apply-all", { method: "POST" });
+    toast(`Update All: ${res.updated} resource(s) updated across ${(res.per_title || []).length} title(s)`);
+    await loadState();
+  } catch (err) { toast(`Update All failed: ${err.message}`, true); }
+  btn.disabled = false; btn.textContent = "Update All Pricing";
+});
+
 /* ---------------- dashboard ---------------- */
 function renderDashboard() {
   api("/api/dashboard").then((data) => {
@@ -742,7 +755,9 @@ $("#fileInput").addEventListener("change", async (e) => {
     const warn = (data.warnings || []).length
       ? `\n\n⚠ ${data.warnings.length} row(s) without an Off-Shore rate (expense will be 0):\n${data.warnings.slice(0, 8).join("\n")}`
       : "";
-    const pricingNote = data.pricing_added ? `\n+ ${data.pricing_added} new Pricing title(s) added from the file.` : "";
+    const pricingNote = data.pricing_added || data.pricing_updated
+      ? `\nPricing sheet: ${data.pricing_added || 0} added, ${data.pricing_updated || 0} updated.`
+      : "";
     const replaceNote = data.mode === "replace"
       ? `\n\nReplaced all data — ${data.resources.length} resource(s) loaded from this file. Backup saved to ${data.backup}`
       : "";
