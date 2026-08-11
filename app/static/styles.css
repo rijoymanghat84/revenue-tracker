@@ -142,12 +142,13 @@ tbody tr:hover td.sticky-l { background: #1a2238; }
 /* sticky offsets are set inline by alignSticky() to each column's natural
    layout position — the CSS below is only a fallback before JS runs */
 td.sc1, th.sc1 { left: 0; }
-td.sc2, th.sc2 { left: 0; }
-td.sc3, th.sc3 { left: 0; }
-td.sc4, th.sc4 { left: 0; }
-td.sc5, th.sc5 { left: 0; }
-td.sc6, th.sc6 { left: 0; }
-td.sc7, th.sc7 { left: 0; }
+td.sc2, th.sc2 { left: 96px; }
+td.sc3, th.sc3 { left: 246px; }
+td.sc4, th.sc4 { left: 386px; }
+td.sc5, th.sc5 { left: 536px; }
+td.sc6, th.sc6 { left: 626px; }
+td.sc7, th.sc7 { left: 716px; }
+td.sc8, th.sc8 { left: 816px; }
 thead th.sticky-h { z-index: 35; background: #0e1428; }
 thead .head-row th.sticky-h { font-size: 12px; color: var(--text); font-weight: 700; text-align: left; padding: 6px 8px; }
 thead .month-row th.sticky-h { z-index: 33; }
