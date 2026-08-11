@@ -325,7 +325,7 @@ tr.p-edit .rate-inp, tr.p-edit .cur-sel { border-color: var(--accent); }
 #utilTable th { position: sticky; top: 0; z-index: 20; background: #0d1326; text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border-strong); font-size: 11px; color: var(--muted); }
 #utilTable th.num { text-align: right; }
 #utilTable td { padding: 6px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
-.u-name { font-weight: 600; position: sticky; left: 0; background: #0e1428; }
+.u-name { font-weight: 600; position: sticky; left: 0; z-index: 5; background: #0e1428; }
 #utilTable tbody tr:hover .u-name { background: #1a2238; }
 .u-proj { color: var(--muted); max-width: 340px; overflow: hidden; text-overflow: ellipsis; }
 .u-cell { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
