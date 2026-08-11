@@ -33,10 +33,12 @@ Four tabs (in order): **Dashboard · Pricing · Onsite · Offshore**
   automatically). Auto-save (debounced ~1.2s + 3s flush).
 - **Import Excel** — header-name-aware: upload the exported file OR your own
   workbook with the same headings (Country · Client · Project · Resource Name ·
-  Title · Rate · Total Hours · Total Revenue · Month/Week columns). Reads the
-  original Revenue_2026 layout too. Upserts by Client+Name; adds new Pricing
-  titles; full-year files (≥50 weeks) rewire the week layout, short files
-  don't. Off-Shore sheet supplies the cost rates.
+  Title · Rate · Total Hours · Total Revenue · Month/Week columns). Two modes:
+  **Merge** (default) updates matching Client+Name rows and adds new ones —
+  never deletes anything. **Replace** wipes all resources/hours first (after a
+  confirm + automatic DB backup to `data/backups/`, pricing kept) so the file
+  becomes the whole database. Reads the original Revenue_2026 layout too;
+  full-year files (≥50 weeks) rewire the week layout, short files don't.
 - **Export Excel** — Dashboard + On-Site + Off-Shore (formulas, Off-Shore
   protected `offshore2024`) + Pricing, with the same headings so it
   round-trips.

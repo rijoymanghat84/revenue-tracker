@@ -663,8 +663,17 @@ $("#btnImport").addEventListener("click", () => $("#fileInput").click());
 $("#fileInput").addEventListener("change", async (e) => {
   const file = e.target.files[0];
   if (!file) return;
+  const mode = $("#importMode")?.value || "merge";
+  if (mode === "replace") {
+    const ok = confirm(
+      "⚠️ REPLACE ALL DATA\n\nEvery existing resource and hour will be DELETED and this file becomes the whole database. " +
+      "Your Pricing (rate card) is kept. A backup of the current database is saved automatically before anything is deleted.\n\nContinue?"
+    );
+    if (!ok) { e.target.value = ""; return; }
+  }
   const fd = new FormData();
   fd.append("file", file);
+  fd.append("mode", mode);
   const btn = $("#btnImport");
   btn.disabled = true; btn.textContent = "Importing…";
   try {
@@ -676,8 +685,11 @@ $("#fileInput").addEventListener("change", async (e) => {
       ? `\n\n⚠ ${data.warnings.length} row(s) without an Off-Shore rate (expense will be 0):\n${data.warnings.slice(0, 8).join("\n")}`
       : "";
     const pricingNote = data.pricing_added ? `\n+ ${data.pricing_added} new Pricing title(s) added from the file.` : "";
-    showModal("Import complete", `${data.added} added, ${data.updated} updated from “${file.name}”.${pricingNote}${warn}`);
-    toast("Import done");
+    const replaceNote = data.mode === "replace"
+      ? `\n\nReplaced all data — ${data.resources.length} resource(s) loaded from this file. Backup saved to ${data.backup}`
+      : "";
+    showModal("Import complete", `${data.added} added, ${data.updated} updated from “${file.name}”.${pricingNote}${replaceNote}${warn}`);
+    toast(`Import ${data.mode === "replace" ? "(replace) " : ""}done`);
   } catch (err) { toast(`Import failed: ${err.message}`, true); }
   btn.disabled = false; btn.textContent = "Import Excel";
   e.target.value = "";
