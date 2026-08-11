@@ -24,7 +24,11 @@ body {
   color: var(--text);
   min-height: 100vh;
   overflow-x: hidden;
+  /* notch / home-indicator safe areas when installed as a PWA */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
+/* smoother touch scrolling on mobile */
+.table-wrap { -webkit-overflow-scrolling: touch; }
 .bg-glow {
   position: fixed; inset: 0; z-index: -1;
   background:
@@ -354,4 +358,10 @@ tr.p-edit .rate-inp, tr.p-edit .cur-sel { border-color: var(--accent); }
   .search { width: 100%; }
   .hint { display: none; }
   .card { flex: 1 1 100%; }
+  /* bigger touch targets on phones */
+  .inp, .rate-inp, .cur-sel, .btn { min-height: 40px; }
+  tbody td { height: 40px; }
+  tr.group-row td { height: 40px; }
+  td.week { width: 52px; min-width: 52px; }
+  .tab { padding: 10px 12px; }
 }

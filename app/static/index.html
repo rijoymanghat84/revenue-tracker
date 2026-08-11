@@ -2,9 +2,15 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0b1020">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Revenue">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
 <title>Revenue 2026</title>
-<link rel="stylesheet" href="/styles.css?v=28">
+<link rel="stylesheet" href="/styles.css?v=29">
 </head>
 <body>
 <div class="bg-glow"></div>
@@ -109,6 +115,16 @@
   </div>
 </div>
 
-<script src="/app.js?v=26"></script>
+<script src="/app.js?v=29"></script>
+<script>
+  // PWA: register the service worker (only after load; skip on failure)
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("/sw.js").catch((err) => {
+        console.warn("SW registration failed:", err);
+      });
+    });
+  }
+</script>
 </body>
 </html>
