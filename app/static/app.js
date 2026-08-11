@@ -91,25 +91,19 @@ const WEEKS_START = 9;     // cell index where weeks begin (0-based children)
 
 function gridHeadHTML() {
   const weeks = state.weeks, months = state.months, mode = MODES[state.view];
-  const labels = ["Country", "Client", "Project", "Name", "Title"]
-    .map((h) => `<span>${esc(h)}</span>`).join("");
+  const colHeads = ["Country", "Client", "Project", "Resource Name", "Title",
+                    esc(mode.rateLabel), "Total Hours", "Total Revenue"];
+  const headCells = colHeads.map((h, i) =>
+    `<th class="sticky-h sc${i + 1} colh">${h}</th>`).join("");
+  const headBlank = (n) => (n > 0 ? "<th></th>".repeat(n) : "");
   const monthCells = months.map((m) => `<th colspan="${m.end - m.start + 1}">${esc(m.name)}</th>`).join("");
   const weekCells = weeks.map((w) => `<th class="week-h">${esc(w)}</th>`).join("");
-  return `<tr class="month-row">
-            <th class="corner" rowspan="3" colspan="${N_META}">
-              <div class="corner-title">Resource / Week</div>
-              <div class="corner-meta">${labels}</div>
-            </th>
-            <th rowspan="3" class="rate-h sticky-h sc6">${esc(mode.rateLabel)}</th>
-            <th></th><th></th>
-            ${monthCells}
+  return `<tr class="head-row">
+            ${headCells}
+            ${headBlank(weeks.length)}
           </tr>
-          <tr class="week-row">${"<th></th>".repeat(N_META + 3)}${weekCells}</tr>
-          <tr class="week-row totals-row">
-            ${"<th></th>".repeat(N_META + 1)}
-            <th class="sticky-h sc7">Total Hours</th><th class="sticky-h sc8">Total Revenue</th>
-            ${"<th></th>".repeat(weeks.length + 1)}
-          </tr>`;
+          <tr class="month-row">${headBlank(N_LOCKED)}${monthCells}</tr>
+          <tr class="week-row">${headBlank(N_LOCKED)}${weekCells}</tr>`;
 }
 
 function titleSelectHTML(r) {
@@ -190,7 +184,7 @@ function renderGrid() {
       hrs += total; rev += (m[mode.rateField] || 0) * total;
     }
     html += `<tr class="group-row" data-group="${gi}" title="Expand / collapse">
-      <td class="sticky-l sc1" colspan="${N_META}"><span class="group-chevron">▼</span>${esc(g.client || "—")}</td>
+      <td class="sticky-l sc1" colspan="${N_META}"><span class="group-chevron">▼</span>${esc(g.client || "—")}<span class="proj-count-chip">${g.members.length} resource(s)</span></td>
       <td class="sticky-l sc6"></td>
       <td class="sticky-l sc7 calc dim" data-calc="total_hrs">${fmt(hrs, 1)}</td>
       <td class="sticky-l sc8 calc" data-calc="total_rev">${fmt(rev)}</td>
@@ -203,14 +197,6 @@ function renderGrid() {
       if (keep) body += gridRowHTML(m);
     }
     if (body) html += body;
-
-    html += `<tr class="subtotal-row" data-group="${gi}">
-      <td class="sticky-l sc1" colspan="${N_META}">${esc(g.client || "—")} · subtotal</td>
-      <td class="sticky-l sc6"></td>
-      <td class="sticky-l sc7 calc dim" data-calc="total_hrs">${fmt(hrs, 1)}</td>
-      <td class="sticky-l sc8 calc" data-calc="total_rev">${fmt(rev)}</td>
-      ${weeks.map(() => "<td></td>").join("")}
-      <td></td></tr>`;
   });
   html += "</tbody>";
   $("#gridBody").innerHTML = html;
@@ -467,6 +453,20 @@ function nextResourceRow(tr) {
   return cur && cur.classList.contains("resource-row") ? cur : null;
 }
 
+/**
+ * Toggle a project group; hide/show its resource rows (rows between this
+ * group row and the next group row).
+ */
+function toggleGroupRows(gr, force) {
+  const collapsed = force !== undefined ? force : !gr.classList.contains("collapsed");
+  gr.classList.toggle("collapsed", collapsed);
+  let nxt = gr.nextElementSibling;
+  while (nxt && !nxt.classList.contains("group-row")) {
+    if (nxt.classList.contains("resource-row")) nxt.classList.toggle("collapsed", collapsed);
+    nxt = nxt.nextElementSibling;
+  }
+}
+
 $("#gridBody").addEventListener("click", async (e) => {
   const del = e.target.closest(".del");
   if (del) {
@@ -481,14 +481,7 @@ $("#gridBody").addEventListener("click", async (e) => {
     return;
   }
   const gr = e.target.closest("tr.group-row");
-  if (!gr) return;
-  const gidx = +gr.dataset.group;
-  gr.classList.toggle("collapsed");
-  let nxt = gr.nextElementSibling;
-  while (nxt && nxt.dataset.group !== undefined && +nxt.dataset.group === gidx) {
-    if (nxt.classList.contains("resource-row")) nxt.classList.toggle("collapsed");
-    nxt = nxt.nextElementSibling;
-  }
+  if (gr) toggleGroupRows(gr);
 });
 
 /* ---------------- pricing tab (read-only + edit mode) ---------------- */
@@ -657,18 +650,10 @@ $("#btnAdd").addEventListener("click", async () => {
   } catch (e) { toast(`Add failed: ${e.message}`, true); }
 });
 $("#btnCollapseAll").addEventListener("click", () => {
-  $$("#gridBody tr.group-row").forEach((g) => {
-    g.classList.add("collapsed");
-    const gidx = +g.dataset.group;
-    let nxt = g.nextElementSibling;
-    while (nxt && +nxt.dataset.group === gidx) {
-      nxt.classList.add("collapsed");
-      nxt = nxt.nextElementSibling;
-    }
-  });
+  $$("#gridBody tr.group-row").forEach((g) => toggleGroupRows(g, true));
 });
 $("#btnExpandAll").addEventListener("click", () => {
-  $$("#gridBody tr").forEach((r) => r.classList.remove("collapsed"));
+  $$("#gridBody tr.group-row").forEach((g) => toggleGroupRows(g, false));
 });
 let filterT = null;
 $("#filter").addEventListener("input", () => { clearTimeout(filterT); filterT = setTimeout(renderGrid, 250); });

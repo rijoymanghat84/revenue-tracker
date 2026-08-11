@@ -122,23 +122,18 @@ thead th {
   text-align: center; font-size: 11px; color: var(--muted);
   padding: 4px 6px; white-space: nowrap; font-weight: 600;
 }
-thead .month-row th { top: 0; height: 26px; color: var(--text); font-size: 11.5px; background: var(--corner-bg); }
-thead .week-row:not(.totals-row) th { top: 26px; height: 30px; }
-thead .totals-row th { top: 56px; height: 26px; font-size: 10.5px; }
-thead .corner { position: sticky; top: 0; left: 0; z-index: 40; background: var(--corner-bg); border-right: 1px solid var(--border-strong); padding: 0 8px; text-align: left; }
-.corner-title { font-size: 10.5px; color: var(--muted); margin-bottom: 2px; }
-.corner-meta { display: flex; gap: 4px; font-size: 9.5px; font-weight: 600; color: var(--text); }
-.corner-meta span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* three-row header: headings (0), months (34), weeks (58) */
+thead .head-row th { top: 0; height: 34px; }
+thead .month-row th { top: 34px; height: 24px; color: var(--text); font-size: 11.5px; background: var(--corner-bg); }
+thead .week-row th { top: 58px; height: 28px; }
 
-/* left-sticky body cells — 8 locked columns (Country, Client, Project, Name,
-   Title, Rate, Total Hours, Total Revenue); weeks scroll. Disabled on small
-   screens. Positioned by explicit classes (sc1..sc8) set in JS. */
+/* SOLID opaque sticky cells — no transparency, nothing shows through on scroll */
 td.sticky-l, th.sticky-h {
   position: sticky; z-index: 10;
-  background: rgba(13, 18, 35, 0.92);
+  background: #0e1428;
   border-right: 1px solid var(--border);
 }
-tbody tr:hover td.sticky-l { background: rgba(26, 34, 60, 0.96); }
+tbody tr:hover td.sticky-l { background: #1a2238; }
 td.sc1, th.sc1 { left: 0; }
 td.sc2, th.sc2 { left: 96px; }
 td.sc3, th.sc3 { left: 246px; }
@@ -147,37 +142,37 @@ td.sc5, th.sc5 { left: 536px; }
 td.sc6, th.sc6 { left: 626px; }
 td.sc7, th.sc7 { left: 716px; }
 td.sc8, th.sc8 { left: 816px; }
-thead th.sticky-h { z-index: 32; }   /* above week headers, below corner */
-thead .month-row th.sticky-h { top: 0; }
-thead .totals-row th.sticky-h { top: 56px; }
+thead th.sticky-h { z-index: 35; background: #0e1428; }
+thead .head-row th.sticky-h { font-size: 12px; color: var(--text); font-weight: 700; text-align: left; padding: 6px 8px; }
+thead .month-row th.sticky-h { z-index: 33; }
+thead .week-row th.sticky-h { z-index: 33; }
 
 @media (max-width: 640px) {
   td.sticky-l, th.sticky-h { position: static; }
 }
 
 td, th { border-right: 1px solid var(--border); }
-tbody td { padding: 0; height: 34px; white-space: nowrap; }
+tbody td { padding: 0; height: 30px; white-space: nowrap; }
 tbody tr { border-bottom: 1px solid var(--border); }
-tbody tr:nth-child(even):not(.group-row):not(.subtotal-row) > td:not(.sticky-l) { background: rgba(255,255,255,0.018); }
+tbody tr:nth-child(even):not(.group-row):not(.subtotal-row) > td:not(.sticky-l) { background: rgba(255,255,255,0.015); }
+td.calc { text-align: right; padding: 3px 6px; font-variant-numeric: tabular-nums; color: var(--text); }
 
 /* group header row */
 tr.group-row td {
   background: linear-gradient(90deg, rgba(34,211,238,0.12), rgba(167,139,250,0.06));
   border-top: 1px solid var(--border-strong); border-bottom: 1px solid var(--border-strong);
-  font-weight: 700; color: var(--text); padding: 0 8px; height: 36px;
+  font-weight: 700; color: var(--text); padding: 0 8px; height: 32px; font-size: 12.5px;
 }
-tr.group-row td:first-child { position: sticky; left: 0; z-index: 11; background: rgba(20, 30, 58, 0.98); cursor: pointer; }
-.group-chevron { display: inline-block; transition: transform 0.15s ease; color: var(--accent); margin-right: 6px; }
+/* keep the locked label/total cells fully opaque inside group & total rows */
+tr.group-row td.sticky-l, tr.subtotal-row td.sticky-l { background: #121829; }
+tbody tr.group-row:hover td.sticky-l { background: #1a2238; }
+.proj-count-chip {
+  font-size: 10px; font-weight: 600; color: var(--muted); margin-left: 8px;
+  background: rgba(255,255,255,0.06); border: 1px solid var(--border);
+  border-radius: 999px; padding: 1px 8px; vertical-align: 1px;
+}
 tr.group-row.collapsed .group-chevron { transform: rotate(-90deg); }
 tr.resource-row.collapsed { display: none; }
-
-/* subtotal row */
-tr.subtotal-row td {
-  background: rgba(167,139,250,0.07);
-  border-top: 1px dashed var(--border-strong);
-  font-weight: 700; font-size: 12px; color: var(--accent2); padding: 0 8px; height: 30px;
-}
-tr.subtotal-row td:first-child { position: sticky; left: 0; z-index: 11; background: rgba(26, 20, 48, 0.98); }
 
 /* inputs */
 .inp {
