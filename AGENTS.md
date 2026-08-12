@@ -4,6 +4,10 @@
 specification or a starting point. Do NOT rebuild, re-scaffold, redesign, or
 "improve" it. Do NOT write a new version from the README description.
 
+**Also read `README1.md`** — it is the full look-and-behavior spec (colors,
+tabs, columns, math, import/export rules). Use it to VERIFY your result matches
+exactly; do not use it as a reason to rebuild.
+
 Your ONLY job: run the existing code exactly as described below and verify it
 works. If you instead generate your own implementation, you will produce
 something that looks completely different and wastes the owner's time.
