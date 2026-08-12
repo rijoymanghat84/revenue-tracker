@@ -150,14 +150,14 @@ const MODES = {
 
 /* ---------------- combined grid (Planned: both rate sides) ---------------- */
 const N_META = 5;          // Country..Title fields under the group label
-const N_LOCKED = 9;        // sticky-left: Country, Client, Project, Name, Title, Rate, OffRate, TH, TR
-const WEEKS_START = 9;     // cell index where weeks begin (0-based children)
+const N_LOCKED = 10;       // sticky-left: Country, Client, Project, Name, Title, Rate, OffRate, TH, TR, TE
+const WEEKS_START = 10;    // cell index where weeks begin (0-based children)
 
 function gridHeadHTML() {
   const weeks = state.weeks, months = state.months, mode = MODES[state.view];
   const colHeads = [["Country", "sc1"], ["Client", "sc2"], ["Project", "sc3"], ["Resource Name", "sc4"],
                     ["Title", "sc5"], [esc(mode.rateLabels[0]), "sc6"], [esc(mode.rateLabels[1]), "sc7"],
-                    ["Total Hours", "sc8"], ["Total Revenue", "sc9"]];
+                    ["Total Hours", "sc8"], ["Total Revenue", "sc9"], ["Total Expense", "sc10"]];
   const headCells = colHeads.map(([h, sc]) =>
     `<th class="sticky-h ${sc} colh">${h}</th>`).join("");
   const headBlank = (n) => (n > 0 ? "<th></th>".repeat(n) : "");
@@ -175,7 +175,7 @@ function gridHeadHTML() {
 }
 
 function colgroupHTML() {
-  const metaW = [70, 150, 140, 160, 160, 90, 90, 90, 110];
+  const metaW = [70, 150, 140, 160, 160, 90, 90, 90, 110, 110];
   let s = "<colgroup>";
   metaW.forEach((w) => { s += `<col style="width:${w}px">`; });
   for (let i = 0; i < state.weeks.length; i++) s += '<col style="width:54px">';
@@ -243,6 +243,7 @@ function gridRowHTML(r) {
     <td class="sticky-l sc7 meta-col num-cell">${rateCell("offshore_rate", mode.rateLabels[1])}</td>
     <td class="sticky-l sc8 calc dim" data-calc="total_hrs">${fmt(total, 1)}</td>
     <td class="sticky-l sc9 calc" data-calc="total_rev">${fmt(rev)}</td>
+    <td class="sticky-l sc10 calc dim" data-calc="total_exp">${fmt(cost)}</td>
     ${weekCells}
     <td>${delBtn}</td>
   </tr>`;
@@ -299,10 +300,10 @@ function renderGrid() {
   document.querySelector("#gridTable").insertAdjacentHTML("afterbegin", colgroupHTML());
   let html = "<tbody>";
   groups.forEach((g, gi) => {
-    let hrs = 0, rev = 0;
+    let hrs = 0, rev = 0, cost = 0;
     for (const m of g.members) {
       const total = (m.hours || []).reduce((a, b) => a + b, 0);
-      hrs += total; rev += (effRate(m) || 0) * total;
+      hrs += total; rev += (effRate(m) || 0) * total; cost += (effOffshore(m) || 0) * total;
     }
     html += `<tr class="group-row" data-group="${gi}" title="Expand / collapse">
       <td class="sticky-l sc1" colspan="${N_META + 1}"><span class="group-chevron">▼</span>${esc(g.client || "—")}${g.project ? ` · ${esc(g.project)}` : ""}<span class="proj-count-chip">${g.members.length} resource(s)</span></td>
@@ -310,6 +311,7 @@ function renderGrid() {
       <td class="sticky-l sc7"></td>
       <td class="sticky-l sc8 calc dim" data-calc="total_hrs">${fmt(hrs, 1)}</td>
       <td class="sticky-l sc9 calc" data-calc="total_rev">${fmt(rev)}</td>
+      <td class="sticky-l sc10 calc dim" data-calc="total_exp">${fmt(cost)}</td>
       ${weeks.map(() => "<td></td>").join("")}
       <td></td></tr>`;
 
@@ -328,12 +330,15 @@ function renderGrid() {
 /* ---------------- grid live math ---------------- */
 function computeRow(tr) {
   const rate = num($(`input[data-field="rate"]`, tr)?.value) ?? 0;
+  const offRate = num($(`input[data-field="offshore_rate"]`, tr)?.value) ?? 0;
   let total = 0;
   $$(`input[data-week]`, tr).forEach((i) => { total += num(i.value) || 0; });
   const rev = rate * total;
+  const cost = offRate * total;
   tr.querySelector('[data-calc="total_hrs"]').textContent = fmt(total, 1);
   tr.querySelector('[data-calc="total_rev"]').textContent = fmt(rev);
-  return { total, rev };
+  tr.querySelector('[data-calc="total_exp"]').textContent = fmt(cost);
+  return { total, rev, cost };
 }
 
 function groupIndexOf(tr) {
@@ -353,22 +358,25 @@ function recomputeGroup(gidx) {
   if (!gr) return;
   const rows = Array.from(tbody.children);
   const start = rows.indexOf(gr);
-  let hrs = 0, rev = 0;
+  let hrs = 0, rev = 0, cost = 0;
   for (let i = start + 1; i < rows.length; i++) {
     const row = rows[i];
     if (row.classList.contains("group-row")) break;
     if (!row.classList.contains("resource-row")) continue;
     const rate = num($(`input[data-field="rate"]`, row)?.value) ?? 0;
+    const offRate = num($(`input[data-field="offshore_rate"]`, row)?.value) ?? 0;
     let total = 0;
     $$(`input[data-week]`, row).forEach((i) => { total += num(i.value) || 0; });
-    hrs += total; rev += rate * total;
+    hrs += total; rev += rate * total; cost += offRate * total;
   }
   for (const el of [gr, sr]) {
     if (!el) continue;
     const hEl = el.querySelector('[data-calc="total_hrs"]');
     const rEl = el.querySelector('[data-calc="total_rev"]');
+    const eEl = el.querySelector('[data-calc="total_exp"]');
     if (hEl) hEl.textContent = fmt(hrs, 1);
     if (rEl) rEl.textContent = fmt(rev);
+    if (eEl) eEl.textContent = fmt(cost);
   }
 }
 function weeksCount() { return state.weeks.length; }
@@ -890,45 +898,37 @@ function renderDashboard() {
       totalAddRev += t.add_rev || 0; totalAddExp += t.add_exp || 0;
       totalAdjRev += t.adj_rev || 0; totalAdjExp += t.adj_exp || 0;
     });
-    const profit = (totalRev + totalAddRev + totalAdjRev) - (totalExp + totalAddExp + totalAdjExp);
+    const actualRev = totalRev + totalAddRev + totalAdjRev;
+    const actualExp = totalExp + totalAddExp + totalAdjExp;
+    const savings = actualRev - actualExp;
     $("#dashCards").innerHTML = `
-      <div class="card glass"><div class="k">Total Revenue (Onsite)</div><div class="v cyan">$${fmt(totalRev)}</div></div>
-      <div class="card glass"><div class="k">Total Expense (Offshore)</div><div class="v">$${fmt(totalExp)}</div></div>
+      <div class="card glass"><div class="k">Planned Revenue</div><div class="v cyan">$${fmt(totalRev)}</div></div>
+      <div class="card glass"><div class="k">Planned Expense</div><div class="v">$${fmt(totalExp)}</div></div>
+      <div class="card glass"><div class="k">Actual Revenue</div><div class="v cyan">$${fmt(actualRev)}</div></div>
+      <div class="card glass"><div class="k">Actual Expense</div><div class="v">$${fmt(actualExp)}</div></div>
+      <div class="card glass"><div class="k">Savings</div><div class="v ${savings >= 0 ? "green" : "red"}">$${fmt(savings)}</div></div>
       <div class="card glass"><div class="k">Additional Revenue (OT billed)</div><div class="v cyan">$${fmt(totalAddRev)}</div></div>
-      <div class="card glass"><div class="k">Additional Expense (OT)</div><div class="v">$${fmt(totalAddExp)}</div></div>
-      <div class="card glass"><div class="k">Adjustment (under-delivery)</div><div class="v ${totalAdjRev < 0 ? "red" : "green"}">$${fmt(totalAdjRev)}</div></div>
-      <div class="card glass"><div class="k">Profit (incl. actuals)</div><div class="v ${profit >= 0 ? "green" : "red"}">$${fmt(profit)}</div></div>
-      <div class="card glass"><div class="k">By currency</div>
-        <div class="v" style="font-size:14px;line-height:1.5">${(totals.length ? totals : []).map((t) => `TOTAL ${t.currency}: $${fmt(t.revenue)}`).join("<br>") || "—"}</div></div>`;
-    let rows = `<thead><tr><th>Country</th><th>Client</th><th>Project</th><th>Resource(s)</th><th>Planned Rev</th><th>Actual Rev</th><th>Variance</th><th>Expense (Offshore)</th><th>Add. Rev</th><th>Add. Exp</th><th>Adj.</th><th>Difference</th><th>Cur</th></tr></thead><tbody>`;
-    const maxDiff = Math.max(...groups.map((g) => Math.abs(g.difference)), 1);
+      <div class="card glass"><div class="k">Additional Expense (OT)</div><div class="v">$${fmt(totalAddExp)}</div></div>`;
+    let rows = `<thead><tr><th>Country</th><th>Client</th><th>Project</th><th>Resource(s)</th><th>Planned Revenue</th><th>Planned Expense</th><th>Actual Revenue</th><th>Actual Expense</th><th>Savings</th></tr></thead><tbody>`;
     for (const g of groups) {
-      const pct = Math.min(100, Math.max(4, (Math.abs(g.difference) / maxDiff) * 100));
-      const bar = `<span class="diffbar ${g.difference >= 0 ? "pos" : "neg"}" style="width:${pct}%"></span>`;
       const actualRev = g.revenue + (g.add_rev || 0) + (g.adj_rev || 0);
-      const variance = actualRev - g.revenue;
+      const actualExp = g.expense + (g.add_exp || 0) + (g.adj_exp || 0);
+      const savings = actualRev - actualExp;
       rows += `<tr>
         <td>${esc(g.country)}</td><td>${esc(g.client)}</td><td>${esc(g.project)}</td><td>${g.resources}</td>
-        <td>$${fmt(g.revenue)}</td><td>$${fmt(actualRev)}</td>
-        <td class="num" style="color:${variance >= 0 ? "var(--green)" : "var(--red)"}">${variance >= 0 ? "+" : ""}$${fmt(variance)}</td>
-        <td>$${fmt(g.expense)}</td>
-        <td class="num">$${fmt(g.add_rev || 0)}</td><td class="num">$${fmt(g.add_exp || 0)}</td>
-        <td class="num">$${fmt(g.adj_rev || 0)}</td>
-        <td style="color:${g.difference >= 0 ? "var(--green)" : "var(--red)"}">$${fmt(g.difference)} ${bar}</td>
-        <td><span class="cur-chip">${g.currency}</span></td></tr>`;
+        <td>$${fmt(g.revenue)}</td><td>$${fmt(g.expense)}</td>
+        <td>$${fmt(actualRev)}</td><td>$${fmt(actualExp)}</td>
+        <td style="color:${savings >= 0 ? "var(--green)" : "var(--red)"}">$${fmt(savings)}</td></tr>`;
     }
     for (const t of totals) {
       const actualRev = t.revenue + (t.add_rev || 0) + (t.adj_rev || 0);
-      const variance = actualRev - t.revenue;
+      const actualExp = t.expense + (t.add_exp || 0) + (t.adj_exp || 0);
+      const savings = actualRev - actualExp;
       rows += `<tr class="total-row">
         <td>TOTAL ${t.currency}</td><td>—</td><td>—</td><td>—</td>
-        <td>$${fmt(t.revenue)}</td><td>$${fmt(actualRev)}</td>
-        <td class="num" style="color:${variance >= 0 ? "var(--green)" : "var(--red)"}">${variance >= 0 ? "+" : ""}$${fmt(variance)}</td>
-        <td>$${fmt(t.expense)}</td>
-        <td class="num">$${fmt(t.add_rev || 0)}</td><td class="num">$${fmt(t.add_exp || 0)}</td>
-        <td class="num">$${fmt(t.adj_rev || 0)}</td>
-        <td style="color:${t.difference >= 0 ? "var(--green)" : "var(--red)"}">$${fmt(t.difference)}</td>
-        <td><span class="cur-chip">${t.currency}</span></td></tr>`;
+        <td>$${fmt(t.revenue)}</td><td>$${fmt(t.expense)}</td>
+        <td>$${fmt(actualRev)}</td><td>$${fmt(actualExp)}</td>
+        <td style="color:${savings >= 0 ? "var(--green)" : "var(--red)"}">$${fmt(savings)}</td></tr>`;
     }
     rows += "</tbody>";
     $("#dashTable").innerHTML = rows;
