@@ -10,17 +10,35 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icons/icon-192.png">
 <title>Revenue 2026</title>
-<link rel="stylesheet" href="/styles.css?v=33">
+<link rel="stylesheet" href="/styles.css?v=38">
 </head>
 <body>
 <div class="bg-glow"></div>
 
-<header class="topbar glass">
+<!-- ============ LOGIN ============ -->
+<div id="loginView" class="login-wrap hidden">
+  <div class="login-box glass">
+    <form id="loginForm" autocomplete="off">
+      <label class="login-label">Username</label>
+      <input class="inp login-inp" id="loginUser" autocomplete="username" placeholder="username">
+      <label class="login-label">Password</label>
+      <input class="inp login-inp" id="loginPass" type="password" autocomplete="current-password" placeholder="••••••••">
+      <button class="btn primary login-btn" type="submit">Sign in</button>
+      <div class="login-err" id="loginErr"></div>
+    </form>
+    <div class="brand login-brand">
+      <span class="logo">₿</span>
+      <h1>Revenue Tracker <span class="year-badge">2026</span></h1>
+    </div>
+  </div>
+</div>
+
+<header class="topbar glass" id="topbar">
   <div class="brand">
     <span class="logo">₿</span>
     <div>
       <h1>Revenue Tracker <span class="year-badge">2026</span></h1>
-      <p class="sub">Onsite · Offshore · Dashboard · Pricing</p>
+      <p class="sub" id="subLine">Onsite · Offshore · Dashboard · Pricing</p>
     </div>
   </div>
   <div class="actions">
@@ -30,6 +48,7 @@
       <button class="tab" data-tab="util">Utilization</button>
       <button class="tab" data-tab="onsite">Onsite</button>
       <button class="tab" data-tab="offshore">Offshore</button>
+      <button class="tab" data-tab="actuals">Actuals</button>
     </div>
     <input type="file" id="fileInput" accept=".xlsm,.xlsx" hidden>
     <select id="importMode" class="cur-sel" title="How the upload should apply to existing data">
@@ -37,8 +56,9 @@
       <option value="replace">Import: Replace (wipe &amp; load this file)</option>
     </select>
     <button class="btn ghost" id="btnImport" title="Upload an Excel file (same layout) to update data">Import Excel</button>
-    <a class="btn ghost" id="btnExport" href="/api/export" title="Download an Excel file (Dashboard + On-Site + Off-Shore + Pricing tabs)">Export Excel</a>
+    <a class="btn ghost" id="btnExport" href="/api/export" title="Download an Excel file (Dashboard + On-Site + Off-Shore + Pricing + Actuals tabs)">Export Excel</a>
     <button class="btn primary" id="btnAdd">+ Add Resource</button>
+    <button class="btn ghost" id="btnLogout" title="Sign out">Sign out</button>
   </div>
 </header>
 
@@ -79,6 +99,26 @@
     </div>
   </section>
 
+  <!-- ============ ACTUALS (PM reconciliation) ============ -->
+  <section id="actualsView" class="view hidden">
+    <div class="toolbar glass">
+      <div class="sheet-note" id="actualsNote"><span class="dot on"></span>Record <b>actual</b> hours worked. Compared against planned (Onsite/Offshore). Overage → OT flow; under → comment required.</div>
+      <input type="search" id="actualsFilter" placeholder="Filter by name, client, project…" class="search">
+      <div class="toolbar-right">
+        <button class="btn primary" id="btnAddActuals" title="Enter or edit actual hours for a client/project/month">+ Add / Edit Actuals</button>
+        <button class="btn mini" id="btnActualsExpandAll">Expand all</button>
+        <button class="btn mini" id="btnActualsCollapseAll">Collapse all</button>
+        <span class="hint">Auto-saves. Every entry is attributed to you.</span>
+      </div>
+    </div>
+    <div class="table-wrap glass" id="actualsWrap">
+      <table id="actualsTable">
+        <thead id="actualsHead"></thead>
+        <tbody id="actualsBody"></tbody>
+      </table>
+    </div>
+  </section>
+
   <!-- ============ DASHBOARD ============ -->
   <section id="dashView" class="view hidden">
     <div class="cards" id="dashCards"></div>
@@ -87,7 +127,7 @@
     </div>
   </section>
 
-  <!-- ============ PRICING (title library) ============ -->
+  <!-- ============ PRICING (title library + PM assignment + capacity) ============ -->
   <section id="pricingView" class="view hidden">
     <div class="toolbar glass">
       <div class="sheet-note" id="pricingNote"><span class="dot off"></span>Title library — rows are locked until you click <b>Edit</b>; set Title, both rates &amp; currency ($/£/CA$) together, then Save. Apply pushes rates to every resource using the title.</div>
@@ -103,6 +143,26 @@
         <tbody id="pricingBody"></tbody>
       </table>
     </div>
+
+    <!-- PM assignment + capacity section -->
+    <div class="toolbar glass pm-toolbar">
+      <div class="sheet-note"><span class="dot on"></span><b>Project → PM assignment</b> — controls which projects each PM sees on the Actuals tab. Also set per-resource <b>capacity</b> (default 40h/week).</div>
+      <div class="toolbar-right">
+        <button class="btn mini" id="btnAddUser">+ Add PM</button>
+      </div>
+    </div>
+    <div class="table-wrap glass narrow" id="pmWrap">
+      <table id="pmTable">
+        <thead id="pmHead"></thead>
+        <tbody id="pmBody"></tbody>
+      </table>
+    </div>
+    <div class="table-wrap glass narrow" id="capWrap">
+      <table id="capTable">
+        <thead id="capHead"></thead>
+        <tbody id="capBody"></tbody>
+      </table>
+    </div>
   </section>
 </main>
 
@@ -115,7 +175,27 @@
   </div>
 </div>
 
-<script src="/app.js?v=34"></script>
+<!-- ============ ACTUALS ENTRY POPUP (wizard) ============ -->
+<div id="actualsModal" class="modal hidden">
+  <div class="modal-box glass actuals-modal">
+    <h3 id="actualsModalTitle">Add / Edit Actuals</h3>
+    <div id="actualsModalBody" class="modal-body"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="actualsModalCancel">Cancel</button>
+      <button class="btn primary" id="actualsModalSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ OT FLOW POPUP (inline Yes/No/Cancel) ============ -->
+<div id="otModal" class="modal hidden">
+  <div class="modal-box glass ot-modal">
+    <h3 id="otModalTitle">Overtime Review</h3>
+    <div id="otModalBody" class="modal-body"></div>
+  </div>
+</div>
+
+<script src="/app.js?v=44"></script>
 <script>
   // PWA: register the service worker (only after load; skip on failure)
   if ("serviceWorker" in navigator) {
