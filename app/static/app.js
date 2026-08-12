@@ -17,7 +17,7 @@
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
-const state = { resources: [], weeks: [], months: [], pricing: [], view: "dash", gridEdit: { onsite: false, offshore: false }, me: null };
+const state = { resources: [], weeks: [], months: [], pricing: [], view: "dash", gridEdit: { planned: false }, me: null };
 const dirty = new Map();   // resource rid -> {fields:{}, hours:bool}
 const pDirty = new Map();  // pricing pid -> {title?, rate?, offshore_rate?}
 const aDirty = new Map();  // actuals rid -> {hours:bool, notes:{}}
@@ -83,7 +83,7 @@ function showApp() {
   const isAdmin = state.me.role === "admin";
   // PMs see only the Actuals tab
   $$(".tab").forEach((t) => {
-    const adminOnly = ["dash", "pricing", "util", "onsite", "offshore"].includes(t.dataset.tab);
+    const adminOnly = ["dash", "pricing", "util", "planned"].includes(t.dataset.tab);
     t.style.display = (isAdmin || !adminOnly) ? "" : "none";
   });
   $("#btnImport").style.display = isAdmin ? "" : "none";
@@ -91,7 +91,7 @@ function showApp() {
   $("#importMode").style.display = isAdmin ? "" : "none";
   $("#btnAdd").style.display = "none";
   $("#subLine").textContent = isAdmin
-    ? "Onsite · Offshore · Dashboard · Pricing · Actuals"
+    ? "Planned · Actuals · Dashboard · Pricing · Utilization"
     : `Actuals — signed in as ${esc(state.me.username)}`;
   if (!isAdmin) {
     state.view = "actuals";
@@ -138,33 +138,26 @@ async function loadState() {
 }
 
 const MODES = {
-  onsite: {
-    rateField: "rate",
-    rateLabel: "Rate",
+  planned: {
+    rateFields: ["rate", "offshore_rate"],
+    rateLabels: ["Rate", "Offshore Rate"],
     hoursEditable: true,
     metaEditable: true,
-    note: "What you CHARGE — enter hours & the rate. Pick a Title from Pricing to auto-fill its rate.",
+    note: "PLANNED hours — what you CHARGE (Rate) and what it COSTS (Offshore Rate). Enter hours & both rates. Pick a Title from Pricing to auto-fill both.",
     dot: "on",
-  },
-  offshore: {
-    rateField: "offshore_rate",
-    rateLabel: "Offshore Rate",
-    hoursEditable: false,
-    metaEditable: false,
-    note: "What it COSTS — hours mirror Onsite automatically. Pick a Title to auto-fill its cost rate.",
-    dot: "off",
   },
 };
 
-/* ---------------- combined grid ---------------- */
+/* ---------------- combined grid (Planned: both rate sides) ---------------- */
 const N_META = 5;          // Country..Title fields under the group label
-const N_LOCKED = 8;        // sticky-left: Country, Client, Project, Name, Title, Rate, TH, TR
-const WEEKS_START = 8;     // cell index where weeks begin (0-based children)
+const N_LOCKED = 9;        // sticky-left: Country, Client, Project, Name, Title, Rate, OffRate, TH, TR
+const WEEKS_START = 9;     // cell index where weeks begin (0-based children)
 
 function gridHeadHTML() {
   const weeks = state.weeks, months = state.months, mode = MODES[state.view];
   const colHeads = [["Country", "sc1"], ["Client", "sc2"], ["Project", "sc3"], ["Resource Name", "sc4"],
-                    ["Title", "sc5"], [esc(mode.rateLabel), "sc6"], ["Total Hours", "sc7"], ["Total Revenue", "sc8"]];
+                    ["Title", "sc5"], [esc(mode.rateLabels[0]), "sc6"], [esc(mode.rateLabels[1]), "sc7"],
+                    ["Total Hours", "sc8"], ["Total Revenue", "sc9"]];
   const headCells = colHeads.map(([h, sc]) =>
     `<th class="sticky-h ${sc} colh">${h}</th>`).join("");
   const headBlank = (n) => (n > 0 ? "<th></th>".repeat(n) : "");
@@ -182,7 +175,7 @@ function gridHeadHTML() {
 }
 
 function colgroupHTML() {
-  const metaW = [70, 150, 140, 160, 160, 90, 90, 110];
+  const metaW = [70, 150, 140, 160, 160, 90, 90, 90, 110];
   let s = "<colgroup>";
   metaW.forEach((w) => { s += `<col style="width:${w}px">`; });
   for (let i = 0; i < state.weeks.length; i++) s += '<col style="width:54px">';
@@ -209,10 +202,6 @@ function metaCell(r, field, editable) {
   return `<span class="mirror-val">${esc((v ?? "") || "—")}</span>`;
 }
 
-function effByField(r, field) {
-  return field === "offshore_rate" ? effOffshore(r) : effRate(r);
-}
-
 function gridEditState() {
   const unlocked = !!state.gridEdit[state.view];
   return { meta: unlocked, hours: unlocked, rates: unlocked };
@@ -222,9 +211,11 @@ function gridRowHTML(r) {
   const es = gridEditState();
   const mode = MODES[state.view];
   const hours = r.hours || Array(state.weeks.length).fill(0);
-  const rate = r[mode.rateField];
+  const rate = effRate(r);
+  const offRate = effOffshore(r);
   const total = hours.reduce((a, b) => a + b, 0);
   const rev = (rate || 0) * total;
+  const cost = (offRate || 0) * total;
   const weekCell = (h, i) => es.hours
     ? `<input class="inp" type="number" step="0.25" min="0" data-week="${i}" value="${h ? h : ""}" placeholder="0" inputmode="decimal">`
     : `<input class="inp mirror" type="number" step="0.25" min="0" disabled value="${h ? h : ""}" data-week="${i}">`;
@@ -236,19 +227,22 @@ function gridRowHTML(r) {
   const titleCell = es.meta
     ? titleSelectHTML(r)
     : `<span class="mirror-val">${esc(r.role || "—")}</span>`;
-  const rateVal = effByField(r, mode.rateField);
-  const rateCell = es.meta
-    ? `${cur}<input class="inp num" type="number" min="0" step="any" data-field="${mode.rateField}" value="${rateVal ?? ""}" placeholder="—" title="${mode.rateLabel} (auto-fills from Title)">`
-    : `<span class="mirror-val">${cur}${rateVal !== null && rateVal !== undefined ? fmt(rateVal) : "—"}</span>`;
+  const rateCell = (field, label) => {
+    const val = field === "offshore_rate" ? offRate : rate;
+    return es.meta
+      ? `${cur}<input class="inp num" type="number" min="0" step="any" data-field="${field}" value="${val ?? ""}" placeholder="—" title="${label} (auto-fills from Title)">`
+      : `<span class="mirror-val">${cur}${val !== null && val !== undefined ? fmt(val) : "—"}</span>`;
+  };
   return `<tr class="resource-row" data-rid="${r.id}">
     <td class="sticky-l sc1 meta-col">${metaCell(r, "country", es.meta)}</td>
     <td class="sticky-l sc2 meta-col">${metaCell(r, "client", es.meta)}</td>
     <td class="sticky-l sc3 meta-col">${metaCell(r, "project", es.meta)}</td>
     <td class="sticky-l sc4 meta-col">${metaCell(r, "name", es.meta)}</td>
     <td class="sticky-l sc5 meta-col">${titleCell}</td>
-    <td class="sticky-l sc6 meta-col num-cell">${rateCell}</td>
-    <td class="sticky-l sc7 calc dim" data-calc="total_hrs">${fmt(total, 1)}</td>
-    <td class="sticky-l sc8 calc" data-calc="total_rev">${fmt(rev)}</td>
+    <td class="sticky-l sc6 meta-col num-cell">${rateCell("rate", mode.rateLabels[0])}</td>
+    <td class="sticky-l sc7 meta-col num-cell">${rateCell("offshore_rate", mode.rateLabels[1])}</td>
+    <td class="sticky-l sc8 calc dim" data-calc="total_hrs">${fmt(total, 1)}</td>
+    <td class="sticky-l sc9 calc" data-calc="total_rev">${fmt(rev)}</td>
     ${weekCells}
     <td>${delBtn}</td>
   </tr>`;
@@ -308,12 +302,14 @@ function renderGrid() {
     let hrs = 0, rev = 0;
     for (const m of g.members) {
       const total = (m.hours || []).reduce((a, b) => a + b, 0);
-      hrs += total; rev += (m[mode.rateField] || 0) * total;
+      hrs += total; rev += (effRate(m) || 0) * total;
     }
     html += `<tr class="group-row" data-group="${gi}" title="Expand / collapse">
       <td class="sticky-l sc1" colspan="${N_META + 1}"><span class="group-chevron">▼</span>${esc(g.client || "—")}${g.project ? ` · ${esc(g.project)}` : ""}<span class="proj-count-chip">${g.members.length} resource(s)</span></td>
-      <td class="sticky-l sc7 calc dim" data-calc="total_hrs">${fmt(hrs, 1)}</td>
-      <td class="sticky-l sc8 calc" data-calc="total_rev">${fmt(rev)}</td>
+      <td class="sticky-l sc6"></td>
+      <td class="sticky-l sc7"></td>
+      <td class="sticky-l sc8 calc dim" data-calc="total_hrs">${fmt(hrs, 1)}</td>
+      <td class="sticky-l sc9 calc" data-calc="total_rev">${fmt(rev)}</td>
       ${weeks.map(() => "<td></td>").join("")}
       <td></td></tr>`;
 
@@ -331,8 +327,7 @@ function renderGrid() {
 
 /* ---------------- grid live math ---------------- */
 function computeRow(tr) {
-  const mode = MODES[state.view];
-  const rate = num($(`input[data-field="${mode.rateField}"]`, tr)?.value) ?? 0;
+  const rate = num($(`input[data-field="rate"]`, tr)?.value) ?? 0;
   let total = 0;
   $$(`input[data-week]`, tr).forEach((i) => { total += num(i.value) || 0; });
   const rev = rate * total;
@@ -352,7 +347,6 @@ function groupIndexOf(tr) {
 
 function recomputeGroup(gidx) {
   if (gidx === null || gidx < 0) return;
-  const mode = MODES[state.view];
   const tbody = $("#gridBody");
   const gr = tbody.querySelector(`tr.group-row[data-group="${gidx}"]`);
   const sr = tbody.querySelector(`tr.subtotal-row[data-group="${gidx}"]`);
@@ -364,7 +358,7 @@ function recomputeGroup(gidx) {
     const row = rows[i];
     if (row.classList.contains("group-row")) break;
     if (!row.classList.contains("resource-row")) continue;
-    const rate = num($(`input[data-field="${mode.rateField}"]`, row)?.value) ?? 0;
+    const rate = num($(`input[data-field="rate"]`, row)?.value) ?? 0;
     let total = 0;
     $$(`input[data-week]`, row).forEach((i) => { total += num(i.value) || 0; });
     hrs += total; rev += rate * total;
@@ -535,7 +529,6 @@ $("#gridBody").addEventListener("paste", (e) => {
   const text = (e.clipboardData || window.clipboardData).getData("text/plain");
   if (!text.includes("\t") && !text.includes("\n")) return;
   e.preventDefault();
-  const mode = MODES[state.view];
   const es = gridEditState();
   const tr = inp.closest("tr[data-rid]");
   const anchorCol = inp.closest("td").cellIndex;
@@ -557,8 +550,13 @@ $("#gridBody").addEventListener("paste", (e) => {
           if (mi) { mi.value = val; markDirty(rid, "fields", f, val); }
         }
       } else if (col === N_META) {
-        const ri = $(`input[data-field="${mode.rateField}"]`, rowEl);
-        if (ri) { ri.value = val; markDirty(rid, "fields", mode.rateField, num(val) ?? null); }
+        // rate column (5)
+        const ri = $(`input[data-field="rate"]`, rowEl);
+        if (ri) { ri.value = val; markDirty(rid, "fields", "rate", num(val) ?? null); }
+      } else if (col === N_META + 1) {
+        // offshore rate column (6)
+        const ri = $(`input[data-field="offshore_rate"]`, rowEl);
+        if (ri) { ri.value = val; markDirty(rid, "fields", "offshore_rate", num(val) ?? null); }
       } else if (col >= WEEKS_START && col < WEEKS_START + state.weeks.length) {
         if (!es.hours) continue;
         const w = col - WEEKS_START;
@@ -902,23 +900,31 @@ function renderDashboard() {
       <div class="card glass"><div class="k">Profit (incl. actuals)</div><div class="v ${profit >= 0 ? "green" : "red"}">$${fmt(profit)}</div></div>
       <div class="card glass"><div class="k">By currency</div>
         <div class="v" style="font-size:14px;line-height:1.5">${(totals.length ? totals : []).map((t) => `TOTAL ${t.currency}: $${fmt(t.revenue)}`).join("<br>") || "—"}</div></div>`;
-    let rows = `<thead><tr><th>Country</th><th>Client</th><th>Project</th><th>Resource(s)</th><th>Revenue (Onsite)</th><th>Expense (Offshore)</th><th>Add. Rev</th><th>Add. Exp</th><th>Adj.</th><th>Difference</th><th>Cur</th></tr></thead><tbody>`;
+    let rows = `<thead><tr><th>Country</th><th>Client</th><th>Project</th><th>Resource(s)</th><th>Planned Rev</th><th>Actual Rev</th><th>Variance</th><th>Expense (Offshore)</th><th>Add. Rev</th><th>Add. Exp</th><th>Adj.</th><th>Difference</th><th>Cur</th></tr></thead><tbody>`;
     const maxDiff = Math.max(...groups.map((g) => Math.abs(g.difference)), 1);
     for (const g of groups) {
       const pct = Math.min(100, Math.max(4, (Math.abs(g.difference) / maxDiff) * 100));
       const bar = `<span class="diffbar ${g.difference >= 0 ? "pos" : "neg"}" style="width:${pct}%"></span>`;
+      const actualRev = g.revenue + (g.add_rev || 0) + (g.adj_rev || 0);
+      const variance = actualRev - g.revenue;
       rows += `<tr>
         <td>${esc(g.country)}</td><td>${esc(g.client)}</td><td>${esc(g.project)}</td><td>${g.resources}</td>
-        <td>$${fmt(g.revenue)}</td><td>$${fmt(g.expense)}</td>
+        <td>$${fmt(g.revenue)}</td><td>$${fmt(actualRev)}</td>
+        <td class="num" style="color:${variance >= 0 ? "var(--green)" : "var(--red)"}">${variance >= 0 ? "+" : ""}$${fmt(variance)}</td>
+        <td>$${fmt(g.expense)}</td>
         <td class="num">$${fmt(g.add_rev || 0)}</td><td class="num">$${fmt(g.add_exp || 0)}</td>
         <td class="num">$${fmt(g.adj_rev || 0)}</td>
         <td style="color:${g.difference >= 0 ? "var(--green)" : "var(--red)"}">$${fmt(g.difference)} ${bar}</td>
         <td><span class="cur-chip">${g.currency}</span></td></tr>`;
     }
     for (const t of totals) {
+      const actualRev = t.revenue + (t.add_rev || 0) + (t.adj_rev || 0);
+      const variance = actualRev - t.revenue;
       rows += `<tr class="total-row">
         <td>TOTAL ${t.currency}</td><td>—</td><td>—</td><td>—</td>
-        <td>$${fmt(t.revenue)}</td><td>$${fmt(t.expense)}</td>
+        <td>$${fmt(t.revenue)}</td><td>$${fmt(actualRev)}</td>
+        <td class="num" style="color:${variance >= 0 ? "var(--green)" : "var(--red)"}">${variance >= 0 ? "+" : ""}$${fmt(variance)}</td>
+        <td>$${fmt(t.expense)}</td>
         <td class="num">$${fmt(t.add_rev || 0)}</td><td class="num">$${fmt(t.add_exp || 0)}</td>
         <td class="num">$${fmt(t.adj_rev || 0)}</td>
         <td style="color:${t.difference >= 0 ? "var(--green)" : "var(--red)"}">$${fmt(t.difference)}</td>
@@ -973,8 +979,16 @@ function actualsRowHTML(r) {
     let cls = "";
     if (a > p) cls = "a-over";
     else if (a < p) cls = "a-under";
-    const flag = (a > p && !n.is_ot) ? " ⚠" : (a > p && n.is_ot && !n.approved) ? " ⛔" : "";
-    return `<td class="week"><input class="inp a-inp ${cls}" type="number" step="0.25" min="0" data-week="${i}" value="${a ? a : ""}" placeholder="0" inputmode="decimal" title="planned ${p}h${flag}">${flag}</td>`;
+    // OT status chip: OT approved+billed ✓, OT approved unbilled (reason), OT unapproved ⛔
+    let chip = "";
+    if (a > p && n.is_ot) {
+      if (n.approved && n.billed) chip = `<span class="ot-chip ot-ok" title="OT approved & billed">OT ✓</span>`;
+      else if (n.approved && !n.billed) chip = `<span class="ot-chip ot-unbilled" title="OT approved, not billed">OT unbilled</span>`;
+      else chip = `<span class="ot-chip ot-block" title="OT not approved">OT ⛔</span>`;
+    } else if (a > p && n.is_ot === 0) {
+      chip = `<span class="ot-chip ot-not" title="Not OT">not OT</span>`;
+    }
+    return `<td class="week"><input class="inp a-inp ${cls}" type="number" step="0.25" min="0" data-week="${i}" value="${a ? a : ""}" placeholder="0" inputmode="decimal" title="planned ${p}h">${chip}</td>`;
   };
   let weekCells = "";
   planned.forEach((p, i) => { weekCells += weekCell(p, actual[i] || 0, i); });
@@ -1527,7 +1541,7 @@ async function switchView(view) {
   await aFlush();
   // toggle view visibility (renderView handles the rest)
   $$(".tab").forEach((x) => x.classList.toggle("active", x.dataset.tab === view));
-  const isGrid = view === "onsite" || view === "offshore";
+  const isGrid = view === "planned";
   $("#gridView").classList.toggle("hidden", !isGrid);
   $("#dashView").classList.toggle("hidden", view !== "dash");
   $("#pricingView").classList.toggle("hidden", view !== "pricing");
@@ -1540,7 +1554,7 @@ async function switchView(view) {
 
 function renderView() {
   $$(".tab").forEach((x) => x.classList.toggle("active", x.dataset.tab === state.view));
-  const isGrid = state.view === "onsite" || state.view === "offshore";
+  const isGrid = state.view === "planned";
   $("#gridView").classList.toggle("hidden", !isGrid);
   $("#dashView").classList.toggle("hidden", state.view !== "dash");
   $("#pricingView").classList.toggle("hidden", state.view !== "pricing");

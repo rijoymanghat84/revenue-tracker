@@ -451,3 +451,13 @@ td.week .a-inp { text-align: center; }
 .ot-input:focus { border-color: var(--accent); }
 .ot-btns { display: flex; gap: 10px; margin-top: 18px; flex-wrap: wrap; }
 .ot-btns .btn { flex: 1; min-width: 90px; padding: 10px; font-size: 13px; }
+
+/* ---------- OT status chips (Actuals grid) ---------- */
+.ot-chip {
+  display: inline-block; font-size: 9px; font-weight: 700; padding: 1px 5px;
+  border-radius: 999px; margin-top: 1px; line-height: 1.4; white-space: nowrap;
+}
+.ot-chip.ot-ok { color: var(--green); background: rgba(52,211,153,0.12); border: 1px solid rgba(52,211,153,0.4); }
+.ot-chip.ot-unbilled { color: var(--amber); background: rgba(251,191,36,0.12); border: 1px solid rgba(251,191,36,0.4); }
+.ot-chip.ot-block { color: var(--red); background: rgba(248,113,113,0.12); border: 1px solid rgba(248,113,113,0.4); }
+.ot-chip.ot-not { color: var(--muted); background: rgba(255,255,255,0.06); border: 1px solid var(--border); }
