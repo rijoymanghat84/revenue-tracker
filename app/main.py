@@ -686,13 +686,13 @@ async def api_import(file: UploadFile = File(...), mode: str = Form("merge")):
             conn.commit()
         # Map incoming roles to existing canonical Pricing spellings so the
         # vocabulary stays stable across imports (old Excel files won't
-        # reintroduce non-canonical titles).
+        # reintroduce non-canonical titles). Roles NOT in the Pricing library
+        # are blanked — the Title dropdown only ever shows Pricing titles.
         canon_rows = conn.execute("SELECT title FROM pricing").fetchall()
         canon_by_norm = {r["title"].strip().lower(): r["title"] for r in canon_rows}
         for pr in parsed["resources"]:
             key = (pr["role"] or "").strip().lower()
-            if key in canon_by_norm:
-                pr["role"] = canon_by_norm[key]
+            pr["role"] = canon_by_norm.get(key, "")
         # Layout follows the uploaded file ONLY for full-period files (>= 50
         # weeks — e.g. a new year's workbook). Short/partial imports keep the
         # current layout so they can't silently rewire the year.
