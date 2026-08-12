@@ -306,9 +306,7 @@ function renderGrid() {
       hrs += total; rev += (effRate(m) || 0) * total; cost += (effOffshore(m) || 0) * total;
     }
     html += `<tr class="group-row" data-group="${gi}" title="Expand / collapse">
-      <td class="sticky-l sc1" colspan="${N_META + 1}"><span class="group-chevron">▼</span>${esc(g.client || "—")}${g.project ? ` · ${esc(g.project)}` : ""}<span class="proj-count-chip">${g.members.length} resource(s)</span></td>
-      <td class="sticky-l sc6"></td>
-      <td class="sticky-l sc7"></td>
+      <td class="sticky-l sc1" colspan="${N_META + 2}"><span class="group-chevron">▼</span>${esc(g.client || "—")}${g.project ? ` · ${esc(g.project)}` : ""}<span class="proj-count-chip">${g.members.length} resource(s)</span></td>
       <td class="sticky-l sc8 calc dim" data-calc="total_hrs">${fmt(hrs, 1)}</td>
       <td class="sticky-l sc9 calc" data-calc="total_rev">${fmt(rev)}</td>
       <td class="sticky-l sc10 calc dim" data-calc="total_exp">${fmt(cost)}</td>
