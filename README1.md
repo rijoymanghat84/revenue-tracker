@@ -99,7 +99,9 @@ Column order, left → right:
 - Fixed column widths: Country 70 · Client 150 · Project 140 · Resource Name
   160 · Title 160 · Rate 90 · Total Hours 90 · Total Revenue 110 · weeks 54.
 - **Title = dropdown** sourced from the Pricing tab; picking a title
-  auto-fills the Rate (and saves the offshore rate too) from Pricing.
+  auto-fills the Rate (and saves the offshore rate too) from Pricing. The
+  dropdown contains ONLY Pricing titles — resources with any other role have
+  their Title blanked, and imports blank unknown roles too.
 - Rows grouped by **Client · Project** (group header shows
   `▼ Client · Project  [N resource(s)]  hours  revenue`). Collapse-all shows
   only group rows with name + count + hours + revenue; Expand restores.

@@ -122,14 +122,12 @@ function colgroupHTML() {
 }
 
 function titleSelectHTML(r) {
-  const opts = new Map();
-  for (const p of state.pricing) opts.set(p.title, p);
-  if (r.role && !opts.has(r.role)) opts.set(r.role, null); // keep custom titles selectable
+  // Only titles from the Pricing library — nothing outside the list.
   let html = `<select class="inp sel" data-field="role">`;
   html += `<option value="">—</option>`;
-  for (const title of opts.keys()) {
-    const sel = title === r.role ? " selected" : "";
-    html += `<option value="${esc(title)}"${sel}>${esc(title)}</option>`;
+  for (const p of state.pricing) {
+    const sel = p.title === r.role ? " selected" : "";
+    html += `<option value="${esc(p.title)}"${sel}>${esc(p.title)}</option>`;
   }
   html += `</select>`;
   return html;
