@@ -9,8 +9,8 @@
 <meta name="apple-mobile-web-app-title" content="Revenue">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icons/icon-192.png">
-<title>Revenue 2026</title>
-<link rel="stylesheet" href="/styles.css?v=38">
+<title>Revenue Recon</title>
+<link rel="stylesheet" href="/styles.css?v=39">
 </head>
 <body>
 <div class="bg-glow"></div>
@@ -28,7 +28,7 @@
     </form>
     <div class="brand login-brand">
       <span class="logo">₿</span>
-      <h1>Revenue Tracker <span class="year-badge">2026</span></h1>
+      <h1>Revenue Recon <span class="year-badge">2026</span></h1>
     </div>
   </div>
 </div>
@@ -37,18 +37,17 @@
   <div class="brand">
     <span class="logo">₿</span>
     <div>
-      <h1>Revenue Tracker <span class="year-badge">2026</span></h1>
+      <h1>Revenue Recon <span class="year-badge">2026</span></h1>
       <p class="sub" id="subLine">Onsite · Offshore · Dashboard · Pricing</p>
     </div>
   </div>
   <div class="actions">
     <div class="tabs" id="tabs">
       <button class="tab active" data-tab="dash">Dashboard</button>
+      <button class="tab" data-tab="planned">Planned</button>
+      <button class="tab" data-tab="actuals">Actuals</button>
       <button class="tab" data-tab="pricing">Pricing</button>
       <button class="tab" data-tab="util">Utilization</button>
-      <button class="tab" data-tab="onsite">Onsite</button>
-      <button class="tab" data-tab="offshore">Offshore</button>
-      <button class="tab" data-tab="actuals">Actuals</button>
     </div>
     <input type="file" id="fileInput" accept=".xlsm,.xlsx" hidden>
     <select id="importMode" class="cur-sel" title="How the upload should apply to existing data">
@@ -195,7 +194,7 @@
   </div>
 </div>
 
-<script src="/app.js?v=44"></script>
+<script src="/app.js?v=46"></script>
 <script>
   // PWA: register the service worker (only after load; skip on failure)
   if ("serviceWorker" in navigator) {
