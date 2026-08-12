@@ -367,6 +367,9 @@ def build_workbook(weeks: list[str], months: list[dict],
         ws_u.protection.sheet = True
         ws_u.protection.password = "utilization"
 
+    # --- Actuals sheet (PM-recorded actual hours; importable for bulk entry) ---
+    _build_actuals_sheet(wb, weeks, months, resources)
+
     buf = io.BytesIO()
     wb.save(buf)
     return buf
@@ -411,3 +414,84 @@ def _build_timesheet_sheet(wb, title, weeks, months, resources, billed: bool) ->
         r += 1
     for col, width in zip("ABCDEFGH", (12, 18, 16, 18, 22, 12, 12, 14)):
         ws.column_dimensions[col].width = width
+
+
+def _build_actuals_sheet(wb, weeks, months, resources) -> None:
+    """Actuals sheet: same layout as On-Site but holds ACTUAL hours (PM-filled).
+    Importable for bulk entry / crash-restore. Columns: Country, Client,
+    Project, Resource Name, Title, Total Hours, then weeks."""
+    ws = wb.create_sheet("Actuals")
+    headers = ["Country", "Client", "Project", "Resource Name", "Title", "Total Hours"]
+    WEEK0 = 7  # column G — weeks start here
+    for m in months:
+        ws.cell(1, WEEK0 + m["start"], m["name"])
+    for c, h in enumerate(headers, start=1):
+        ws.cell(2, c, h)
+    for c, w in enumerate(weeks, start=WEEK0):
+        ws.cell(2, c, w)
+    end_col = WEEK0 + len(weeks) - 1
+    end_letter = get_column_letter(end_col)
+    r = 3
+    for res in resources:
+        ws.cell(r, 1, res["country"])
+        ws.cell(r, 2, res["client"])
+        ws.cell(r, 3, res["project"] or "")
+        ws.cell(r, 4, res["name"])
+        ws.cell(r, 5, res["role"])
+        ws.cell(r, 6, f"=SUM(G{r}:{end_letter}{r})")
+        actual = res.get("actual_hours") or []
+        for i, h in enumerate(actual):
+            if h:
+                ws.cell(r, WEEK0 + i, h)
+        r += 1
+    for col, width in zip("ABCDEF", (12, 18, 16, 18, 22, 12)):
+        ws.column_dimensions[col].width = width
+
+
+def parse_actuals_sheet(data: bytes) -> list[dict]:
+    """Read the Actuals sheet from an export/backup. Returns rows keyed by
+    (client, name) with an hours array. Empty if no Actuals sheet."""
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True, read_only=True)
+    except Exception:  # noqa: BLE001
+        return []
+    if "Actuals" not in wb.sheetnames:
+        wb.close()
+        return []
+    ws = wb["Actuals"]
+    header_row, colmap, week_cols = _find_header_row(ws)
+    if header_row < 1:
+        wb.close()
+        return []
+    name_col = colmap.get("name")
+    client_col = colmap.get("client", 2)
+    project_col = colmap.get("project")
+    role_col = colmap.get("role")
+    country_col = colmap.get("country", 1)
+    out = []
+    for r in range(header_row + 1, ws.max_row + 1):
+        name = ws.cell(r, name_col).value
+        if not name or not str(name).strip():
+            continue
+        hours = [_as_float(ws.cell(r, c).value) for c in week_cols]
+        out.append({
+            "country": str(ws.cell(r, country_col).value or "").strip(),
+            "client": str(ws.cell(r, client_col).value or "").strip(),
+            "project": str(ws.cell(r, project_col).value or "").strip() if project_col else "",
+            "name": str(name).strip(),
+            "role": str(ws.cell(r, role_col).value or "").strip() if role_col else "",
+            "hours": hours,
+        })
+    wb.close()
+    return out
+
+
+def build_actuals_workbook(weeks: list[str], months: list[dict], resources: list[dict]) -> io.BytesIO:
+    """PM-scoped export: a workbook with ONLY the Actuals sheet (no rates, no
+    other tabs). Used for PM bulk entry / backup of their own team's actuals."""
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)  # drop the default empty sheet
+    _build_actuals_sheet(wb, weeks, months, resources)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf

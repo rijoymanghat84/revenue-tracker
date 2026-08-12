@@ -1,23 +1,27 @@
 /* ============ Revenue Tracker — frontend logic ============
-   Four tabs:
+   Tabs:
    - Onsite   : Country, Client, Project, Resource Name, Title (dropdown),
                 Rate, Total Hours, Total Revenue, then Month+Week columns.
-                Master sheet — hours entered here.
+                Master sheet — hours entered here (PLANNED).
    - Offshore : same columns, but the rate shown is your OFFSHORE (cost) rate.
                 Hours mirror Onsite; pick a Title to auto-fill the cost rate.
-   - Dashboard: Country, Client, Resource(s), Revenue, Expense, Difference, Cur.
-   - Pricing  : Title library — Title / Rate / Offshore Rate. Titles drive the
-                dropdowns; selecting one auto-fills the rate on the active side.
+   - Actuals  : PM reconciliation — record ACTUAL hours, validated against
+                planned. Overage → OT flow; under → comment required.
+   - Dashboard: Country, Client, Resource(s), Revenue, Expense, Difference,
+                plus Additional Revenue/Expense + Adjustment from Actuals.
+   - Pricing  : Title library + Project→PM assignment + per-resource capacity.
+   Roles: admin (everything) vs pm (Actuals only, scoped to their projects).
 */
 "use strict";
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
-const state = { resources: [], weeks: [], months: [], pricing: [], view: "dash", gridEdit: { onsite: false, offshore: false } };
+const state = { resources: [], weeks: [], months: [], pricing: [], view: "dash", gridEdit: { onsite: false, offshore: false }, me: null };
 const dirty = new Map();   // resource rid -> {fields:{}, hours:bool}
 const pDirty = new Map();  // pricing pid -> {title?, rate?, offshore_rate?}
-let flushTimer = null, pFlushTimer = null;
+const aDirty = new Map();  // actuals rid -> {hours:bool, notes:{}}
+let flushTimer = null, pFlushTimer = null, aFlushTimer = null;
 
 /* ---------------- helpers ---------------- */
 const fmt = (n, dp = 2) =>
@@ -55,6 +59,77 @@ function showModal(title, body) {
 }
 $("#modalOk").addEventListener("click", () => $("#modal").classList.add("hidden"));
 
+/* ---------------- auth / boot ---------------- */
+async function boot() {
+  try {
+    const me = await api("/api/me");
+    state.me = me;
+    showApp();
+  } catch (e) {
+    showLogin();
+  }
+}
+
+function showLogin() {
+  $("#loginView").classList.remove("hidden");
+  $("#topbar").classList.add("hidden");
+  $$(".view").forEach((v) => v.classList.add("hidden"));
+  $("#loginUser").focus();
+}
+
+function showApp() {
+  $("#loginView").classList.add("hidden");
+  $("#topbar").classList.remove("hidden");
+  const isAdmin = state.me.role === "admin";
+  // PMs see only the Actuals tab
+  $$(".tab").forEach((t) => {
+    const adminOnly = ["dash", "pricing", "util", "onsite", "offshore"].includes(t.dataset.tab);
+    t.style.display = (isAdmin || !adminOnly) ? "" : "none";
+  });
+  $("#btnImport").style.display = isAdmin ? "" : "none";
+  $("#btnExport").style.display = isAdmin ? "" : "none";
+  $("#importMode").style.display = isAdmin ? "" : "none";
+  $("#btnAdd").style.display = "none";
+  $("#subLine").textContent = isAdmin
+    ? "Onsite · Offshore · Dashboard · Pricing · Actuals"
+    : `Actuals — signed in as ${esc(state.me.username)}`;
+  if (!isAdmin) {
+    state.view = "actuals";
+    // show only the actuals view
+    $$(".tab").forEach((x) => x.classList.toggle("active", x.dataset.tab === "actuals"));
+    $("#gridView").classList.add("hidden");
+    $("#dashView").classList.add("hidden");
+    $("#pricingView").classList.add("hidden");
+    $("#utilView").classList.add("hidden");
+    $("#actualsView").classList.remove("hidden");
+    loadActuals();
+  } else {
+    loadState();
+  }
+}
+
+$("#loginForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const err = $("#loginErr");
+  err.textContent = "";
+  try {
+    const me = await api("/api/login", {
+      method: "POST",
+      body: JSON.stringify({ username: $("#loginUser").value, password: $("#loginPass").value }),
+    });
+    state.me = me;
+    showApp();
+  } catch (ex) {
+    err.textContent = ex.message || "Login failed";
+  }
+});
+
+$("#btnLogout").addEventListener("click", async () => {
+  try { await api("/api/logout", { method: "POST" }); } catch (_) {}
+  state.me = null;
+  showLogin();
+});
+
 /* ---------------- data load ---------------- */
 async function loadState() {
   const s = await api("/api/state");
@@ -81,10 +156,7 @@ const MODES = {
   },
 };
 
-/* ---------------- combined grid ----------------
-   Column order (per spec): Country, Client, Project, Name, Title, Rate,
-   Total Hours, Total Revenue, then Month + Week columns. The first 8 columns
-   are sticky-left (never move when scrolling right); weeks scroll. */
+/* ---------------- combined grid ---------------- */
 const N_META = 5;          // Country..Title fields under the group label
 const N_LOCKED = 8;        // sticky-left: Country, Client, Project, Name, Title, Rate, TH, TR
 const WEEKS_START = 8;     // cell index where weeks begin (0-based children)
@@ -96,8 +168,6 @@ function gridHeadHTML() {
   const headCells = colHeads.map(([h, sc]) =>
     `<th class="sticky-h ${sc} colh">${h}</th>`).join("");
   const headBlank = (n) => (n > 0 ? "<th></th>".repeat(n) : "");
-  // month/week rows pin the SAME frozen block (Country..TR = sc1..sc8) so the
-  // whole 3-row header stays one solid unit while the month/week labels scroll.
   const stickySpacers = Array.from({ length: N_LOCKED }, (_, i) =>
     `<th class="sticky-h sc${i + 1}"></th>`).join("");
   const monthCells = months.map((m) => `<th colspan="${m.end - m.start + 1}">${esc(m.name)}</th>`).join("");
@@ -111,7 +181,6 @@ function gridHeadHTML() {
           <tr class="week-row">${stickySpacers}${weekCells}${actionBlank}</tr>`;
 }
 
-/** Deterministic column widths via <colgroup> — no phantom gaps, even columns. */
 function colgroupHTML() {
   const metaW = [70, 150, 140, 160, 160, 90, 90, 110];
   let s = "<colgroup>";
@@ -122,7 +191,6 @@ function colgroupHTML() {
 }
 
 function titleSelectHTML(r) {
-  // Only titles from the Pricing library — nothing outside the list.
   let html = `<select class="inp sel" data-field="role">`;
   html += `<option value="">—</option>`;
   for (const p of state.pricing) {
@@ -145,9 +213,6 @@ function effByField(r, field) {
   return field === "offshore_rate" ? effOffshore(r) : effRate(r);
 }
 
-/** per-view edit state: the Edit/Done toggle is the single source of truth.
-    Onsite defaults unlocked (the entry surface); Offshore defaults locked.
-    Locked = fully read-only; unlocked = everything editable. */
 function gridEditState() {
   const unlocked = !!state.gridEdit[state.view];
   return { meta: unlocked, hours: unlocked, rates: unlocked };
@@ -189,12 +254,6 @@ function gridRowHTML(r) {
   </tr>`;
 }
 
-/**
- * Pin each sticky column to its NATURAL layout position. Must run whenever
- * column widths can change (initial render AND group collapse/expand — hidden
- * rows stop contributing width, so offsets go stale). Measures with any stale
- * inline offsets cleared, at scrollLeft 0.
- */
 function alignSticky() {
   const wrap = document.querySelector("#gridWrap");
   const table = document.querySelector("#gridTable");
@@ -202,15 +261,12 @@ function alignSticky() {
   if (!wrap || !table || !probe) return;
   const prev = wrap.scrollLeft;
   wrap.scrollLeft = 0;
-  // Measure NATURAL positions: temporarily drop position:sticky too, because
-  // Chromium renders sticky cells at their `left` offset even at rest — so a
-  // cleared inline left exposes the CSS fallback and poisons the measurement.
   const els = document.querySelectorAll("#gridHead [class*=sc], #gridBody [class*=sc]");
   els.forEach((el) => { el.style.left = ""; el.style.position = "static"; });
   const tLeft = table.getBoundingClientRect().left;
   const xs = [];
   for (let i = 1; i <= N_LOCKED; i++) {
-    const cell = probe.children[i - 1];  // children[0]=Country(sc1) .. children[7]=Total Revenue(sc8)
+    const cell = probe.children[i - 1];
     xs.push(cell ? Math.round(cell.getBoundingClientRect().left - tLeft) : null);
   }
   els.forEach((el) => { el.style.position = ""; });
@@ -323,7 +379,7 @@ function recomputeGroup(gidx) {
 }
 function weeksCount() { return state.weeks.length; }
 
-/* ---------------- title auto-fill (BOTH sides come from Pricing) ---------------- */
+/* ---------------- title auto-fill ---------------- */
 function pricingEntry(title) {
   return state.pricing.find((p) => p.title === title) || null;
 }
@@ -353,8 +409,6 @@ function fillRateFromTitle(tr) {
   const rid = +tr.dataset.rid;
   const md = dirty.get(rid) || { fields: {}, hours: false };
   const filled = [];
-  // Always persist BOTH rates from Pricing, even when only one side's input is
-  // visible on this grid (the other side still needs to be filled).
   if (entry.rate !== null && entry.rate !== undefined) {
     const rateInp = $(`input[data-field="rate"]`, tr);
     if (rateInp) rateInp.value = entry.rate;
@@ -443,7 +497,7 @@ async function pFlush() {
   }
   if (saved) {
     toast("Pricing saved");
-    await loadState(); // refresh used_by + titles after possible rename cascade
+    await loadState();
   }
 }
 
@@ -475,7 +529,6 @@ $("#gridBody").addEventListener("input", (e) => {
   }
 });
 
-/* Paste: Excel-style. cellIndex 0-4 meta, 5 rate, 6-7 totals (skip), 9.. weeks. */
 $("#gridBody").addEventListener("paste", (e) => {
   const inp = e.target.closest("input");
   if (!inp || !inp.closest("tr[data-rid]")) return;
@@ -498,14 +551,12 @@ $("#gridBody").addEventListener("paste", (e) => {
       if (!val) continue;
       const rid = +rowEl.dataset.rid;
       if (col < N_META) {
-        // meta columns 0..4
         const f = META[col];
         if (f && es.meta) {
           const mi = $(`input[data-field="${f}"]`, rowEl);
           if (mi) { mi.value = val; markDirty(rid, "fields", f, val); }
         }
       } else if (col === N_META) {
-        // rate column (5)
         const ri = $(`input[data-field="${mode.rateField}"]`, rowEl);
         if (ri) { ri.value = val; markDirty(rid, "fields", mode.rateField, num(val) ?? null); }
       } else if (col >= WEEKS_START && col < WEEKS_START + state.weeks.length) {
@@ -525,10 +576,6 @@ function nextResourceRow(tr) {
   return cur && cur.classList.contains("resource-row") ? cur : null;
 }
 
-/**
- * Toggle a project group; hide/show its resource rows (rows between this
- * group row and the next group row).
- */
 function toggleGroupRows(gr, force) {
   const collapsed = force !== undefined ? force : !gr.classList.contains("collapsed");
   gr.classList.toggle("collapsed", collapsed);
@@ -537,7 +584,6 @@ function toggleGroupRows(gr, force) {
     if (nxt.classList.contains("resource-row")) nxt.classList.toggle("collapsed", collapsed);
     nxt = nxt.nextElementSibling;
   }
-  // hidden resource rows change the table's column widths → re-align sticky
   alignSticky();
 }
 
@@ -558,8 +604,8 @@ $("#gridBody").addEventListener("click", async (e) => {
   if (gr) toggleGroupRows(gr);
 });
 
-/* ---------------- pricing tab (read-only + edit mode) ---------------- */
-let editingPid = null; // pid being edited, or -1 for a brand-new row
+/* ---------------- pricing tab ---------------- */
+let editingPid = null;
 
 function curSym(code) { return CURR_SYM[code] || code || "$"; }
 
@@ -601,6 +647,8 @@ function renderPricing() {
   if (editingPid === -1) html += pricingRowHTML({ id: -1, title: "", rate: null, offshore_rate: null, currency: "USD", used_by: 0 });
   html += "</tbody>";
   $("#pricingBody").innerHTML = html;
+  renderPMs();
+  renderCapacity();
 }
 
 function readEditRow(tr) {
@@ -675,7 +723,7 @@ $("#pricingBody").addEventListener("click", async (e) => {
 });
 
 $("#btnAddTitle").addEventListener("click", () => {
-  editingPid = -1;               // render a fresh editable row; saved on Save
+  editingPid = -1;
   renderPricing();
 });
 
@@ -690,6 +738,119 @@ $("#btnApplyAll").addEventListener("click", async () => {
     await loadState();
   } catch (err) { toast(`Update All failed: ${err.message}`, true); }
   btn.disabled = false; btn.textContent = "Update All Pricing";
+});
+
+/* ---------------- PM assignment + capacity ---------------- */
+let users = [], projects = [];
+let editingUser = null;
+
+async function loadPMData() {
+  try {
+    const [u, p] = await Promise.all([api("/api/users"), api("/api/projects")]);
+    users = u; projects = p;
+  } catch (e) { toast(`PM data failed: ${e.message}`, true); }
+}
+
+function projectCheckboxes(selected) {
+  const sel = new Set(selected || []);
+  return projects.map((pr) =>
+    `<label class="pm-proj"><input type="checkbox" value="${esc(pr)}"${sel.has(pr) ? " checked" : ""}> ${esc(pr)}</label>`).join("");
+}
+
+function renderPMs() {
+  $("#pmHead").innerHTML = `<tr><th>PM</th><th>Assigned Projects</th><th></th></tr>`;
+  let html = "<tbody>";
+  if (!users.length) html += `<tr><td colspan="3" class="dim">No PMs yet — click + Add PM.</td></tr>`;
+  for (const u of users) {
+    if (editingUser === u.id) {
+      html += `<tr class="p-res p-edit" data-uid="${u.id}">
+        <td><input class="rate-inp txt" data-field="username" value="${esc(u.username)}" disabled></td>
+        <td><div class="pm-projs">${projectCheckboxes(u.projects)}</div></td>
+        <td><button class="btn mini save">Save</button> <button class="btn mini cancel">Cancel</button></td>
+      </tr>`;
+    } else {
+      html += `<tr class="p-res" data-uid="${u.id}">
+        <td>${esc(u.username)}</td>
+        <td class="dim">${(u.projects || []).map(esc).join(", ") || "—"}</td>
+        <td><button class="btn mini edit">Edit</button> <button class="del" title="Delete PM">✕</button></td>
+      </tr>`;
+    }
+  }
+  if (editingUser === -1) {
+    html += `<tr class="p-res p-edit" data-uid="-1">
+      <td><input class="rate-inp txt" data-field="username" placeholder="PM username"></td>
+      <td><div class="pm-projs">${projectCheckboxes([])}</div></td>
+      <td><button class="btn mini save">Save</button> <button class="btn mini cancel">Cancel</button></td>
+    </tr>`;
+  }
+  html += "</tbody>";
+  $("#pmBody").innerHTML = html;
+}
+
+function renderCapacity() {
+  $("#capHead").innerHTML = `<tr><th>Resource</th><th>Client · Project</th><th class="num">Capacity (hrs/wk)</th></tr>`;
+  let html = "<tbody>";
+  for (const r of state.resources) {
+    const cap = r.capacity ?? 40;
+    html += `<tr class="p-res" data-rid="${r.id}">
+      <td>${esc(r.name)}</td>
+      <td class="dim">${esc(r.client)}${r.project ? " · " + esc(r.project) : ""}</td>
+      <td class="num"><input class="rate-inp cap-inp" type="number" min="1" step="1" data-cap="${r.id}" value="${cap}"></td>
+    </tr>`;
+  }
+  html += "</tbody>";
+  $("#capBody").innerHTML = html;
+}
+
+$("#pmBody").addEventListener("click", async (e) => {
+  const tr = e.target.closest("tr[data-uid]");
+  if (!tr) return;
+  const uid = +tr.dataset.uid;
+  if (e.target.closest(".edit")) { editingUser = uid; renderPMs(); return; }
+  if (e.target.closest(".cancel")) { editingUser = null; renderPMs(); return; }
+  if (e.target.closest(".save")) {
+    const uname = (tr.querySelector('[data-field="username"]')?.value || "").trim();
+    const projs = Array.from(tr.querySelectorAll('input[type="checkbox"]:checked')).map((c) => c.value);
+    if (!uname) { toast("PM username required", true); return; }
+    const btn = tr.querySelector(".save"); btn.disabled = true; btn.textContent = "…";
+    try {
+      if (uid === -1) {
+        const pw = prompt("Set a password for this PM:");
+        if (!pw) { btn.disabled = false; btn.textContent = "Save"; return; }
+        await api("/api/users", { method: "POST", body: JSON.stringify({ username: uname, password: pw, projects: projs }) });
+      } else {
+        await api(`/api/users/${uid}`, { method: "PUT", body: JSON.stringify({ projects: projs }) });
+      }
+      editingUser = null;
+      toast("PM saved");
+      await loadPMData(); renderPMs();
+    } catch (err) { toast(`PM save failed: ${err.message}`, true); btn.disabled = false; btn.textContent = "Save"; }
+    return;
+  }
+  if (e.target.closest(".del")) {
+    if (!confirm(`Delete PM "${unameOf(uid)}"?`)) return;
+    try { await api(`/api/users/${uid}`, { method: "DELETE" }); await loadPMData(); renderPMs(); }
+    catch (err) { toast(`Delete failed: ${err.message}`, true); }
+  }
+});
+function unameOf(uid) { const u = users.find((x) => x.id === uid); return u ? u.username : "this PM"; }
+
+$("#btnAddUser").addEventListener("click", () => { editingUser = -1; renderPMs(); });
+
+// capacity save (debounced)
+let capTimer = null;
+$("#capBody").addEventListener("input", (e) => {
+  const inp = e.target.closest("[data-cap]");
+  if (!inp) return;
+  clearTimeout(capTimer);
+  capTimer = setTimeout(async () => {
+    const rid = +inp.dataset.cap;
+    const v = num(inp.value);
+    try {
+      await api(`/api/resources/${rid}`, { method: "PUT", body: JSON.stringify({ capacity: v }) });
+      toast("Capacity saved");
+    } catch (err) { toast(`Capacity save failed: ${err.message}`, true); }
+  }, 800);
 });
 
 /* ---------------- utilization tab ---------------- */
@@ -725,16 +886,23 @@ function renderUtilization() {
 function renderDashboard() {
   api("/api/dashboard").then((data) => {
     const groups = data.rows.groups, totals = data.rows.totals;
-    let totalRev = 0, totalExp = 0;
-    totals.forEach((t) => { totalRev += t.revenue; totalExp += t.expense; });
-    const profit = totalRev - totalExp;
+    let totalRev = 0, totalExp = 0, totalAddRev = 0, totalAddExp = 0, totalAdjRev = 0, totalAdjExp = 0;
+    totals.forEach((t) => {
+      totalRev += t.revenue; totalExp += t.expense;
+      totalAddRev += t.add_rev || 0; totalAddExp += t.add_exp || 0;
+      totalAdjRev += t.adj_rev || 0; totalAdjExp += t.adj_exp || 0;
+    });
+    const profit = (totalRev + totalAddRev + totalAdjRev) - (totalExp + totalAddExp + totalAdjExp);
     $("#dashCards").innerHTML = `
       <div class="card glass"><div class="k">Total Revenue (Onsite)</div><div class="v cyan">$${fmt(totalRev)}</div></div>
       <div class="card glass"><div class="k">Total Expense (Offshore)</div><div class="v">$${fmt(totalExp)}</div></div>
-      <div class="card glass"><div class="k">Profit</div><div class="v ${profit >= 0 ? "green" : "red"}">$${fmt(profit)}</div></div>
+      <div class="card glass"><div class="k">Additional Revenue (OT billed)</div><div class="v cyan">$${fmt(totalAddRev)}</div></div>
+      <div class="card glass"><div class="k">Additional Expense (OT)</div><div class="v">$${fmt(totalAddExp)}</div></div>
+      <div class="card glass"><div class="k">Adjustment (under-delivery)</div><div class="v ${totalAdjRev < 0 ? "red" : "green"}">$${fmt(totalAdjRev)}</div></div>
+      <div class="card glass"><div class="k">Profit (incl. actuals)</div><div class="v ${profit >= 0 ? "green" : "red"}">$${fmt(profit)}</div></div>
       <div class="card glass"><div class="k">By currency</div>
         <div class="v" style="font-size:14px;line-height:1.5">${(totals.length ? totals : []).map((t) => `TOTAL ${t.currency}: $${fmt(t.revenue)}`).join("<br>") || "—"}</div></div>`;
-    let rows = `<thead><tr><th>Country</th><th>Client</th><th>Project</th><th>Resource(s)</th><th>Revenue (Onsite)</th><th>Expense (Offshore)</th><th>Difference</th><th>Cur</th></tr></thead><tbody>`;
+    let rows = `<thead><tr><th>Country</th><th>Client</th><th>Project</th><th>Resource(s)</th><th>Revenue (Onsite)</th><th>Expense (Offshore)</th><th>Add. Rev</th><th>Add. Exp</th><th>Adj.</th><th>Difference</th><th>Cur</th></tr></thead><tbody>`;
     const maxDiff = Math.max(...groups.map((g) => Math.abs(g.difference)), 1);
     for (const g of groups) {
       const pct = Math.min(100, Math.max(4, (Math.abs(g.difference) / maxDiff) * 100));
@@ -742,6 +910,8 @@ function renderDashboard() {
       rows += `<tr>
         <td>${esc(g.country)}</td><td>${esc(g.client)}</td><td>${esc(g.project)}</td><td>${g.resources}</td>
         <td>$${fmt(g.revenue)}</td><td>$${fmt(g.expense)}</td>
+        <td class="num">$${fmt(g.add_rev || 0)}</td><td class="num">$${fmt(g.add_exp || 0)}</td>
+        <td class="num">$${fmt(g.adj_rev || 0)}</td>
         <td style="color:${g.difference >= 0 ? "var(--green)" : "var(--red)"}">$${fmt(g.difference)} ${bar}</td>
         <td><span class="cur-chip">${g.currency}</span></td></tr>`;
     }
@@ -749,6 +919,8 @@ function renderDashboard() {
       rows += `<tr class="total-row">
         <td>TOTAL ${t.currency}</td><td>—</td><td>—</td><td>—</td>
         <td>$${fmt(t.revenue)}</td><td>$${fmt(t.expense)}</td>
+        <td class="num">$${fmt(t.add_rev || 0)}</td><td class="num">$${fmt(t.add_exp || 0)}</td>
+        <td class="num">$${fmt(t.adj_rev || 0)}</td>
         <td style="color:${t.difference >= 0 ? "var(--green)" : "var(--red)"}">$${fmt(t.difference)}</td>
         <td><span class="cur-chip">${t.currency}</span></td></tr>`;
     }
@@ -756,6 +928,533 @@ function renderDashboard() {
     $("#dashTable").innerHTML = rows;
   }).catch((e) => toast(`Dashboard failed: ${e.message}`, true));
 }
+
+/* ---------------- ACTUALS tab ---------------- */
+let actualsData = { resources: [], weeks: [], months: [] };
+
+async function loadActuals() {
+  try {
+    actualsData = await api("/api/actuals");
+    renderActuals();
+  } catch (e) { toast(`Actuals failed: ${e.message}`, true); }
+}
+
+function actualsHeadHTML() {
+  const weeks = actualsData.weeks, months = actualsData.months;
+  const colHeads = [["Country", "sc1"], ["Client", "sc2"], ["Project", "sc3"], ["Resource Name", "sc4"],
+                    ["Title", "sc5"], ["Planned", "sc6"], ["Actual", "sc7"], ["Δ", "sc8"]];
+  const headCells = colHeads.map(([h, sc]) => `<th class="sticky-h ${sc} colh">${h}</th>`).join("");
+  const stickySpacers = Array.from({ length: 8 }, (_, i) => `<th class="sticky-h sc${i + 1}"></th>`).join("");
+  const monthCells = months.map((m) => `<th colspan="${m.end - m.start + 1}">${esc(m.name)}</th>`).join("");
+  const weekCells = weeks.map((w) => `<th class="week-h">${esc(w)}</th>`).join("");
+  return `<tr class="head-row">${headCells}${weekCells}</tr>
+          <tr class="month-row">${stickySpacers}${monthCells}</tr>
+          <tr class="week-row">${stickySpacers}${weekCells}</tr>`;
+}
+
+function actualsColgroup() {
+  const metaW = [70, 150, 140, 160, 160, 70, 70, 70];
+  let s = "<colgroup>";
+  metaW.forEach((w) => { s += `<col style="width:${w}px">`; });
+  for (let i = 0; i < actualsData.weeks.length; i++) s += '<col style="width:54px">';
+  return s + "</colgroup>";
+}
+
+function actualsRowHTML(r) {
+  const planned = r.hours || Array(actualsData.weeks.length).fill(0);
+  const actual = r.actual_hours || Array(actualsData.weeks.length).fill(0);
+  const notes = r.actual_notes || {};
+  const cap = r.capacity ?? 40;
+  const totalPlanned = planned.reduce((a, b) => a + b, 0);
+  const totalActual = actual.reduce((a, b) => a + b, 0);
+  const delta = totalActual - totalPlanned;
+  const weekCell = (p, a, i) => {
+    const n = notes[i] || {};
+    let cls = "";
+    if (a > p) cls = "a-over";
+    else if (a < p) cls = "a-under";
+    const flag = (a > p && !n.is_ot) ? " ⚠" : (a > p && n.is_ot && !n.approved) ? " ⛔" : "";
+    return `<td class="week"><input class="inp a-inp ${cls}" type="number" step="0.25" min="0" data-week="${i}" value="${a ? a : ""}" placeholder="0" inputmode="decimal" title="planned ${p}h${flag}">${flag}</td>`;
+  };
+  let weekCells = "";
+  planned.forEach((p, i) => { weekCells += weekCell(p, actual[i] || 0, i); });
+  const deltaCls = delta > 0 ? "a-over" : delta < 0 ? "a-under" : "";
+  return `<tr class="resource-row" data-rid="${r.id}">
+    <td class="sticky-l sc1 meta-col">${esc(r.country || "—")}</td>
+    <td class="sticky-l sc2 meta-col">${esc(r.client || "—")}</td>
+    <td class="sticky-l sc3 meta-col">${esc(r.project || "—")}</td>
+    <td class="sticky-l sc4 meta-col">${esc(r.name)}</td>
+    <td class="sticky-l sc5 meta-col">${esc(r.role || "—")}</td>
+    <td class="sticky-l sc6 calc dim">${fmt(totalPlanned, 1)}</td>
+    <td class="sticky-l sc7 calc">${fmt(totalActual, 1)}</td>
+    <td class="sticky-l sc8 calc ${deltaCls}">${delta > 0 ? "+" : ""}${fmt(delta, 1)}</td>
+    ${weekCells}
+  </tr>`;
+}
+
+function renderActuals() {
+  const weeks = actualsData.weeks;
+  const groups = [];
+  for (const r of actualsData.resources) {
+    const client = (r.client || "").trim();
+    const project = (r.project || "").trim();
+    const key = client + "|" + project;
+    if (groups.length && groups[groups.length - 1].key === key) groups[groups.length - 1].members.push(r);
+    else groups.push({ key, client, project, members: [r] });
+  }
+  const filter = ($("#actualsFilter").value || "").toLowerCase();
+  $("#actualsHead").innerHTML = actualsHeadHTML();
+  let oldCols = document.querySelector("#actualsTable colgroup");
+  if (oldCols) oldCols.remove();
+  document.querySelector("#actualsTable").insertAdjacentHTML("afterbegin", actualsColgroup());
+  let html = "<tbody>";
+  groups.forEach((g, gi) => {
+    let p = 0, a = 0;
+    for (const m of g.members) {
+      p += (m.hours || []).reduce((x, y) => x + y, 0);
+      a += (m.actual_hours || []).reduce((x, y) => x + y, 0);
+    }
+    html += `<tr class="group-row" data-group="${gi}" title="Expand / collapse">
+      <td class="sticky-l sc1" colspan="5"><span class="group-chevron">▼</span>${esc(g.client || "—")}${g.project ? ` · ${esc(g.project)}` : ""}<span class="proj-count-chip">${g.members.length} resource(s)</span></td>
+      <td class="sticky-l sc6 calc dim">${fmt(p, 1)}</td>
+      <td class="sticky-l sc7 calc">${fmt(a, 1)}</td>
+      <td class="sticky-l sc8 calc">${fmt(a - p, 1)}</td>
+      ${weeks.map(() => "<td></td>").join("")}
+    </tr>`;
+    let body = "";
+    for (const m of g.members) {
+      const keep = !filter || [m.name, m.client, m.project, m.role].some((v) => (v || "").toLowerCase().includes(filter));
+      if (keep) body += actualsRowHTML(m);
+    }
+    if (body) html += body;
+  });
+  html += "</tbody>";
+  $("#actualsBody").innerHTML = html;
+  alignActualsSticky();
+}
+
+function alignActualsSticky() {
+  const wrap = document.querySelector("#actualsWrap");
+  const table = document.querySelector("#actualsTable");
+  const probe = document.querySelector("#actualsBody tr.resource-row");
+  if (!wrap || !table || !probe) return;
+  const prev = wrap.scrollLeft;
+  wrap.scrollLeft = 0;
+  const els = document.querySelectorAll("#actualsHead [class*=sc], #actualsBody [class*=sc]");
+  els.forEach((el) => { el.style.left = ""; el.style.position = "static"; });
+  const tLeft = table.getBoundingClientRect().left;
+  const xs = [];
+  for (let i = 1; i <= 8; i++) {
+    const cell = probe.children[i - 1];
+    xs.push(cell ? Math.round(cell.getBoundingClientRect().left - tLeft) : null);
+  }
+  els.forEach((el) => { el.style.position = ""; });
+  for (let i = 1; i <= 8; i++) {
+    if (xs[i - 1] === null) continue;
+    document.querySelectorAll(`#actualsHead .sc${i}, #actualsBody .sc${i}`).forEach((el) => { el.style.left = `${xs[i - 1]}px`; });
+  }
+  wrap.scrollLeft = prev;
+}
+
+function aMarkDirty(rid, week, value) {
+  let d = aDirty.get(rid) || { hours: false, notes: {} };
+  d.hours = true;
+  aDirty.set(rid, d);
+  if (!aFlushTimer) aFlushTimer = setTimeout(aFlush, 1200);
+}
+
+async function aFlush() {
+  aFlushTimer = null;
+  if (!aDirty.size) return;
+  const pending = Array.from(aDirty.entries());
+  aDirty.clear();
+  for (const [rid, d] of pending) {
+    const tr = $(`#actualsBody tr[data-rid="${rid}"]`);
+    if (!tr) continue;
+    const hours = Array.from($$(`input[data-week]`, tr)).map((i) => num(i.value) || 0);
+    const notes = {};
+    // collect any notes already stored for this resource
+    const r = actualsData.resources.find((x) => x.id === rid);
+    if (r && r.actual_notes) Object.assign(notes, r.actual_notes);
+    try {
+      const res = await api(`/api/resources/${rid}/actuals`, { method: "PUT", body: JSON.stringify({ hours, notes }) });
+      if (res.status === "needs_input") {
+        // OT flow: prompt the PM for each week needing input
+        for (const w of res.weeks) {
+          const ok = await actualsPrompt(rid, w, hours);
+          if (!ok) { toast("Actuals not saved — resolve the flagged weeks", true); return; }
+        }
+        // retry after prompts
+        const r2 = actualsData.resources.find((x) => x.id === rid);
+        const notes2 = r2 ? r2.actual_notes || {} : {};
+        const res2 = await api(`/api/resources/${rid}/actuals`, { method: "PUT", body: JSON.stringify({ hours, notes: notes2 }) });
+        if (res2.status !== "ok") { toast("Actuals still need input", true); return; }
+      }
+      toast("Actuals saved");
+      await loadActuals();
+      refreshDashboard();
+    } catch (e) {
+      toast(`Actuals save failed: ${e.message}`, true);
+    }
+  }
+}
+
+/* ---------------- Inline OT flow (Yes/No/Cancel modal) ----------------
+   Replaces browser confirm()/prompt() with a clean in-app modal. Each step
+   shows Yes / No / Cancel; Yes and No advance to the next question based on
+   the situation, Cancel aborts the whole save. */
+function askOt(question, opts = {}) {
+  return new Promise((resolve) => {
+    const body = $("#otModalBody");
+    const title = $("#otModalTitle");
+    title.textContent = opts.title || "Overtime Review";
+    let html = `<div class="ot-q">${question}</div>`;
+    if (opts.hint) html += `<div class="ot-hint">${opts.hint}</div>`;
+    if (opts.input) {
+      html += `<input class="inp ot-input" id="otInput" type="text" placeholder="${esc(opts.inputPlaceholder || "")}" value="${esc(opts.inputValue || "")}">`;
+    }
+    html += `<div class="ot-btns">`;
+    if (opts.buttons !== false) {
+      html += `<button class="btn primary ot-yes" data-v="yes">Yes</button>`;
+      html += `<button class="btn ghost ot-no" data-v="no">No</button>`;
+    }
+    if (opts.allowCancel !== false) {
+      html += `<button class="btn ghost ot-cancel" data-v="cancel">Cancel</button>`;
+    }
+    html += `</div>`;
+    body.innerHTML = html;
+    $("#otModal").classList.remove("hidden");
+
+    const finish = (val) => {
+      $("#otModal").classList.add("hidden");
+      resolve(val);
+    };
+    body.querySelector(".ot-yes")?.addEventListener("click", () => finish("yes"));
+    body.querySelector(".ot-no")?.addEventListener("click", () => finish("no"));
+    body.querySelector(".ot-cancel")?.addEventListener("click", () => finish("cancel"));
+    const inp = body.querySelector("#otInput");
+    if (inp) {
+      inp.focus();
+      inp.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") finish(inp.value.trim());
+        if (e.key === "Escape") finish("cancel");
+      });
+    }
+  });
+}
+
+/* OT flow prompt — returns true if the week is resolved (saved). Uses the
+   inline Yes/No/Cancel modal. */
+async function actualsPrompt(rid, w, hours) {
+  const r = actualsData.resources.find((x) => x.id === rid);
+  const planned = r ? (r.hours || [])[w] || 0 : 0;
+  const actual = hours[w] || 0;
+  const overage = actual - planned;
+  const note = (r && r.actual_notes && r.actual_notes[w]) || {};
+  const weekLabel = actualsData.weeks[w] || `week ${w + 1}`;
+  const who = r ? r.name : "";
+
+  if (overage < 0) {
+    // under-delivery: mandatory comment
+    const comment = await askOt(
+      `${who} — ${weekLabel}<br>Planned <b>${planned}h</b>, actual <b>${actual}h</b> (${overage}h under).<br><br>Why the shortfall? (required)`,
+      { title: "Under-delivery", input: true, inputPlaceholder: "Reason for shortfall", inputValue: note.comment || "", buttons: false, allowCancel: true }
+    );
+    if (comment === null || comment === "cancel") return false;
+    if (!comment.trim()) { toast("A comment is required for under-delivery", true); return false; }
+    note.comment = comment.trim();
+    note.is_ot = 0; note.approved = 0; note.billed = 0;
+    r.actual_notes[w] = note;
+    return true;
+  }
+
+  // overage -> OT flow
+  const isOt = await askOt(
+    `${who} — ${weekLabel}<br>Planned <b>${planned}h</b>, actual <b>${actual}h</b> (+${overage}h).<br><br>Is this OVERTIME?`,
+    { title: "Overtime Review" }
+  );
+  if (isOt === "cancel") return false;
+  if (isOt === "no") {
+    note.is_ot = 0; note.approved = 0; note.billed = 0;
+    r.actual_notes[w] = note;
+    return true;
+  }
+  note.is_ot = 1;
+
+  const approved = await askOt(
+    `${who} — ${weekLabel}<br>OT of <b>${overage}h</b>.<br><br>Is this OT APPROVED?`,
+    { title: "OT Approval" }
+  );
+  if (approved === "cancel") return false;
+  if (approved === "no") {
+    // block: must approve or decline
+    const decline = await askOt(
+      `${who} — ${weekLabel}<br>Unapproved OT cannot be saved.<br><br>Decline this as NOT overtime?`,
+      { title: "Unapproved OT", buttons: false }
+    );
+    if (decline === "cancel") return false;
+    if (decline === "yes") { note.is_ot = 0; note.approved = 0; note.billed = 0; r.actual_notes[w] = note; return true; }
+    return false;
+  }
+  note.approved = 1;
+
+  const billed = await askOt(
+    `${who} — ${weekLabel}<br>OT of <b>${overage}h</b> APPROVED.<br><br>Is this BILLED to the client?`,
+    { title: "Billing" }
+  );
+  if (billed === "cancel") return false;
+  if (billed === "yes") {
+    note.billed = 1;
+    r.actual_notes[w] = note;
+    return true;
+  }
+  note.billed = 0;
+  const reason = await askOt(
+    `${who} — ${weekLabel}<br>OT of <b>${overage}h</b> approved but NOT billed.<br><br>Why not billed to the client? (required)`,
+    { title: "Unbilled OT", input: true, inputPlaceholder: "Reason not billed", inputValue: note.comment || "", buttons: false, allowCancel: true }
+  );
+  if (reason === null || reason === "cancel") return false;
+  if (!reason.trim()) { toast("A reason is required for unbilled OT", true); return false; }
+  note.comment = reason.trim();
+  r.actual_notes[w] = note;
+  return true;
+}
+
+$("#actualsBody").addEventListener("input", (e) => {
+  const el = e.target.closest("input[data-week]");
+  if (!el) return;
+  const tr = el.closest("tr[data-rid]");
+  if (!tr) return;
+  const rid = +tr.dataset.rid;
+  const week = +el.dataset.week;
+  aMarkDirty(rid, week, num(el.value) || 0);
+  // live delta update
+  const r = actualsData.resources.find((x) => x.id === rid);
+  if (r) {
+    const planned = (r.hours || [])[week] || 0;
+    const actual = num(el.value) || 0;
+    el.classList.toggle("a-over", actual > planned);
+    el.classList.toggle("a-under", actual < planned);
+  }
+});
+
+$("#actualsBody").addEventListener("click", (e) => {
+  const gr = e.target.closest("tr.group-row");
+  if (gr) toggleActualsGroup(gr);
+});
+function toggleActualsGroup(gr) {
+  const collapsed = !gr.classList.contains("collapsed");
+  gr.classList.toggle("collapsed", collapsed);
+  let nxt = gr.nextElementSibling;
+  while (nxt && !nxt.classList.contains("group-row")) {
+    if (nxt.classList.contains("resource-row")) nxt.classList.toggle("collapsed", collapsed);
+    nxt = nxt.nextElementSibling;
+  }
+  alignActualsSticky();
+}
+$("#btnActualsExpandAll").addEventListener("click", () => $$("#actualsBody tr.group-row").forEach((g) => toggleActualsGroup(g, false)));
+$("#btnActualsCollapseAll").addEventListener("click", () => $$("#actualsBody tr.group-row").forEach((g) => toggleActualsGroup(g, true)));
+let aFilterT = null;
+$("#actualsFilter").addEventListener("input", () => { clearTimeout(aFilterT); aFilterT = setTimeout(renderActuals, 250); });
+
+/* ---------------- ACTUALS ENTRY POPUP (wizard) ---------------- */
+let actualsEntry = { client: "", project: "", month: 0, resources: [] };
+const MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+
+function actualsClients() {
+  const set = new Set();
+  for (const r of actualsData.resources) if ((r.client || "").trim()) set.add(r.client.trim());
+  return Array.from(set).sort();
+}
+function actualsProjectsFor(client) {
+  const set = new Set();
+  for (const r of actualsData.resources) if ((r.client || "").trim() === client && (r.project || "").trim()) set.add(r.project.trim());
+  return Array.from(set).sort();
+}
+function actualsResourcesFor(client, project) {
+  return actualsData.resources.filter((r) =>
+    (r.client || "").trim() === client && (r.project || "").trim() === project);
+}
+
+async function openActualsModal() {
+  // Ensure actuals data is loaded (the wizard reads actualsData; if the user
+  // opens it without visiting the Actuals tab first, it would be empty).
+  if (!actualsData.resources || !actualsData.resources.length) {
+    try { actualsData = await api("/api/actuals"); }
+    catch (e) { toast(`Could not load actuals: ${e.message}`, true); return; }
+  }
+  actualsEntry = { client: "", project: "", month: 0, resources: [] };
+  renderActualsModal();
+  $("#actualsModal").classList.remove("hidden");
+}
+function closeActualsModal() { $("#actualsModal").classList.add("hidden"); }
+
+function renderActualsModal() {
+  const e = actualsEntry;
+  const clients = actualsClients();
+  const projects = e.client ? actualsProjectsFor(e.client) : [];
+  const months = actualsData.months || [];
+  const year = actualsData.year || 2026;
+  let html = `
+    <div class="a-wizard">
+      <div class="a-pick-row">
+        <label>Client
+          <select id="aClient" class="cur-sel">
+            <option value="">— Select client —</option>
+            ${clients.map((c) => `<option value="${esc(c)}"${c === e.client ? " selected" : ""}>${esc(c)}</option>`).join("")}
+          </select>
+        </label>
+        <label>Project
+          <select id="aProject" class="cur-sel" ${e.client ? "" : "disabled"}>
+            <option value="">— Select project —</option>
+            ${projects.map((p) => `<option value="${esc(p)}"${p === e.project ? " selected" : ""}>${esc(p)}</option>`).join("")}
+          </select>
+        </label>
+        <label>Month
+          <select id="aMonth" class="cur-sel">
+            ${months.map((m, i) => `<option value="${i}"${i === e.month ? " selected" : ""}>${esc(m.name)}</option>`).join("")}
+          </select>
+        </label>
+        <label>Year <span class="a-year">${year}</span></label>
+      </div>
+      <div id="aTeam"></div>
+    </div>`;
+  $("#actualsModalBody").innerHTML = html;
+  // wire pickers
+  $("#aClient").addEventListener("change", (ev) => {
+    actualsEntry.client = ev.target.value;
+    actualsEntry.project = "";
+    renderActualsModal();
+  });
+  $("#aProject").addEventListener("change", (ev) => {
+    actualsEntry.project = ev.target.value;
+    renderActualsModal();
+  });
+  $("#aMonth").addEventListener("change", (ev) => {
+    actualsEntry.month = +ev.target.value;
+    renderActualsModal();
+  });
+  if (e.client && e.project) renderActualsTeam();
+}
+
+function renderActualsTeam() {
+  const e = actualsEntry;
+  const resources = actualsResourcesFor(e.client, e.project);
+  const months = actualsData.months || [];
+  const m = months[e.month];
+  if (!m) { $("#aTeam").innerHTML = `<div class="dim">No month data.</div>`; return; }
+  const weekIdx = [];
+  for (let i = m.start; i <= m.end; i++) weekIdx.push(i);
+  const weekLabels = weekIdx.map((i) => actualsData.weeks[i] || `W${i + 1}`);
+  let html = `<div class="a-team-head">${resources.length} resource(s) · ${esc(e.client)} / ${esc(e.project)} · ${esc(m.name)}</div>`;
+  if (!resources.length) {
+    html += `<div class="dim">No resources assigned to this project.</div>`;
+    $("#aTeam").innerHTML = html;
+    return;
+  }
+  html += `<table class="a-entry-table">
+    <thead><tr><th>Resource</th><th>Title</th>${weekLabels.map((w) => `<th>${esc(w)}</th>`).join("")}<th>Total</th></tr></thead><tbody>`;
+  for (const r of resources) {
+    const planned = r.hours || [];
+    const actual = r.actual_hours || [];
+    const notes = r.actual_notes || {};
+    let total = 0;
+    html += `<tr data-rid="${r.id}">
+      <td class="a-res-name">${esc(r.name)}</td>
+      <td class="dim">${esc(r.role || "—")}</td>`;
+    for (const i of weekIdx) {
+      const p = planned[i] || 0;
+      const a = actual[i] || 0;
+      total += a;
+      const n = notes[i] || {};
+      const flag = (a > p && !n.is_ot) ? " ⚠" : (a > p && n.is_ot && !n.approved) ? " ⛔" : "";
+      html += `<td class="a-week-cell" data-week="${i}" data-planned="${p}">
+        <div class="a-planned">${p ? p + "h" : "—"}</div>
+        <input class="inp a-inp" type="number" step="0.25" min="0" data-week="${i}" value="${a ? a : ""}" placeholder="0" inputmode="decimal" title="planned ${p}h${flag}">
+      </td>`;
+    }
+    html += `<td class="a-total" data-total>${total ? total : "—"}</td></tr>`;
+  }
+  html += `</tbody></table>`;
+  $("#aTeam").innerHTML = html;
+  // live total + over/under highlight
+  $$("#aTeam tr[data-rid]").forEach((tr) => {
+    const rid = +tr.dataset.rid;
+    $$("input[data-week]", tr).forEach((inp) => {
+      inp.addEventListener("input", () => {
+        const p = +inp.closest("td").dataset.planned;
+        const a = num(inp.value) || 0;
+        inp.classList.toggle("a-over", a > p);
+        inp.classList.toggle("a-under", a < p);
+        let t = 0;
+        $$("input[data-week]", tr).forEach((x) => { t += num(x.value) || 0; });
+        tr.querySelector("[data-total]").textContent = t ? t : "—";
+      });
+    });
+  });
+}
+
+/* Save the popup: validate all entered weeks via the OT flow, then persist. */
+async function saveActualsModal() {
+  const e = actualsEntry;
+  const resources = actualsResourcesFor(e.client, e.project);
+  const months = actualsData.months || [];
+  const m = months[e.month];
+  if (!m) { toast("Select a month first", true); return; }
+  const weekIdx = [];
+  for (let i = m.start; i <= m.end; i++) weekIdx.push(i);
+  let any = false;
+  for (const r of resources) {
+    const tr = $(`#aTeam tr[data-rid="${r.id}"]`);
+    if (!tr) continue;
+    const hours = [...(r.actual_hours || [])];
+    const notes = { ...(r.actual_notes || {}) };
+    let changed = false;
+    for (const i of weekIdx) {
+      const inp = $(`input[data-week="${i}"]`, tr);
+      if (!inp) continue;
+      const v = num(inp.value) || 0;
+      if (v !== (r.actual_hours || [])[i]) {
+        changed = true;
+        // hours changed → clear that week's stored note so the OT flow
+        // re-fires (a stale is_ot=0 would otherwise skip the prompt)
+        delete notes[i];
+      }
+      hours[i] = v;
+    }
+    if (!changed) continue;
+    any = true;
+    try {
+      const res = await api(`/api/resources/${r.id}/actuals`, { method: "PUT", body: JSON.stringify({ hours, notes }) });
+      if (res.status === "needs_input") {
+        // OT flow: prompt for each week needing input
+        for (const w of res.weeks) {
+          const ok = await actualsPrompt(r.id, w.week, hours);
+          if (!ok) { toast("Actuals not saved — resolve the flagged weeks", true); return; }
+        }
+        const r2 = actualsData.resources.find((x) => x.id === r.id);
+        const notes2 = r2 ? r2.actual_notes || {} : {};
+        const res2 = await api(`/api/resources/${r.id}/actuals`, { method: "PUT", body: JSON.stringify({ hours, notes: notes2 }) });
+        if (res2.status !== "ok") { toast("Actuals still need input", true); return; }
+      }
+    } catch (err) { toast(`Save failed: ${err.message}`, true); return; }
+  }
+  if (!any) { toast("No changes to save"); return; }
+  toast("Actuals saved");
+  closeActualsModal();
+  await loadActuals();
+  refreshDashboard();
+}
+
+/* Re-fetch the dashboard so Additional Revenue/Expense reflect the latest
+   actuals — the dashboard is a separate endpoint and won't update on its own. */
+function refreshDashboard() {
+  if (state.view === "dash") renderDashboard();
+}
+
+$("#btnAddActuals").addEventListener("click", openActualsModal);
+$("#actualsModalCancel").addEventListener("click", closeActualsModal);
+$("#actualsModalSave").addEventListener("click", saveActualsModal);
 
 /* ---------------- toolbar ---------------- */
 $("#btnAdd").addEventListener("click", async () => {
@@ -807,10 +1506,13 @@ $("#fileInput").addEventListener("change", async (e) => {
     const pricingNote = data.pricing_added || data.pricing_updated
       ? `\nPricing sheet: ${data.pricing_added || 0} added, ${data.pricing_updated || 0} updated.`
       : "";
+    const actualsNote = data.actuals_added
+      ? `\nActuals sheet: ${data.actuals_added} resource(s) actual hours loaded.`
+      : "";
     const replaceNote = data.mode === "replace"
       ? `\n\nReplaced all data — ${data.resources.length} resource(s) loaded from this file. Backup saved to ${data.backup}`
       : "";
-    showModal("Import complete", `${data.added} added, ${data.updated} updated, ${data.renamed || 0} renamed from “${file.name}”.${pricingNote}${replaceNote}${warn}`);
+    showModal("Import complete", `${data.added} added, ${data.updated} updated, ${data.renamed || 0} renamed from “${file.name}”.${pricingNote}${actualsNote}${replaceNote}${warn}`);
     toast(`Import ${data.mode === "replace" ? "(replace) " : ""}done`);
   } catch (err) { toast(`Import failed: ${err.message}`, true); }
   btn.disabled = false; btn.textContent = "Import Excel";
@@ -822,6 +1524,17 @@ async function switchView(view) {
   state.view = view;
   await flush();
   await pFlush();
+  await aFlush();
+  // toggle view visibility (renderView handles the rest)
+  $$(".tab").forEach((x) => x.classList.toggle("active", x.dataset.tab === view));
+  const isGrid = view === "onsite" || view === "offshore";
+  $("#gridView").classList.toggle("hidden", !isGrid);
+  $("#dashView").classList.toggle("hidden", view !== "dash");
+  $("#pricingView").classList.toggle("hidden", view !== "pricing");
+  $("#utilView").classList.toggle("hidden", view !== "util");
+  $("#actualsView").classList.toggle("hidden", view !== "actuals");
+  $("#btnAdd").style.display = isGrid ? "initial" : "none";
+  if (view === "actuals") { loadActuals(); return; }
   await loadState();
 }
 
@@ -832,25 +1545,23 @@ function renderView() {
   $("#dashView").classList.toggle("hidden", state.view !== "dash");
   $("#pricingView").classList.toggle("hidden", state.view !== "pricing");
   $("#utilView").classList.toggle("hidden", state.view !== "util");
+  $("#actualsView").classList.toggle("hidden", state.view !== "actuals");
   $("#btnAdd").style.display = isGrid ? "initial" : "none";
   if (isGrid) renderGrid();
   else if (state.view === "dash") renderDashboard();
   else if (state.view === "util") renderUtilization();
+  else if (state.view === "actuals") renderActuals();
   else renderPricing();
 }
 
 $$(".tab").forEach((t) => t.addEventListener("click", () => switchView(t.dataset.tab)));
 
 /* ---------------- boot ---------------- */
-/* Surface any runtime error on-screen instead of silently blanking a section,
-   so stale-cache / browser issues are self-diagnosing. */
 window.addEventListener("error", (e) => {
   console.error("Revenue tracker error:", e.message, e.filename, e.lineno);
   toast(`App error: ${e.message} (${e.filename ? e.filename.split("/").pop() : ""}:${e.lineno || "?"})`, true);
 });
-async function boot() {
-  try { await loadState(); } catch (e) { toast(`Load failed: ${e.message}`, true); }
-}
 boot();
 setInterval(() => flush(), 3000);
 setInterval(() => pFlush(), 3000);
+setInterval(() => aFlush(), 3000);
