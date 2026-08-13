@@ -10,7 +10,7 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icons/icon-192.png">
 <title>Revenue Recon</title>
-<link rel="stylesheet" href="/styles.css?v=43">
+<link rel="stylesheet" href="/styles.css?v=44">
 </head>
 <body>
 <div class="bg-glow"></div>
@@ -166,6 +166,20 @@
         <tbody id="capBody"></tbody>
       </table>
     </div>
+
+    <!-- DB security (encryption) section -->
+    <div class="toolbar glass pm-toolbar">
+      <div class="sheet-note"><span class="dot on"></span><b>Database Security</b> — the finance database is encrypted with SQLCipher. Set or change the DB password here (protects the data at rest).</div>
+      <div class="toolbar-right">
+        <span class="hint" id="dbSecStatus"></span>
+      </div>
+    </div>
+    <div class="table-wrap glass narrow" id="dbSecWrap">
+      <table id="dbSecTable">
+        <thead id="dbSecHead"></thead>
+        <tbody id="dbSecBody"></tbody>
+      </table>
+    </div>
   </section>
 </main>
 
@@ -222,7 +236,7 @@
   </div>
 </div>
 
-<script src="/app.js?v=61"></script>
+<script src="/app.js?v=62"></script>
 <script>
   // PWA: register the service worker (only after load; skip on failure)
   if ("serviceWorker" in navigator) {

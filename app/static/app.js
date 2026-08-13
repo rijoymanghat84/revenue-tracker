@@ -715,6 +715,7 @@ function renderPricing() {
   $("#pricingBody").innerHTML = html;
   renderPMs();
   renderCapacity();
+  renderDbSec();
 }
 
 function readEditRow(tr) {
@@ -886,6 +887,35 @@ function renderCapacity() {
   }
   html += "</tbody>";
   $("#capBody").innerHTML = html;
+}
+
+/* ---------------- DB security (encryption) ---------------- */
+function renderDbSec() {
+  api("/api/db-security").then((s) => {
+    const status = s.encrypted
+      ? `<span class="db-sec-ok">🔒 Encrypted</span>`
+      : `<span class="db-sec-warn">⚠ Not encrypted</span>`;
+    $("#dbSecStatus").innerHTML = status;
+    $("#dbSecHead").innerHTML = `<tr><th>Database Password</th><th></th></tr>`;
+    $("#dbSecBody").innerHTML = `
+      <tr class="p-res">
+        <td>
+          <input class="rate-inp txt db-pw" id="dbPw" type="password" placeholder="${s.encrypted ? "New DB password (min 6 chars)" : "Set DB password (min 6 chars)"}" autocomplete="new-password">
+        </td>
+        <td><button class="btn mini" id="btnSetDbPw">${s.encrypted ? "Change Password" : "Set Password"}</button></td>
+      </tr>`;
+    $("#btnSetDbPw").addEventListener("click", async () => {
+      const pw = $("#dbPw").value.trim();
+      if (pw.length < 6) { toast("DB password must be at least 6 characters", true); return; }
+      const btn = $("#btnSetDbPw"); btn.disabled = true; btn.textContent = "…";
+      try {
+        await api("/api/db-password", { method: "POST", body: JSON.stringify({ password: pw }) });
+        toast("Database password set — DB is now encrypted");
+        renderDbSec();
+      } catch (e) { toast(`Failed: ${e.message}`, true); }
+      btn.disabled = false; btn.textContent = "Save";
+    });
+  }).catch((e) => toast(`DB security failed: ${e.message}`, true));
 }
 
 $("#pmBody").addEventListener("click", async (e) => {
