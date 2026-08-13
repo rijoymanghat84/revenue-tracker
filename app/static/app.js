@@ -1654,7 +1654,7 @@ function dateRangeToWeeks(startStr, endStr) {
 function renderResModal() {
   const isEdit = resEditId !== null;
   const r = isEdit ? state.resources.find((x) => x.id === resEditId) : null;
-  $("#resModalTitle").textContent = isEdit ? "Edit Entry" : "Add Entry";
+  $("#resModalTitle").textContent = isEdit ? "Edit Resource" : "Add Resource";
   const clients = [...new Set(state.resources.map((x) => (x.client || "").trim()).filter(Boolean))].sort();
   const projects = [...new Set(state.resources.map((x) => (x.project || "").trim()).filter(Boolean))].sort();
   const titles = state.pricing.map((p) => p.title);
@@ -1743,7 +1743,7 @@ async function saveResModal() {
       await api(`/api/resources/${rid}/hours`, { method: "PUT", body: JSON.stringify({ hours }) });
     }
     closeResModal();
-    toast(wasEdit ? "Entry updated" : "Entry added");
+    toast(wasEdit ? "Resource updated" : "Resource added");
     await loadState();
   } catch (e) { toast(`Save failed: ${e.message}`, true); }
   btn.disabled = false; btn.textContent = "Save";
@@ -1752,8 +1752,79 @@ async function saveResModal() {
 $("#resModalCancel").addEventListener("click", closeResModal);
 $("#resModalSave").addEventListener("click", saveResModal);
 
+/* ---------------- Add / Edit Client Project modal ---------------- */
+let projEditId = null; // null = add, else project id being edited
+let projList = [];
+
+async function loadProjects() {
+  try { projList = await api("/api/projects"); }
+  catch (e) { toast(`Projects failed: ${e.message}`, true); }
+}
+
+function openProjModal(pid) {
+  projEditId = pid || null;
+  renderProjModal();
+  $("#projModal").classList.remove("hidden");
+}
+function closeProjModal() { $("#projModal").classList.add("hidden"); projEditId = null; }
+
+function renderProjModal() {
+  const isEdit = projEditId !== null;
+  const p = isEdit ? projList.find((x) => x.id === projEditId) : null;
+  $("#projModalTitle").textContent = isEdit ? "Edit Client Project" : "Add Client Project";
+  const pickOpts = `<option value="">— New client/project —</option>` +
+    projList.map((x) => `<option value="${x.id}"${p && p.id === x.id ? " selected" : ""}>${esc(x.client)} / ${esc(x.project)}</option>`).join("");
+  $("#projModalBody").innerHTML = `
+    <div class="res-form">
+      <div class="res-row">
+        <label>Client / Project <select id="projPick" class="cur-sel">${pickOpts}</select></label>
+        <label class="res-hint">Pick an existing one to edit, or choose "New client/project".</label>
+      </div>
+      <div class="res-row">
+        <label>Client <input class="inp res-inp" id="projClient" value="${esc(p ? p.client : "")}" placeholder="e.g. Doxim"></label>
+        <label>Project <input class="inp res-inp" id="projName" value="${esc(p ? p.project : "")}" placeholder="e.g. Support"></label>
+      </div>
+      <div class="res-row">
+        <label>Start Date <input class="inp res-inp" id="projStart" type="date" value="${p ? p.start_date : ""}"></label>
+        <label>End Date <input class="inp res-inp" id="projEnd" type="date" value="${p ? p.end_date : ""}"></label>
+      </div>
+    </div>`;
+  $("#projPick").addEventListener("change", (e) => {
+    const id = e.target.value;
+    if (!id) { projEditId = null; renderProjModal(); return; }
+    projEditId = +id;
+    renderProjModal();
+  });
+}
+
+async function saveProjModal() {
+  const client = $("#projClient").value.trim();
+  const project = $("#projName").value.trim();
+  const start = $("#projStart").value;
+  const end = $("#projEnd").value;
+  if (!client) { toast("Client is required", true); return; }
+  if (!project) { toast("Project is required", true); return; }
+  const btn = $("#projModalSave"); btn.disabled = true; btn.textContent = "…";
+  const wasEdit = projEditId !== null;
+  try {
+    if (projEditId === null) {
+      await api("/api/projects", { method: "POST", body: JSON.stringify({ client, project, start_date: start, end_date: end }) });
+    } else {
+      await api(`/api/projects/${projEditId}`, { method: "PUT", body: JSON.stringify({ client, project, start_date: start, end_date: end }) });
+    }
+    closeProjModal();
+    toast(wasEdit ? "Client project updated" : "Client project added");
+    await loadProjects();
+  } catch (e) { toast(`Save failed: ${e.message}`, true); }
+  btn.disabled = false; btn.textContent = "Save";
+}
+
+$("#projModalCancel").addEventListener("click", closeProjModal);
+$("#projModalSave").addEventListener("click", saveProjModal);
+
 /* ---------------- toolbar ---------------- */
 $("#btnAdd").addEventListener("click", () => openResModal(null));
+$("#btnAddProject").addEventListener("click", () => { loadProjects().then(() => openProjModal(null)); });
 $("#btnEditGrid").addEventListener("click", () => {
   state.gridEdit[state.view] = !state.gridEdit[state.view];
   renderGrid();

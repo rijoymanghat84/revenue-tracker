@@ -59,7 +59,8 @@
     </select>
     <button class="btn ghost" id="btnImport" title="Upload an Excel file (same layout) to update data">Import Excel</button>
     <a class="btn ghost" id="btnExport" href="/api/export" title="Download an Excel file (Dashboard + On-Site + Off-Shore + Pricing + Actuals tabs)">Export Excel</a>
-    <button class="btn primary" id="btnAdd">+ Add/Edit Entries</button>
+    <button class="btn primary" id="btnAdd">+ Add/Edit Resource</button>
+    <button class="btn ghost" id="btnAddProject">+ Add/Edit Client Project</button>
     <button class="btn ghost" id="btnLogout" title="Sign out">Sign out</button>
   </div>
 </header>
@@ -209,7 +210,19 @@
   </div>
 </div>
 
-<script src="/app.js?v=59"></script>
+<!-- ============ ADD / EDIT CLIENT PROJECT ============ -->
+<div id="projModal" class="modal hidden">
+  <div class="modal-box glass res-modal">
+    <h3 id="projModalTitle">Add Client Project</h3>
+    <div id="projModalBody" class="modal-body"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="projModalCancel">Cancel</button>
+      <button class="btn primary" id="projModalSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<script src="/app.js?v=61"></script>
 <script>
   // PWA: register the service worker (only after load; skip on failure)
   if ("serviceWorker" in navigator) {
