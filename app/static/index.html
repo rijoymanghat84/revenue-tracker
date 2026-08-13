@@ -10,7 +10,7 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icons/icon-192.png">
 <title>Revenue Recon</title>
-<link rel="stylesheet" href="/styles.css?v=42">
+<link rel="stylesheet" href="/styles.css?v=43">
 </head>
 <body>
 <div class="bg-glow"></div>
@@ -197,7 +197,19 @@
   </div>
 </div>
 
-<script src="/app.js?v=57"></script>
+<!-- ============ ADD / EDIT RESOURCE (Planned) ============ -->
+<div id="resModal" class="modal hidden">
+  <div class="modal-box glass res-modal">
+    <h3 id="resModalTitle">Add Resource</h3>
+    <div id="resModalBody" class="modal-body"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="resModalCancel">Cancel</button>
+      <button class="btn primary" id="resModalSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<script src="/app.js?v=58"></script>
 <script>
   // PWA: register the service worker (only after load; skip on failure)
   if ("serviceWorker" in navigator) {
