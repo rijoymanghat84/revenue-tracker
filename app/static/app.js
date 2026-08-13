@@ -882,13 +882,13 @@ function renderUtilization() {
       for (const mo of row.months) {
         const pc = utilClass(mo.planned_pct);
         const ac = utilClass(mo.actual_pct);
-        rows += `<td class="u-cell ${pc}" title="planned ${mo.planned_hours.toLocaleString()}h / ${mo.capacity}h">${fmt(mo.planned_pct, 0)}%</td>`;
-        rows += `<td class="u-cell ${ac}" title="actual ${mo.actual_hours.toLocaleString()}h / ${mo.capacity}h">${fmt(mo.actual_pct, 0)}%</td>`;
+        rows += `<td class="u-cell ${pc}" title="planned ${(mo.planned_hours||0).toLocaleString()}h / ${mo.capacity}h">${fmt(mo.planned_pct, 0)}%</td>`;
+        rows += `<td class="u-cell ${ac}" title="actual ${(mo.actual_hours||0).toLocaleString()}h / ${mo.capacity}h">${fmt(mo.actual_pct, 0)}%</td>`;
       }
       const poc = utilClass(row.planned_overall);
       const aoc = utilClass(row.actual_overall);
-      rows += `<td class="u-cell ${poc}" title="planned ${row.total_planned.toLocaleString()}h total">${fmt(row.planned_overall, 0)}%</td>`;
-      rows += `<td class="u-cell ${aoc}" title="actual ${row.total_actual.toLocaleString()}h total">${fmt(row.actual_overall, 0)}%</td></tr>`;
+      rows += `<td class="u-cell ${poc}" title="planned ${(row.total_planned||0).toLocaleString()}h total">${fmt(row.planned_overall, 0)}%</td>`;
+      rows += `<td class="u-cell ${aoc}" title="actual ${(row.total_actual||0).toLocaleString()}h total">${fmt(row.actual_overall, 0)}%</td></tr>`;
     }
     $("#utilHead").innerHTML = head;
     $("#utilBody").innerHTML = rows;
