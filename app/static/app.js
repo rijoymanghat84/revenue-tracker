@@ -1264,10 +1264,17 @@ async function aFlush() {
   for (const [rid, d] of pending) {
     const tr = $(`#actualsBody tr[data-rid="${rid}"]`);
     if (!tr) continue;
-    const hours = Array.from($$(`input[data-week]`, tr)).map((i) => num(i.value) || 0);
+    // Build the FULL 53-week hours array: start from the stored actual hours
+    // so a month-filtered grid (only some weeks rendered) doesn't shrink it.
+    const r = actualsData.resources.find((x) => x.id === rid);
+    const hours = (r && r.actual_hours ? [...r.actual_hours] : Array(actualsData.weeks.length).fill(0));
+    // overwrite the rendered weeks by their real week index (data-week)
+    $$(`input[data-week]`, tr).forEach((inp) => {
+      const w = parseInt(inp.dataset.week, 10);
+      if (!isNaN(w) && w >= 0 && w < hours.length) hours[w] = num(inp.value) || 0;
+    });
     const notes = {};
     // collect any notes already stored for this resource
-    const r = actualsData.resources.find((x) => x.id === rid);
     if (r && r.actual_notes) Object.assign(notes, r.actual_notes);
     try {
       const res = await api(`/api/resources/${rid}/actuals`, { method: "PUT", body: JSON.stringify({ hours, notes }) });
