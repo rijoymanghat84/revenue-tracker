@@ -935,9 +935,10 @@ CAP_WEEK_HOURS = 40.0  # 40 hrs/week = 100% (per Rijoy's spec)
 
 
 def compute_utilization(weeks, months, resources) -> dict:
-    """Booked hours ÷ capacity. Monthly capacity = weeks-in-month × 40;
-    overall = total hours ÷ (53 weeks × 40). Grouped by resource name with the
-    projects each resource works on."""
+    """Planned AND Actual utilization. Capacity = weeks-in-month × 40 (or the
+    per-resource capacity override). Planned utilization uses planned hours
+    (Onsite grid); Actual utilization uses actual_hours (PM-recorded). Both
+    are grouped by resource name with the projects each resource works on."""
     month_weeks = {m["name"]: list(range(m["start"], m["end"] + 1)) for m in months}
     by_name: dict[str, dict] = {}
     order: list[str] = []
@@ -949,8 +950,11 @@ def compute_utilization(weeks, months, resources) -> dict:
             by_name[name] = {
                 "name": name,
                 "projects": [],
-                "month_hours": {m["name"]: 0.0 for m in months},
-                "total_hours": 0.0,
+                "capacity_week": r.get("capacity") or CAP_WEEK_HOURS,
+                "month_planned": {m["name"]: 0.0 for m in months},
+                "month_actual": {m["name"]: 0.0 for m in months},
+                "total_planned": 0.0,
+                "total_actual": 0.0,
             }
             order.append(name)
         e = by_name[name]
@@ -960,31 +964,47 @@ def compute_utilization(weeks, months, resources) -> dict:
         for i, h in enumerate(r["hours"]):
             if not h:
                 continue
-            e["total_hours"] += h
+            e["total_planned"] += h
             for m in months:
                 if m["start"] <= i <= m["end"]:
-                    e["month_hours"][m["name"]] += h
+                    e["month_planned"][m["name"]] += h
                     break
-    total_capacity = sum(len(idx) for idx in month_weeks.values()) * CAP_WEEK_HOURS
+        actual = r.get("actual_hours") or []
+        for i, h in enumerate(actual):
+            if not h:
+                continue
+            e["total_actual"] += h
+            for m in months:
+                if m["start"] <= i <= m["end"]:
+                    e["month_actual"][m["name"]] += h
+                    break
     rows = []
     for name in order:
         e = by_name[name]
+        cap_wk = e["capacity_week"]
         months_out = []
         for m in months:
-            cap = len(month_weeks[m["name"]]) * CAP_WEEK_HOURS
-            hrs = e["month_hours"][m["name"]]
+            cap = len(month_weeks[m["name"]]) * cap_wk
+            p = e["month_planned"][m["name"]]
+            a = e["month_actual"][m["name"]]
             months_out.append({
                 "month": m["name"],
-                "hours": round(hrs, 1),
+                "planned_hours": round(p, 1),
+                "actual_hours": round(a, 1),
                 "capacity": cap,
-                "utilization": round(hrs / cap * 100, 1) if cap else 0.0,
+                "planned_pct": round(p / cap * 100, 1) if cap else 0.0,
+                "actual_pct": round(a / cap * 100, 1) if cap else 0.0,
             })
+        total_cap = sum(len(idx) for idx in month_weeks.values()) * cap_wk
         rows.append({
             "name": name,
             "projects": e["projects"],
+            "capacity_week": cap_wk,
             "months": months_out,
-            "total_hours": round(e["total_hours"], 1),
-            "overall": round(e["total_hours"] / total_capacity * 100, 1) if total_capacity else 0.0,
+            "total_planned": round(e["total_planned"], 1),
+            "total_actual": round(e["total_actual"], 1),
+            "planned_overall": round(e["total_planned"] / total_cap * 100, 1) if total_cap else 0.0,
+            "actual_overall": round(e["total_actual"] / total_cap * 100, 1) if total_cap else 0.0,
         })
     return {"months": [m["name"] for m in months], "rows": rows}
 

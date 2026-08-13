@@ -339,6 +339,9 @@ tr.p-edit .rate-inp, tr.p-edit .cur-sel { border-color: var(--accent); }
 #utilTable td.u-cell.green { color: #34d399; background: #10301f; }
 #utilTable td.u-cell.yellow { color: #fbbf24; background: #332a12; }
 #utilTable td.u-cell.orange { color: #fb923c; background: #33200f; }
+#utilTable th.u-sub { font-size: 10px; color: var(--muted); background: #101831; }
+#utilTable th[colspan="2"] { text-align: center; }
+#utilTable tr:first-child th { border-bottom: 1px solid var(--border-strong); }
 
 /* ---------- toast / modal ---------- */
 .toast {
