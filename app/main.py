@@ -825,11 +825,16 @@ def api_dashboard(request: Request):
 
 
 def _actuals_financials(r: dict) -> dict:
-    """Additional (overage) and Adjustment (under) revenue/expense from actuals.
-    - overage > 0: additional expense always (offshore × overage); additional
-      revenue only when the OT is billed (onsite × overage).
-    - overage < 0: negative adjustment on both sides (planned not delivered)."""
+    """Actuals-based revenue/expense + reconciliation deltas.
+    - actual_rev / actual_exp: computed ONLY from recorded actual hours.
+      actual_rev counts what was actually billable (billed OT overage counts;
+      unbilled overage only bills the planned portion; under-delivery bills the
+      actual hours). Zero actuals -> $0 — never assumes actual == planned.
+    - add_rev / add_exp: overage deltas (billed overage × onsite; all overage
+      × offshore).
+    - adj_rev / adj_exp: under-delivery deltas (negative on both sides)."""
     add_rev = add_exp = adj_rev = adj_exp = 0.0
+    actual_rev = actual_exp = 0.0
     rate = r["rate"] or 0.0
     off = r["offshore_rate"] or 0.0
     planned = r["hours"] or []
@@ -840,17 +845,26 @@ def _actuals_financials(r: dict) -> dict:
             continue
         p = planned[i] if i < len(planned) else 0.0
         over = a - p
+        note = notes.get(i) or {}
+        # expense: we pay actual hours worked at offshore rate
+        actual_exp += a * off
         if over > 0:
             add_exp += over * off
-            note = notes.get(i) or {}
             if note.get("billed"):
+                actual_rev += a * rate
                 add_rev += over * rate
+            else:
+                actual_rev += p * rate  # only the planned portion is billable
         elif over < 0:
+            actual_rev += a * rate      # under-delivery: bill actual hours
             adj_rev += over * rate
             adj_exp += over * off
+        else:
+            actual_rev += p * rate      # equal to plan
     return {
         "add_rev": round(add_rev, 2), "add_exp": round(add_exp, 2),
         "adj_rev": round(adj_rev, 2), "adj_exp": round(adj_exp, 2),
+        "actual_rev": round(actual_rev, 2), "actual_exp": round(actual_exp, 2),
     }
 
 
@@ -874,6 +888,8 @@ def build_dashboard_rows(resources: list[dict], weeks: list[str]) -> dict:
             "project": project or "—",
             "revenue": 0.0,
             "expense": 0.0,
+            "actual_rev": 0.0,
+            "actual_exp": 0.0,
             "difference": 0.0,
             "add_rev": 0.0, "add_exp": 0.0,
             "adj_rev": 0.0, "adj_exp": 0.0,
@@ -885,6 +901,8 @@ def build_dashboard_rows(resources: list[dict], weeks: list[str]) -> dict:
         fin = _actuals_financials(r)
         g["revenue"] += r["total_cost"]
         g["expense"] += r["expense"]
+        g["actual_rev"] += fin["actual_rev"]
+        g["actual_exp"] += fin["actual_exp"]
         g["add_rev"] += fin["add_rev"]
         g["add_exp"] += fin["add_exp"]
         g["adj_rev"] += fin["adj_rev"]
@@ -897,10 +915,13 @@ def build_dashboard_rows(resources: list[dict], weeks: list[str]) -> dict:
     for g in rows:
         t = totals.setdefault(g["currency"], {
             "currency": g["currency"], "revenue": 0.0, "expense": 0.0, "difference": 0.0,
+            "actual_rev": 0.0, "actual_exp": 0.0,
             "add_rev": 0.0, "add_exp": 0.0, "adj_rev": 0.0, "adj_exp": 0.0,
         })
         t["revenue"] += g["revenue"]
         t["expense"] += g["expense"]
+        t["actual_rev"] += g["actual_rev"]
+        t["actual_exp"] += g["actual_exp"]
         t["add_rev"] += g["add_rev"]
         t["add_exp"] += g["add_exp"]
         t["adj_rev"] += g["adj_rev"]

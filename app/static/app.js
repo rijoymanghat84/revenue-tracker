@@ -890,43 +890,40 @@ function renderUtilization() {
 function renderDashboard() {
   api("/api/dashboard").then((data) => {
     const groups = data.rows.groups, totals = data.rows.totals;
-    let totalRev = 0, totalExp = 0, totalAddRev = 0, totalAddExp = 0, totalAdjRev = 0, totalAdjExp = 0;
+    let totalRev = 0, totalExp = 0, totalActRev = 0, totalActExp = 0;
     totals.forEach((t) => {
       totalRev += t.revenue; totalExp += t.expense;
-      totalAddRev += t.add_rev || 0; totalAddExp += t.add_exp || 0;
-      totalAdjRev += t.adj_rev || 0; totalAdjExp += t.adj_exp || 0;
+      totalActRev += t.actual_rev || 0; totalActExp += t.actual_exp || 0;
     });
-    const actualRev = totalRev + totalAddRev + totalAdjRev;
-    const actualExp = totalExp + totalAddExp + totalAdjExp;
-    const savings = actualRev - actualExp;
+    const plannedSavings = totalRev - totalExp;
+    const actualSavings = totalActRev - totalActExp;
     $("#dashCards").innerHTML = `
       <div class="card glass"><div class="k">Planned Revenue</div><div class="v cyan">$${fmt(totalRev)}</div></div>
       <div class="card glass"><div class="k">Planned Expense</div><div class="v">$${fmt(totalExp)}</div></div>
-      <div class="card glass"><div class="k">Actual Revenue</div><div class="v cyan">$${fmt(actualRev)}</div></div>
-      <div class="card glass"><div class="k">Actual Expense</div><div class="v">$${fmt(actualExp)}</div></div>
-      <div class="card glass"><div class="k">Savings</div><div class="v ${savings >= 0 ? "green" : "red"}">$${fmt(savings)}</div></div>
-      <div class="card glass"><div class="k">Additional Revenue (OT billed)</div><div class="v cyan">$${fmt(totalAddRev)}</div></div>
-      <div class="card glass"><div class="k">Additional Expense (OT)</div><div class="v">$${fmt(totalAddExp)}</div></div>`;
-    let rows = `<thead><tr><th>Country</th><th>Client</th><th>Project</th><th>Resource(s)</th><th>Planned Revenue</th><th>Planned Expense</th><th>Actual Revenue</th><th>Actual Expense</th><th>Savings</th></tr></thead><tbody>`;
+      <div class="card glass"><div class="k">Planned Savings</div><div class="v ${plannedSavings >= 0 ? "green" : "red"}">$${fmt(plannedSavings)}</div></div>
+      <div class="card glass"><div class="k">Actual Revenue</div><div class="v cyan">$${fmt(totalActRev)}</div></div>
+      <div class="card glass"><div class="k">Actual Expense</div><div class="v">$${fmt(totalActExp)}</div></div>
+      <div class="card glass"><div class="k">Actual Savings</div><div class="v ${actualSavings >= 0 ? "green" : "red"}">$${fmt(actualSavings)}</div></div>`;
+    let rows = `<thead><tr><th>Country</th><th>Client</th><th>Project</th><th>Resource(s)</th><th>Planned Revenue</th><th>Planned Expense</th><th>Planned Savings</th><th>Actual Revenue</th><th>Actual Expense</th><th>Actual Savings</th></tr></thead><tbody>`;
     for (const g of groups) {
-      const actualRev = g.revenue + (g.add_rev || 0) + (g.adj_rev || 0);
-      const actualExp = g.expense + (g.add_exp || 0) + (g.adj_exp || 0);
-      const savings = actualRev - actualExp;
+      const pSavings = g.revenue - g.expense;
+      const aSavings = (g.actual_rev || 0) - (g.actual_exp || 0);
       rows += `<tr>
         <td>${esc(g.country)}</td><td>${esc(g.client)}</td><td>${esc(g.project)}</td><td>${g.resources}</td>
         <td>$${fmt(g.revenue)}</td><td>$${fmt(g.expense)}</td>
-        <td>$${fmt(actualRev)}</td><td>$${fmt(actualExp)}</td>
-        <td style="color:${savings >= 0 ? "var(--green)" : "var(--red)"}">$${fmt(savings)}</td></tr>`;
+        <td style="color:${pSavings >= 0 ? "var(--green)" : "var(--red)"}">$${fmt(pSavings)}</td>
+        <td>$${fmt(g.actual_rev || 0)}</td><td>$${fmt(g.actual_exp || 0)}</td>
+        <td style="color:${aSavings >= 0 ? "var(--green)" : "var(--red)"}">$${fmt(aSavings)}</td></tr>`;
     }
     for (const t of totals) {
-      const actualRev = t.revenue + (t.add_rev || 0) + (t.adj_rev || 0);
-      const actualExp = t.expense + (t.add_exp || 0) + (t.adj_exp || 0);
-      const savings = actualRev - actualExp;
+      const pSavings = t.revenue - t.expense;
+      const aSavings = (t.actual_rev || 0) - (t.actual_exp || 0);
       rows += `<tr class="total-row">
         <td>TOTAL ${t.currency}</td><td>—</td><td>—</td><td>—</td>
         <td>$${fmt(t.revenue)}</td><td>$${fmt(t.expense)}</td>
-        <td>$${fmt(actualRev)}</td><td>$${fmt(actualExp)}</td>
-        <td style="color:${savings >= 0 ? "var(--green)" : "var(--red)"}">$${fmt(savings)}</td></tr>`;
+        <td style="color:${pSavings >= 0 ? "var(--green)" : "var(--red)"}">$${fmt(pSavings)}</td>
+        <td>$${fmt(t.actual_rev || 0)}</td><td>$${fmt(t.actual_exp || 0)}</td>
+        <td style="color:${aSavings >= 0 ? "var(--green)" : "var(--red)"}">$${fmt(aSavings)}</td></tr>`;
     }
     rows += "</tbody>";
     $("#dashTable").innerHTML = rows;
