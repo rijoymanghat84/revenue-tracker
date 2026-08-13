@@ -115,13 +115,25 @@ def _verify_token(token: str) -> dict | None:
         return None
 
 
-def _pm_projects(username: str, conn: sqlite3.Connection) -> list[str]:
+def _pm_projects(username: str, conn: sqlite3.Connection) -> list[tuple[str, str]]:
+    """Return the (client, project) pairs this PM is assigned to."""
     row = conn.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone()
     if not row:
         return []
-    return [r["project"] for r in conn.execute(
-        "SELECT project FROM user_projects WHERE user_id=? ORDER BY project", (row["id"],)
+    return [(r["client"], r["project"]) for r in conn.execute(
+        "SELECT client, project FROM user_projects WHERE user_id=? ORDER BY client, project", (row["id"],)
     ).fetchall()]
+
+
+def _pm_owns(projs: list[tuple[str, str]], client: str, project: str) -> bool:
+    """Does this PM own the given (client, project)? A PM with an empty client
+    owns that project across all clients (legacy); otherwise exact pair match."""
+    if not project:
+        return True  # unassigned project rows are visible to everyone
+    for c, p in projs:
+        if p == project and (c == "" or c == client):
+            return True
+    return False
 
 
 def _current_user(request) -> dict | None:
@@ -284,11 +296,16 @@ def init_db() -> None:
         );
         CREATE TABLE IF NOT EXISTS user_projects (
             user_id INTEGER NOT NULL,
+            client TEXT NOT NULL DEFAULT '',
             project TEXT NOT NULL,
-            PRIMARY KEY (user_id, project)
+            PRIMARY KEY (user_id, client, project)
         );
         """
     )
+    # Migration: add client column to user_projects if it predates it
+    upcols = {r[1] for r in conn.execute("PRAGMA table_info(user_projects)").fetchall()}
+    if "client" not in upcols:
+        conn.execute("ALTER TABLE user_projects ADD COLUMN client TEXT NOT NULL DEFAULT ''")
     # Migration: add capacity column if the resources table predates it
     rcols = {r[1] for r in conn.execute("PRAGMA table_info(resources)").fetchall()}
     if "capacity" not in rcols:
@@ -638,11 +655,12 @@ def api_update_actuals(rid: int, body: ActualsUpdate, request: Request):
         row = conn.execute("SELECT * FROM resources WHERE id=?", (rid,)).fetchone()
         if not row:
             raise HTTPException(404, "resource not found")
-        # PM scoping: only their projects
+        # PM scoping: only their (client, project) pairs
         if user.get("r") == "pm":
             projs = _pm_projects(user["u"], conn)
             proj = (row["project"] or "").strip()
-            if proj and proj not in projs:
+            client = (row["client"] or "").strip()
+            if proj and not _pm_owns(projs, client, proj):
                 raise HTTPException(403, "Not assigned to this project")
         weeks, _ = _load_layout()
         n = len(weeks)
@@ -700,8 +718,10 @@ def api_actuals(request: Request):
         weeks, _ = _load_layout()
         resources = _all_resources(conn, weeks)
         if user.get("r") == "pm":
-            projs = set(_pm_projects(user["u"], conn))
-            resources = [r for r in resources if not (r["project"] or "").strip() or (r["project"] or "").strip() in projs]
+            projs = _pm_projects(user["u"], conn)
+            resources = [r for r in resources
+                         if not (r["project"] or "").strip()
+                         or _pm_owns(projs, (r["client"] or "").strip(), (r["project"] or "").strip())]
         # Strip rates for PMs
         if user.get("r") == "pm":
             for r in resources:
@@ -714,35 +734,41 @@ def api_actuals(request: Request):
 
 
 # ---------------- User management (admin) ----------------
+class ProjectAssign(BaseModel):
+    client: str = ""
+    project: str = ""
+
+
 class UserCreate(BaseModel):
     username: str
     password: str
-    projects: list[str] = []
+    projects: list[ProjectAssign] = []
 
 
 class UserUpdate(BaseModel):
     password: str | None = None
-    projects: list[str] | None = None
+    projects: list[ProjectAssign] | None = None
 
 
-def _project_owners(conn: sqlite3.Connection) -> dict[str, str]:
-    """Map project -> owning PM username. A project has AT MOST one PM (the
-    UI enforces this too, but the DB layer must guarantee it)."""
+def _project_owners(conn: sqlite3.Connection) -> dict[tuple[str, str], str]:
+    """Map (client, project) -> owning PM username. A (client, project) has AT
+    MOST one PM (the UI enforces this too, but the DB layer must guarantee it)."""
     rows = conn.execute(
-        "SELECT up.project, u.username FROM user_projects up "
-        "JOIN users u ON u.id = up.user_id ORDER BY up.project"
+        "SELECT up.client, up.project, u.username FROM user_projects up "
+        "JOIN users u ON u.id = up.user_id ORDER BY up.client, up.project"
     ).fetchall()
-    return {r["project"]: r["username"] for r in rows}
+    return {(r["client"], r["project"]): r["username"] for r in rows}
 
 
-def _validate_project_ownership(conn, projects: list[str], self_username: str | None) -> None:
-    """Reject assigning a project that's already owned by a DIFFERENT PM.
+def _validate_project_ownership(conn, projects: list[ProjectAssign], self_username: str | None) -> None:
+    """Reject assigning a (client, project) already owned by a DIFFERENT PM.
     self_username is the PM being edited (its own projects are fine)."""
     owners = _project_owners(conn)
-    for p in projects:
-        owner = owners.get(p)
+    for pa in projects:
+        key = (pa.client, pa.project)
+        owner = owners.get(key)
         if owner and owner != self_username:
-            raise HTTPException(409, f"Project '{p}' is already assigned to PM '{owner}'")
+            raise HTTPException(409, f"'{pa.client}/{pa.project}' is already assigned to PM '{owner}'")
 
 
 @app.get("/api/users")
@@ -753,8 +779,8 @@ def api_users(request: Request):
         rows = conn.execute("SELECT id, username, role FROM users ORDER BY username").fetchall()
         out = []
         for r in rows:
-            projs = [p["project"] for p in conn.execute(
-                "SELECT project FROM user_projects WHERE user_id=? ORDER BY project", (r["id"],)
+            projs = [{"client": p["client"], "project": p["project"]} for p in conn.execute(
+                "SELECT client, project FROM user_projects WHERE user_id=? ORDER BY client, project", (r["id"],)
             ).fetchall()]
             out.append({"id": r["id"], "username": r["username"], "role": r["role"], "projects": projs})
         return out
@@ -764,12 +790,12 @@ def api_users(request: Request):
 
 @app.get("/api/project-owners")
 def api_project_owners(request: Request):
-    """Which PM owns each project (so the UI can grey out projects already
-    taken). Only admin."""
+    """Which PM owns each (client, project) so the UI can grey out taken ones."""
     _require_admin(request)
     conn = get_db()
     try:
-        return _project_owners(conn)
+        owners = _project_owners(conn)
+        return [{"client": k[0], "project": k[1], "pm": v} for k, v in owners.items()]
     finally:
         conn.close()
 
@@ -784,7 +810,8 @@ def api_user_create(body: UserCreate, request: Request):
             raise HTTPException(400, "username and password required")
         if conn.execute("SELECT 1 FROM users WHERE username=?", (uname,)).fetchone():
             raise HTTPException(409, f"User '{uname}' already exists")
-        projs = sorted({x.strip() for x in body.projects if x.strip()})
+        projs = [ProjectAssign(client=(p.client or "").strip(), project=(p.project or "").strip())
+                 for p in body.projects if (p.project or "").strip()]
         _validate_project_ownership(conn, projs, self_username=None)
         cur = conn.execute(
             "INSERT INTO users (username, password_hash, role) VALUES (?,?, 'pm')",
@@ -792,7 +819,7 @@ def api_user_create(body: UserCreate, request: Request):
         )
         uid = cur.lastrowid
         for p in projs:
-            conn.execute("INSERT INTO user_projects (user_id, project) VALUES (?,?)", (uid, p))
+            conn.execute("INSERT INTO user_projects (user_id, client, project) VALUES (?,?,?)", (uid, p.client, p.project))
         conn.commit()
         return {"ok": True, "id": uid, "username": uname}
     finally:
@@ -810,11 +837,12 @@ def api_user_update(uid: int, body: UserUpdate, request: Request):
         if body.password:
             conn.execute("UPDATE users SET password_hash=? WHERE id=?", (_hash_password(body.password), uid))
         if body.projects is not None:
-            projs = sorted({x.strip() for x in body.projects if x.strip()})
+            projs = [ProjectAssign(client=(p.client or "").strip(), project=(p.project or "").strip())
+                     for p in body.projects if (p.project or "").strip()]
             _validate_project_ownership(conn, projs, self_username=row["username"])
             conn.execute("DELETE FROM user_projects WHERE user_id=?", (uid,))
             for p in projs:
-                conn.execute("INSERT INTO user_projects (user_id, project) VALUES (?,?)", (uid, p))
+                conn.execute("INSERT INTO user_projects (user_id, client, project) VALUES (?,?,?)", (uid, p.client, p.project))
         conn.commit()
         return {"ok": True}
     finally:
@@ -836,14 +864,15 @@ def api_user_delete(uid: int, request: Request):
 
 @app.get("/api/projects")
 def api_projects(request: Request):
-    """Distinct project names (for PM assignment)."""
+    """Distinct (client, project) pairs (for PM assignment)."""
     _require_admin(request)
     conn = get_db()
     try:
         rows = conn.execute(
-            "SELECT DISTINCT TRIM(project) AS p FROM resources WHERE TRIM(project) != '' ORDER BY p"
+            "SELECT DISTINCT TRIM(client) AS client, TRIM(project) AS project "
+            "FROM resources WHERE TRIM(project) != '' ORDER BY client, project"
         ).fetchall()
-        return [r["p"] for r in rows]
+        return [{"client": r["client"], "project": r["project"]} for r in rows]
     finally:
         conn.close()
 
@@ -1228,7 +1257,7 @@ async def api_import(file: UploadFile = File(...), mode: str = Form("merge"), re
     if user.get("r") == "pm":
         conn = get_db()
         try:
-            projs = set(_pm_projects(user["u"], conn))
+            projs = _pm_projects(user["u"], conn)
             parsed_actuals = importer.parse_actuals_sheet(data)
             res_by_key = {
                 (_norm(r["client"]), _norm(r["name"])): r
@@ -1240,7 +1269,8 @@ async def api_import(file: UploadFile = File(...), mode: str = Form("merge"), re
                 if not cur:
                     continue
                 proj = (cur["project"] or "").strip()
-                if proj and proj not in projs:
+                client = (cur["client"] or "").strip()
+                if proj and not _pm_owns(projs, client, proj):
                     continue  # not this PM's project — skip
                 rid = cur["id"]
                 conn.execute("DELETE FROM actual_hours WHERE resource_id=?", (rid,))
@@ -1486,9 +1516,10 @@ def api_export(request: Request):
         # PMs get an Actuals-only workbook scoped to their projects (no rates,
         # no other tabs — they must never see other teams' data).
         if user.get("r") == "pm":
-            projs = set(_pm_projects(user["u"], conn))
+            projs = _pm_projects(user["u"], conn)
             scoped = [r for r in resources
-                      if not (r["project"] or "").strip() or (r["project"] or "").strip() in projs]
+                      if not (r["project"] or "").strip()
+                      or _pm_owns(projs, (r["client"] or "").strip(), (r["project"] or "").strip())]
             for r in scoped:
                 r["rate"] = None
                 r["offshore_rate"] = None
