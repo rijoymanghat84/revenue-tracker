@@ -787,7 +787,10 @@ function renderPMs() {
   for (const u of users) {
     if (editingUser === u.id) {
       html += `<tr class="p-res p-edit" data-uid="${u.id}">
-        <td><input class="rate-inp txt" data-field="username" value="${esc(u.username)}" disabled></td>
+        <td>
+          <input class="rate-inp txt" data-field="username" value="${esc(u.username)}" disabled>
+          <input class="rate-inp txt pm-pw" data-field="password" type="password" placeholder="New password (leave blank to keep)" autocomplete="new-password">
+        </td>
         <td><div class="pm-projs">${projectCheckboxes(u.projects, u.username)}</div></td>
         <td><button class="btn mini save">Save</button> <button class="btn mini cancel">Cancel</button></td>
       </tr>`;
@@ -849,7 +852,9 @@ $("#pmBody").addEventListener("click", async (e) => {
       if (uid === -1) {
         await api("/api/users", { method: "POST", body: JSON.stringify({ username: uname, password: pw, projects: projs }) });
       } else {
-        await api(`/api/users/${uid}`, { method: "PUT", body: JSON.stringify({ projects: projs }) });
+        const body = { projects: projs };
+        if (pw) body.password = pw;  // only send a new password if one was entered
+        await api(`/api/users/${uid}`, { method: "PUT", body: JSON.stringify(body) });
       }
       editingUser = null;
       toast("PM saved");
