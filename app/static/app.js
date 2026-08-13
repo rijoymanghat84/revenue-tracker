@@ -1654,18 +1654,24 @@ function dateRangeToWeeks(startStr, endStr) {
 function renderResModal() {
   const isEdit = resEditId !== null;
   const r = isEdit ? state.resources.find((x) => x.id === resEditId) : null;
-  $("#resModalTitle").textContent = isEdit ? "Edit Resource" : "Add Resource";
+  $("#resModalTitle").textContent = isEdit ? "Edit Entry" : "Add Entry";
   const clients = [...new Set(state.resources.map((x) => (x.client || "").trim()).filter(Boolean))].sort();
   const projects = [...new Set(state.resources.map((x) => (x.project || "").trim()).filter(Boolean))].sort();
   const titles = state.pricing.map((p) => p.title);
+  // resource picker: "New resource" or an existing one to edit
+  const resOpts = `<option value="">— New resource —</option>` +
+    state.resources.map((x) => `<option value="${x.id}"${r && r.id === x.id ? " selected" : ""}>${esc(x.name)} (${esc(x.client)} / ${esc(x.project)})</option>`).join("");
   const clientOpts = `<option value="">—</option>` + clients.map((c) => `<option value="${esc(c)}"${r && r.client === c ? " selected" : ""}>${esc(c)}</option>`).join("");
   const projOpts = `<option value="">—</option>` + projects.map((p) => `<option value="${esc(p)}"${r && r.project === p ? " selected" : ""}>${esc(p)}</option>`).join("");
   const titleOpts = `<option value="">—</option>` + titles.map((t) => `<option value="${esc(t)}"${r && r.role === t ? " selected" : ""}>${esc(t)}</option>`).join("");
-  // default start/end: full year
   const defStart = r ? "" : "2026-01-01";
   const defEnd = r ? "" : "2026-12-31";
   $("#resModalBody").innerHTML = `
     <div class="res-form">
+      <div class="res-row">
+        <label>Resource <select id="resPick" class="cur-sel">${resOpts}</select></label>
+        <label class="res-hint">Pick an existing resource to edit, or choose "New resource".</label>
+      </div>
       <div class="res-row">
         <label>Client <select id="resClient" class="cur-sel">${clientOpts}</select></label>
         <label>Project <select id="resProject" class="cur-sel">${projOpts}</select></label>
@@ -1675,18 +1681,34 @@ function renderResModal() {
         <label>Title <select id="resTitle" class="cur-sel">${titleOpts}</select></label>
       </div>
       <div class="res-row">
-        <label>Rate ($) <input class="inp res-inp num" id="resRate" type="number" min="0" step="any" value="${r && r.rate != null ? r.rate : ""}" placeholder="0"></label>
-        <label>Offshore Rate ($) <input class="inp res-inp num" id="resOffRate" type="number" min="0" step="any" value="${r && r.offshore_rate != null ? r.offshore_rate : ""}" placeholder="0"></label>
+        <label>Rate ($) <input class="inp res-inp num" id="resRate" type="number" min="0" step="any" value="${r && r.rate != null ? r.rate : ""}" placeholder="auto from Title"></label>
+        <label>Offshore Rate ($) <input class="inp res-inp num" id="resOffRate" type="number" min="0" step="any" value="${r && r.offshore_rate != null ? r.offshore_rate : ""}" placeholder="auto from Title"></label>
+      </div>
+      <div class="res-row">
+        <label>Utilization (hrs/week) <input class="inp res-inp num" id="resHpw" type="number" min="0" step="0.25" value="${r && r.capacity ? r.capacity : 40}" placeholder="40"></label>
+        <label class="res-hint">Hours auto-filled for each week between Start and End.</label>
       </div>
       <div class="res-row">
         <label>Start Date <input class="inp res-inp" id="resStart" type="date" value="${r ? "" : defStart}"></label>
         <label>End Date <input class="inp res-inp" id="resEnd" type="date" value="${r ? "" : defEnd}"></label>
       </div>
-      <div class="res-row">
-        <label>Planned Hours / Week <input class="inp res-inp num" id="resHpw" type="number" min="0" step="0.25" value="40" placeholder="40"></label>
-        <label class="res-hint">Hours are auto-filled for each week between Start and End.</label>
-      </div>
     </div>`;
+  // wire: picking an existing resource pre-fills the form
+  $("#resPick").addEventListener("change", (e) => {
+    const id = e.target.value;
+    if (!id) { resEditId = null; renderResModal(); return; }
+    resEditId = +id;
+    renderResModal();
+  });
+  // wire: picking a Title auto-fills both rates from Pricing
+  $("#resTitle").addEventListener("change", (e) => {
+    const t = e.target.value;
+    const p = state.pricing.find((x) => x.title === t);
+    if (p) {
+      if (p.rate != null) $("#resRate").value = p.rate;
+      if (p.offshore_rate != null) $("#resOffRate").value = p.offshore_rate;
+    }
+  });
 }
 
 async function saveResModal() {
@@ -1706,11 +1728,12 @@ async function saveResModal() {
   const wasEdit = resEditId !== null;
   try {
     let rid = resEditId;
+    const payload = { client, project, name, role, rate, offshore_rate: offRate, capacity: hpw || 40 };
     if (rid === null) {
-      const created = await api("/api/resources", { method: "POST", body: JSON.stringify({ client, project, name, role, rate, offshore_rate: offRate }) });
+      const created = await api("/api/resources", { method: "POST", body: JSON.stringify(payload) });
       rid = created.id;
     } else {
-      await api(`/api/resources/${rid}`, { method: "PUT", body: JSON.stringify({ client, project, name, role, rate, offshore_rate: offRate }) });
+      await api(`/api/resources/${rid}`, { method: "PUT", body: JSON.stringify(payload) });
     }
     // fill weekly hours from the date range
     if (start && end && hpw > 0) {
@@ -1720,7 +1743,7 @@ async function saveResModal() {
       await api(`/api/resources/${rid}/hours`, { method: "PUT", body: JSON.stringify({ hours }) });
     }
     closeResModal();
-    toast(wasEdit ? "Resource updated" : "Resource added");
+    toast(wasEdit ? "Entry updated" : "Entry added");
     await loadState();
   } catch (e) { toast(`Save failed: ${e.message}`, true); }
   btn.disabled = false; btn.textContent = "Save";
