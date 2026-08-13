@@ -81,9 +81,9 @@ function showApp() {
   $("#loginView").classList.add("hidden");
   $("#topbar").classList.remove("hidden");
   const isAdmin = state.me.role === "admin";
-  // PMs see only the Actuals tab
+  // PMs see Actuals + Utilization (scoped to their clients); admin sees all
   $$(".tab").forEach((t) => {
-    const adminOnly = ["dash", "pricing", "util", "planned"].includes(t.dataset.tab);
+    const adminOnly = ["dash", "pricing", "planned"].includes(t.dataset.tab);
     t.style.display = (isAdmin || !adminOnly) ? "" : "none";
   });
   $("#btnImport").style.display = isAdmin ? "" : "none";
@@ -92,10 +92,10 @@ function showApp() {
   $("#btnAdd").style.display = "none";
   $("#subLine").textContent = isAdmin
     ? "Planned · Actuals · Dashboard · Pricing · Utilization"
-    : `Actuals — signed in as ${esc(state.me.username)}`;
+    : `Actuals · Utilization — signed in as ${esc(state.me.username)}`;
   if (!isAdmin) {
     state.view = "actuals";
-    // show only the actuals view
+    // show only the actuals + utilization views
     $$(".tab").forEach((x) => x.classList.toggle("active", x.dataset.tab === "actuals"));
     $("#gridView").classList.add("hidden");
     $("#dashView").classList.add("hidden");
@@ -899,7 +899,45 @@ function utilClass(v) {
 function renderUtilization() {
   api("/api/utilization").then((data) => {
     const months = data.months;
+    // populate the month selector (once)
+    const sel = $("#utilMonth");
+    if (sel && sel.options.length <= 1) {
+      months.forEach((m) => {
+        const o = document.createElement("option");
+        o.value = m; o.textContent = m;
+        sel.appendChild(o);
+      });
+    }
+    const chosen = sel ? sel.value : "all";
     const sub = (lbl) => `<th class="u-sub">${lbl}</th>`;
+
+    if (chosen !== "all") {
+      // ---- MONTH-WISE drill-down: one month, per-resource detail ----
+      const mi = months.indexOf(chosen);
+      let head = `<tr><th class="u-th-name">Resource</th><th>Projects</th><th class="num">Cap/wk</th><th class="num">Planned hrs</th><th class="num">Actual hrs</th><th class="num">Planned %</th><th class="num">Actual %</th></tr>`;
+      let rows = "";
+      for (const row of data.rows) {
+        const mo = row.months[mi];
+        if (!mo) continue;
+        const pc = utilClass(mo.planned_pct);
+        const ac = utilClass(mo.actual_pct);
+        rows += `<tr>
+          <td class="u-name-td"><div class="u-name">${esc(row.name)}</div></td>
+          <td class="u-proj">${esc(row.projects.join(", ") || "—")}</td>
+          <td class="u-cell num">${row.capacity_week || 40}</td>
+          <td class="u-cell num">${fmt(mo.planned_hours, 1)}</td>
+          <td class="u-cell num">${fmt(mo.actual_hours, 1)}</td>
+          <td class="u-cell ${pc}">${fmt(mo.planned_pct, 0)}%</td>
+          <td class="u-cell ${ac}">${fmt(mo.actual_pct, 0)}%</td>
+        </tr>`;
+      }
+      $("#utilHead").innerHTML = head;
+      $("#utilBody").innerHTML = rows;
+      alignUtilSticky();
+      return;
+    }
+
+    // ---- ALL months: full-year P/A grid ----
     let head = `<tr><th class="u-th-name" rowspan="2">Resource</th><th rowspan="2">Projects</th><th rowspan="2" class="num">Cap/wk</th>`;
     head += months.map((m) => `<th class="num" colspan="2">${esc(m)}</th>`).join("");
     head += `<th class="num" colspan="2">Overall</th></tr>`;
@@ -927,6 +965,8 @@ function renderUtilization() {
     alignUtilSticky();
   }).catch((e) => toast(`Utilization failed: ${e.message}`, true));
 }
+
+$("#utilMonth").addEventListener("change", () => renderUtilization());
 
 /* Pin Resource + Projects + Cap/wk; the "Resource" header cell also pins to
    the left. Projects & Cap/wk are intentionally NOT sticky (they scroll). */
@@ -1604,6 +1644,7 @@ async function switchView(view) {
   $("#actualsView").classList.toggle("hidden", view !== "actuals");
   $("#btnAdd").style.display = isGrid ? "initial" : "none";
   if (view === "actuals") { loadActuals(); return; }
+  if (view === "util") { renderUtilization(); return; }
   await loadState();
 }
 
