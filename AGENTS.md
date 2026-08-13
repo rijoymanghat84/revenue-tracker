@@ -14,15 +14,18 @@ something that looks completely different and wastes the owner's time.
 
 ## What this app is
 
-Revenue Tracker — replaces `Revenue_2026.xlsm`:
+Revenue Recon — replaces `Revenue_2026.xlsm`:
 
-- Tabs: **Dashboard · Pricing · Utilization · Onsite · Offshore**
-- Onsite = billing side (Country, Client, Project, Resource Name, Title, Rate,
-  Total Hours, Total Revenue, 53 week columns) — master sheet
-- Offshore = cost side (same layout, Offshore Rate)
-- Pricing = title library (14 canonical roles, rate + offshore rate + currency)
-- Utilization = auto-calculated capacity report (40 hrs/week = 100%)
-- Dashboard = per-client/project revenue vs expense summary
+- Tabs: **Dashboard · Planned · Actuals · Pricing · Utilization**
+- Planned = billing + cost side (Country, Client, Project, Resource Name,
+  Title, Rate, Offshore Rate, Total Hours, Total Revenue, Total Expense,
+  53 week columns) — master sheet
+- Actuals = PM reconciliation (planned vs actual vs Δ, OT flow, wizard entry)
+- Pricing = title library + Project→PM assignment + capacity override
+- Utilization = planned + actual capacity report (40 hrs/week = 100%)
+- Dashboard = per-client/project planned vs actual revenue/expense/savings
+- Global month filter across all tabs
+- Roles: admin (all) vs PM (Actuals + Utilization, scoped to their clients)
 - FastAPI + SQLite + vanilla JS, dark frost-glass theme, PWA installable
 
 ## Run it (the ONLY correct path)

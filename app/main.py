@@ -43,7 +43,7 @@ WEEK_COL_START = 10   # Excel column J
 WEEK_COL_END = 62     # Excel column BJ (53 weeks)
 FIRST_DATA_ROW = 3
 
-app = FastAPI(title="Revenue Tracker")
+app = FastAPI(title="Revenue Recon")
 
 
 # ---------------- Auth (login + role-based sessions) ----------------
@@ -1635,7 +1635,7 @@ def api_export(request: Request):
             return StreamingResponse(
                 buf,
                 media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                headers={"Content-Disposition": 'attachment; filename="Actuals_2026_export.xlsx"'},
+                headers={"Content-Disposition": 'attachment; filename="Actuals_export.xlsx"'},
             )
         dash = build_dashboard_rows(resources, weeks)
         pricing = conn.execute(
@@ -1647,7 +1647,7 @@ def api_export(request: Request):
         return StreamingResponse(
             buf,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": 'attachment; filename="Revenue_2026_export.xlsx"'},
+            headers={"Content-Disposition": 'attachment; filename="Revenue_Recon_export.xlsx"'},
         )
     finally:
         conn.close()

@@ -1,110 +1,81 @@
-# Revenue 2026 Tracker
+# Revenue Recon
 
 Web replacement for `Revenue_2026.xlsm` — resources × 53 weeks, with billing
-(On-Site) and expense (Off-Shore) rates, plus an auto-computed client dashboard.
+(On-Site) and expense (Off-Shore) rates, plus a **planned-vs-actual
+reconciliation** layer (Actuals) and role-based access for PMs.
 
-**URL:** https://revenue.rijoybmanghat.com (basic auth — user `rijoy`, same
-password as your other WebUIs; stored in `/opt/data/revenue-tracker/.password`)
-**Local:** http://127.0.0.1:8802 (healthz open, everything else behind auth)
+**URL:** https://revenue.rijoybmanghat.com (login — admin `rijoy`, password in
+`/opt/data/revenue-tracker/.password`; PMs created in-app)
+**Local:** http://127.0.0.1:8802 (healthz open, everything else behind login)
 **Stack:** FastAPI + SQLite + vanilla JS (dark frost-glass theme, no build step)
 
 ## PWA / Mobile
 Installable progressive web app: manifest + icons (`static/icons/`), service
-worker `static/sw.js` (caches the app shell only — API calls are never cached,
-so data is always fresh and the basic-auth gate can't be poisoned). Open the
-site on a phone → browser "Add to Home Screen" → installs standalone with
-notch-safe padding and bigger touch targets. The installed app works exactly
-like the browser version (online); offline it shows the shell with graceful
-"Load failed" toasts for data.
+worker `static/sw.js` (caches the app shell only — API calls are never cached).
+Open on a phone → "Add to Home Screen" → installs standalone with notch-safe
+padding and bigger touch targets.
 
-## What it does
-Four tabs (in order): **Dashboard · Pricing · Utilization · Onsite · Offshore**
-- **Utilization** — auto-calculated (never editable): booked hours ÷ capacity
-  (40 hrs/week = 100%, monthly capacity = weeks-in-month × 40, overall =
-  total ÷ 53 weeks × 40). One row per resource: name, projects they work on,
-  12 monthly columns + Overall. Colors: 🔴 &gt;100% · 🟢 80–100% · 🟡 50–80% ·
-  🟠 &lt;50%. Multi-project people are aggregated. Exported as a locked
-  "Utilization" sheet (password `utilization`); uploads ignore it entirely.
-- **Onsite** — Country, Client, Project, Resource Name, Title (dropdown),
-  **Rate**, Total Hours, Total Revenue, then Month+Week columns. Master sheet:
-  hours and resources entered here (UI, paste, or Excel upload). Unlocked by
-  default; the **Edit/Done** toggle in the toolbar locks it read-only when you
-  want to prevent accidental changes.
-- **Offshore** — same columns with your **Offshore Rate** (cost side). Created
-  automatically from Onsite; hours & metadata mirror it. **Locked by default** —
-  click **Edit** to unlock everything (hours/names/rates — same data as
-  Onsite), make quick fixes without Excel, then Done re-locks.
-- Exported Excel sheets are NOT protected — the downloaded file is fully
-  editable everywhere.
-- **Pricing** — the title library: **Title / Rate / Offshore Rate**. Pre-set to
-  Rijoy's canonical list: Project manager, Solution Architect, Principal
-  Architect, Quadient Developer, Sr. Quadient Developer, Java Developer, Sr.
-  Java Developer, Open text developer, Sr. Open text developer, PhP Developer,
-  Sr. PHP Developer, BCC, QA, QA Lead. **+ Add Title** adds any new role — it
-  then appears in the Onsite/Offshore dropdowns instantly and auto-fills BOTH
-  rates from Pricing when selected. "Apply" pushes a title's rates onto every
-  resource using it; renaming cascades. Blank-rate titles display as-is (0
-  until priced). Script to (re)set the canonical list:
-  `scripts/set_canonical_pricing.py`.
-- **Dashboard** — Country, Client, Resource(s), Revenue (Onsite), Expense
-  (Offshore), Difference, Currency; per-currency totals + KPI cards.
-- Totals auto-computed live; grouped by client with subtotal rows; collapsible
-  groups; sticky headers; paste-friendly into Onsite (meta + weeks map
-  automatically). Auto-save (debounced ~1.2s + 3s flush).
-- **Import Excel** — header-name-aware: upload the exported file OR your own
-  workbook with the same headings (Country · Client · Project · Resource Name ·
-  Title · Rate · Total Hours · Total Revenue · Month/Week columns). Two modes:
-  **Merge** (default) updates matching Client+Name rows and adds new ones —
-  never deletes anything. **Replace** wipes all resources/hours first (after a
-  confirm + automatic DB backup to `data/backups/`, pricing kept) so the file
-  becomes the whole database. Reads the original Revenue_2026 layout too;
-  full-year files (≥50 weeks) rewire the week layout, short files don't.
-- **Export Excel** — Dashboard + On-Site + Off-Shore (formulas, **no sheet
-  protection — fully editable**) + Pricing, with the same headings so it
-  round-trips.
+## Tabs (in order)
+**Dashboard · Planned · Actuals · Pricing · Utilization**
 
-## Replicating this app elsewhere (another machine/agent)
+- **Dashboard** — Country · Client · Project · Resource(s) · **Planned
+  Revenue · Planned Expense · Planned Savings · Actual Revenue · Actual
+  Expense · Actual Savings**. Actual figures come from recorded actuals only
+  (zero actuals → $0). Savings = revenue − expense.
+- **Planned** — master entry. Country · Client · Project · Resource Name ·
+  Title (dropdown from Pricing) · **Rate · Offshore Rate** · Total Hours ·
+  Total Revenue · Total Expense · Month+Week columns. **+ Add/Edit Resource**
+  opens a form (client, project, resource name, title → auto-fills rates from
+  Pricing, utilization hrs/week, start/end dates → auto-fills weekly hours).
+  **+ Add/Edit Client Project** manages client/project entities with their own
+  start/end dates.
+- **Actuals** — PM reconciliation. Full-year read-only grid (planned vs actual
+  vs Δ) + **+ Add/Edit Actuals** wizard (Client → Project → Month → resource
+  weeks). OT flow: any overage → is-OT → approved → billed → reason if not
+  billed; under → mandatory comment; no unassigned entries. Every write
+  attributed to the PM.
+- **Pricing** — title library (Title / Rate / Offshore Rate / Currency) +
+  **Project → PM assignment** (one PM per client/project) + per-resource
+  **capacity** override.
+- **Utilization** — planned AND actual utilization (P/A columns per month),
+  capacity-aware, month drill-down. PMs see only their clients.
 
-This repo is the **code only** — no data, no credentials. To run it anywhere:
+## Global month filter
+A **Month** selector in the top bar filters every tab (Dashboard, Planned,
+Actuals, Utilization) to a single month for all users. "All months" = full year.
+
+## Roles
+- **Admin** (`rijoy`): all tabs + user/PM management.
+- **PM**: Actuals + Utilization only, scoped to their assigned
+  (client, project) pairs, no rates. PM export/import = Actuals-only workbook
+  scoped to their projects.
+
+## Import / Export
+- **Import Excel** — header-name-aware (Country · Client · Project · Resource
+  Name · Title · Rate · Total Hours · Total Revenue · weeks). **Merge** updates
+  matching Client+Name rows, adds new ones, never deletes. **Replace** wipes
+  resources/hours first (after confirm + DB backup, pricing kept). Reads the
+  original Revenue_2026 layout; full-year files rewire the week layout.
+- **Export Excel** — Dashboard + On-Site + Off-Shore + Pricing + Utilization +
+  Actuals sheets, same headings so it round-trips. Admin gets all sheets; PM
+  gets an Actuals-only workbook scoped to their projects.
+
+## Replicating this app elsewhere
+This repo is **code only** — no data, no credentials.
 
 ```bash
-# 1. Get the code
 git clone <this-repo> revenue-tracker && cd revenue-tracker
-
-# 2. Dependencies (Python 3.10+)
 python3 -m venv .venv && source .venv/bin/activate
 pip install fastapi uvicorn openpyxl
-
-# 3. Auth gate
-#    Create a file named  .password  (next to app/) with your chosen password.
-#    The app answers to user "rijoy" (override with REVENUE_AUTH_USER env).
-
-# 4. Seed from a Revenue_2026-style workbook (or start empty — UI creates all data)
-#    /usr/bin/python3 scripts/seed.py /path/to/any_workbook.xlsm
-
-# 5. Run
+# create .password (admin password); admin user is "rijoy"
+/usr/bin/python3 scripts/seed.py /path/to/any_workbook.xlsm   # optional seed
 python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8802
-#    → open http://127.0.0.1:8802, login, and all four sections (Dashboard,
-#      Pricing, Onsite, Offshore) work against a fresh SQLite DB in ./data/
 ```
-
-- The canonical role list + rates live in the DB; to reset them run
-  `python3 scripts/set_canonical_pricing.py` (edit the list in that file first).
-- Import/Export Excel round-trips through the same headings documented above;
-  Off-Shore sheet exports protected with password `offshore2024` (only in the
-  generated Excel file, for parity with the original workbook).
-- Basic auth reads `./.password` at runtime; `/healthz` stays open for
-  watchdogs. Expose publicly only behind a tunnel/reverse proxy + TLS.
-
-## Local deployment notes (VPS)
-
-**URL:** https://revenue.rijoybmanghat.com (basic auth — user `rijoy`)
 
 ## Operations
 - **Start/restart:** `bash /opt/data/scripts/revenue-tracker-watchdog.sh`
   (health → silent; unhealthy → kill + relaunch + log to
   `/opt/data/logs/revenue-tracker-watchdog.log`)
-- **Reseed from scratch:** `/usr/bin/python3 /opt/data/revenue-tracker/scripts/seed.py`
 - **Data:** SQLite at `data/revenue.db`. Backed up with the regular Sunday
   full-backup (it's under /opt/data).
 - **Run manually:** `cd /opt/data/revenue-tracker && /usr/bin/python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8802`
@@ -114,32 +85,22 @@ python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8802
 |---|---|
 | `GET /api/state` | weeks, months, resources (+ computed totals) |
 | `POST /api/resources` | add resource |
-| `PUT /api/resources/{id}` | update fields (country/client/name/role/rate/offshore_rate) |
-| `PUT /api/resources/{id}/hours` | `{hours:[53]}` bulk or `{week,v,alue}` single cell |
-| `DELETE /api/resources/{id}` | remove |
-| `GET /api/dashboard` | grouped country/client report + currency totals |
+| `PUT /api/resources/{id}` | update fields (incl. capacity) |
+| `PUT /api/resources/{id}/hours` | `{hours:[53]}` bulk or `{week,value}` single cell |
+| `PUT /api/resources/{id}/actuals` | save actual hours + OT/comment notes |
+| `GET /api/actuals` | PM-scoped actuals grid |
+| `GET /api/dashboard?month=` | grouped report + actuals reconciliation |
+| `GET /api/utilization?month=` | planned + actual utilization |
+| `GET/POST/PUT/DELETE /api/projects` | client/project entities with dates |
+| `GET/POST/PUT/DELETE /api/users` | PM accounts + project assignment |
+| `GET /api/project-owners` | which PM owns each client/project |
 | `POST /api/import` | multipart file upload (xlsm/xlsx) |
-| `GET /api/export` | downloads Revenue_2026_export.xlsx |
+| `GET /api/export` | downloads Revenue_Recon_export.xlsx |
 | `GET /healthz` | liveness for the watchdog |
 
 ## Notes & known quirks
-- **IMS total bug fixed:** the Excel macro's Dashboard double-counted IMS in the
-  TOTAL rows (a subtotal row with an empty Country leaked into the group list).
-  Expected totals here: Revenue $2,605,218.48, Expense $2,288,199.85, Profit
-  $317,018.63 (Excel showed the inflated $3,351,382.64 / $3,034,364.01).
-- **Vision Direct** resources have no rates in the source file → $0 revenue/expense.
-- Column headers keep the original spellings only in exported files
-  ("Resoruce Name", "Utlilization"); the UI uses clean labels.
-- Single-user basic auth (user `rijoy`, password in `.password`, same as the
-  other WebUIs). Exposed via Cloudflare Tunnel at `revenue.rijoybmanghat.com`
-  (VPS tunnel `4c1ab785…`, ingress in `/opt/data/dashboard/config/config.yml`,
-  DNS CNAME proxied). `/healthz` stays unauthenticated for the watchdog.
-- The Cloudflare API token cannot create Access policies — auth is app-level
-  basic auth by design (consistent password, zero dashboard clicking).
+- **IMS total bug fixed:** the Excel macro's Dashboard double-counted IMS in
+  the TOTAL rows; the app dedupes.
 - 2026 is fixed for now; new year files upload cleanly and rewire the layout.
-
-## Ideas for v2 (per "start with basic, build over it")
-- Multi-user + logins, editor vs read-only roles
-- Logged change history / audit trail per cell
-- Month & quarter rollups, charts on the Dashboard
-- Attach to Cloudflare Tunnel for phone access
+- Exposed via Cloudflare Tunnel at `revenue.rijoybmanghat.com` (VPS tunnel
+  `4c1ab785…`, ingress in `/opt/data/dashboard/config/config.yml`).
