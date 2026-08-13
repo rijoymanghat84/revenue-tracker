@@ -291,7 +291,9 @@ def build_workbook(weeks: list[str], months: list[dict],
     # --- Dashboard sheet ---
     ws_d = wb.active
     ws_d.title = "Dashboard"
-    headers = ["Country", "Client", "Revenue", "Expense", "Difference", "Cur"]
+    headers = ["Country", "Client", "Project", "Resource(s)", "Planned Revenue",
+               "Planned Expense", "Planned Savings", "Actual Revenue",
+               "Actual Expense", "Actual Savings"]
     for c, h in enumerate(headers, start=1):
         cell = ws_d.cell(1, c, h)
         cell.font = Font(bold=True)
@@ -299,23 +301,33 @@ def build_workbook(weeks: list[str], months: list[dict],
     money = "#,##0.00"
     r = 2
     for g in dashboard["groups"]:
+        p_sav = g["revenue"] - g["expense"]
+        a_sav = (g.get("actual_rev") or 0) - (g.get("actual_exp") or 0)
         ws_d.cell(r, 1, g["country"])
         ws_d.cell(r, 2, g["client"])
-        ws_d.cell(r, 3, g["revenue"]).number_format = money
-        ws_d.cell(r, 4, g["expense"]).number_format = money
-        ws_d.cell(r, 5, g["difference"]).number_format = money
-        ws_d.cell(r, 6, g["currency"])
+        ws_d.cell(r, 3, g.get("project") or "")
+        ws_d.cell(r, 4, g["resources"])
+        ws_d.cell(r, 5, g["revenue"]).number_format = money
+        ws_d.cell(r, 6, g["expense"]).number_format = money
+        ws_d.cell(r, 7, p_sav).number_format = money
+        ws_d.cell(r, 8, g.get("actual_rev") or 0).number_format = money
+        ws_d.cell(r, 9, g.get("actual_exp") or 0).number_format = money
+        ws_d.cell(r, 10, a_sav).number_format = money
         r += 1
     for t in dashboard["totals"]:
+        p_sav = t["revenue"] - t["expense"]
+        a_sav = (t.get("actual_rev") or 0) - (t.get("actual_exp") or 0)
         ws_d.cell(r, 1, f"TOTAL {t['currency']}")
-        ws_d.cell(r, 3, t["revenue"]).number_format = money
-        ws_d.cell(r, 4, t["expense"]).number_format = money
-        ws_d.cell(r, 5, t["difference"]).number_format = money
-        ws_d.cell(r, 6, t["currency"])
-        for c in range(1, 7):
+        ws_d.cell(r, 5, t["revenue"]).number_format = money
+        ws_d.cell(r, 6, t["expense"]).number_format = money
+        ws_d.cell(r, 7, p_sav).number_format = money
+        ws_d.cell(r, 8, t.get("actual_rev") or 0).number_format = money
+        ws_d.cell(r, 9, t.get("actual_exp") or 0).number_format = money
+        ws_d.cell(r, 10, a_sav).number_format = money
+        for c in range(1, 11):
             ws_d.cell(r, c).font = bold
         r += 1
-    for col, width in zip("ABCDEF", (14, 22, 14, 14, 14, 8)):
+    for col, width in zip("ABCDEFGHIJ", (14, 22, 16, 10, 15, 15, 15, 15, 15, 15)):
         ws_d.column_dimensions[col].width = width
 
     # --- Pricing sheet (Title / Rate / Offshore Rate / Currency) ---
