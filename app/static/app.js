@@ -294,7 +294,7 @@ function gridRowHTML(r) {
     <td class="sticky-l sc9 calc" data-calc="total_rev">${fmt(rev)}</td>
     <td class="sticky-l sc10 calc dim" data-calc="total_exp">${fmt(cost)}</td>
     ${weekCells}
-    <td>${delBtn}</td>
+    <td>${es.meta ? `<button class="edit-res" title="Edit resource">✎</button>` : ""}${delBtn}</td>
   </tr>`;
 }
 
@@ -642,6 +642,12 @@ function toggleGroupRows(gr, force) {
 }
 
 $("#gridBody").addEventListener("click", async (e) => {
+  const edit = e.target.closest(".edit-res");
+  if (edit) {
+    const tr = edit.closest("tr[data-rid]");
+    openResModal(+tr.dataset.rid);
+    return;
+  }
   const del = e.target.closest(".del");
   if (del) {
     const tr = del.closest("tr[data-rid]");
@@ -1613,14 +1619,118 @@ $("#btnAddActuals").addEventListener("click", openActualsModal);
 $("#actualsModalCancel").addEventListener("click", closeActualsModal);
 $("#actualsModalSave").addEventListener("click", saveActualsModal);
 
-/* ---------------- toolbar ---------------- */
-$("#btnAdd").addEventListener("click", async () => {
+/* ---------------- Add / Edit Resource modal (Planned) ---------------- */
+let resEditId = null; // null = add, else resource id being edited
+
+function openResModal(rid) {
+  resEditId = rid || null;
+  renderResModal();
+  $("#resModal").classList.remove("hidden");
+}
+function closeResModal() { $("#resModal").classList.add("hidden"); resEditId = null; }
+
+/* Parse a week label like "Jan-02" into a date (assumes 2026). */
+function weekLabelToDate(label) {
+  const m = /^([A-Za-z]{3})-(\d{1,2})$/.exec(label || "");
+  if (!m) return null;
+  const months = { JAN:0,FEB:1,MAR:2,APR:3,MAY:4,JUN:5,JUL:6,AUG:7,SEP:8,OCT:9,NOV:10,DEC:11 };
+  const mo = months[m[1].toUpperCase()];
+  if (mo === undefined) return null;
+  return new Date(2026, mo, parseInt(m[2], 10));
+}
+/* Map a start/end date to the week indices they cover (inclusive). */
+function dateRangeToWeeks(startStr, endStr) {
+  const start = new Date(startStr + "T00:00:00");
+  const end = new Date(endStr + "T00:00:00");
+  if (isNaN(start) || isNaN(end) || end < start) return [];
+  const out = [];
+  state.weeks.forEach((label, i) => {
+    const d = weekLabelToDate(label);
+    if (d && d >= start && d <= end) out.push(i);
+  });
+  return out;
+}
+
+function renderResModal() {
+  const isEdit = resEditId !== null;
+  const r = isEdit ? state.resources.find((x) => x.id === resEditId) : null;
+  $("#resModalTitle").textContent = isEdit ? "Edit Resource" : "Add Resource";
+  const clients = [...new Set(state.resources.map((x) => (x.client || "").trim()).filter(Boolean))].sort();
+  const projects = [...new Set(state.resources.map((x) => (x.project || "").trim()).filter(Boolean))].sort();
+  const titles = state.pricing.map((p) => p.title);
+  const clientOpts = `<option value="">—</option>` + clients.map((c) => `<option value="${esc(c)}"${r && r.client === c ? " selected" : ""}>${esc(c)}</option>`).join("");
+  const projOpts = `<option value="">—</option>` + projects.map((p) => `<option value="${esc(p)}"${r && r.project === p ? " selected" : ""}>${esc(p)}</option>`).join("");
+  const titleOpts = `<option value="">—</option>` + titles.map((t) => `<option value="${esc(t)}"${r && r.role === t ? " selected" : ""}>${esc(t)}</option>`).join("");
+  // default start/end: full year
+  const defStart = r ? "" : "2026-01-01";
+  const defEnd = r ? "" : "2026-12-31";
+  $("#resModalBody").innerHTML = `
+    <div class="res-form">
+      <div class="res-row">
+        <label>Client <select id="resClient" class="cur-sel">${clientOpts}</select></label>
+        <label>Project <select id="resProject" class="cur-sel">${projOpts}</select></label>
+      </div>
+      <div class="res-row">
+        <label>Resource Name <input class="inp res-inp" id="resName" value="${esc(r ? r.name : "")}" placeholder="e.g. John Doe"></label>
+        <label>Title <select id="resTitle" class="cur-sel">${titleOpts}</select></label>
+      </div>
+      <div class="res-row">
+        <label>Rate ($) <input class="inp res-inp num" id="resRate" type="number" min="0" step="any" value="${r && r.rate != null ? r.rate : ""}" placeholder="0"></label>
+        <label>Offshore Rate ($) <input class="inp res-inp num" id="resOffRate" type="number" min="0" step="any" value="${r && r.offshore_rate != null ? r.offshore_rate : ""}" placeholder="0"></label>
+      </div>
+      <div class="res-row">
+        <label>Start Date <input class="inp res-inp" id="resStart" type="date" value="${r ? "" : defStart}"></label>
+        <label>End Date <input class="inp res-inp" id="resEnd" type="date" value="${r ? "" : defEnd}"></label>
+      </div>
+      <div class="res-row">
+        <label>Planned Hours / Week <input class="inp res-inp num" id="resHpw" type="number" min="0" step="0.25" value="40" placeholder="40"></label>
+        <label class="res-hint">Hours are auto-filled for each week between Start and End.</label>
+      </div>
+    </div>`;
+}
+
+async function saveResModal() {
+  const client = $("#resClient").value.trim();
+  const project = $("#resProject").value.trim();
+  const name = $("#resName").value.trim();
+  const role = $("#resTitle").value;
+  const rate = num($("#resRate").value);
+  const offRate = num($("#resOffRate").value);
+  const start = $("#resStart").value;
+  const end = $("#resEnd").value;
+  const hpw = num($("#resHpw").value) || 0;
+  if (!name) { toast("Resource name is required", true); return; }
+  if (!client) { toast("Client is required", true); return; }
+  if (!project) { toast("Project is required", true); return; }
+  const btn = $("#resModalSave"); btn.disabled = true; btn.textContent = "…";
+  const wasEdit = resEditId !== null;
   try {
-    await api("/api/resources", { method: "POST", body: JSON.stringify({}) });
+    let rid = resEditId;
+    if (rid === null) {
+      const created = await api("/api/resources", { method: "POST", body: JSON.stringify({ client, project, name, role, rate, offshore_rate: offRate }) });
+      rid = created.id;
+    } else {
+      await api(`/api/resources/${rid}`, { method: "PUT", body: JSON.stringify({ client, project, name, role, rate, offshore_rate: offRate }) });
+    }
+    // fill weekly hours from the date range
+    if (start && end && hpw > 0) {
+      const weeks = dateRangeToWeeks(start, end);
+      const hours = Array(state.weeks.length).fill(0);
+      weeks.forEach((i) => { hours[i] = hpw; });
+      await api(`/api/resources/${rid}/hours`, { method: "PUT", body: JSON.stringify({ hours }) });
+    }
+    closeResModal();
+    toast(wasEdit ? "Resource updated" : "Resource added");
     await loadState();
-    toast("Resource added — fill in client, project, name, title & hours");
-  } catch (e) { toast(`Add failed: ${e.message}`, true); }
-});
+  } catch (e) { toast(`Save failed: ${e.message}`, true); }
+  btn.disabled = false; btn.textContent = "Save";
+}
+
+$("#resModalCancel").addEventListener("click", closeResModal);
+$("#resModalSave").addEventListener("click", saveResModal);
+
+/* ---------------- toolbar ---------------- */
+$("#btnAdd").addEventListener("click", () => openResModal(null));
 $("#btnEditGrid").addEventListener("click", () => {
   state.gridEdit[state.view] = !state.gridEdit[state.view];
   renderGrid();
