@@ -868,22 +868,51 @@ function utilClass(v) {
 function renderUtilization() {
   api("/api/utilization").then((data) => {
     const months = data.months;
-    let head = `<tr><th class="u-th-name">Resource</th><th>Projects</th>${months.map((m) => `<th class="num">${esc(m)}</th>`).join("")}<th class="num">Overall</th></tr>`;
+    const sub = (lbl) => `<th class="u-sub">${lbl}</th>`;
+    let head = `<tr><th class="u-th-name" rowspan="2">Resource</th><th rowspan="2">Projects</th><th rowspan="2" class="num">Cap/wk</th>`;
+    head += months.map((m) => `<th class="num" colspan="2">${esc(m)}</th>`).join("");
+    head += `<th class="num" colspan="2">Overall</th></tr>`;
+    head += `<tr>${months.map(() => sub("P") + sub("A")).join("")}${sub("P") + sub("A")}</tr>`;
     let rows = "";
     for (const row of data.rows) {
       rows += `<tr>
         <td class="u-name-td"><div class="u-name">${esc(row.name)}</div></td>
-        <td class="u-proj">${esc(row.projects.join(", ") || "—")}</td>`;
+        <td class="u-proj">${esc(row.projects.join(", ") || "—")}</td>
+        <td class="u-cell num">${row.capacity_week || 40}</td>`;
       for (const mo of row.months) {
-        const cls = utilClass(mo.utilization);
-        rows += `<td class="u-cell ${cls}" title="${mo.hours.toLocaleString()}h / ${mo.capacity}h">${fmt(mo.utilization, 0)}%</td>`;
+        const pc = utilClass(mo.planned_pct);
+        const ac = utilClass(mo.actual_pct);
+        rows += `<td class="u-cell ${pc}" title="planned ${mo.planned_hours.toLocaleString()}h / ${mo.capacity}h">${fmt(mo.planned_pct, 0)}%</td>`;
+        rows += `<td class="u-cell ${ac}" title="actual ${mo.actual_hours.toLocaleString()}h / ${mo.capacity}h">${fmt(mo.actual_pct, 0)}%</td>`;
       }
-      const oc = utilClass(row.overall);
-      rows += `<td class="u-cell ${oc}" title="${row.total_hours.toLocaleString()}h total">${fmt(row.overall, 0)}%</td></tr>`;
+      const poc = utilClass(row.planned_overall);
+      const aoc = utilClass(row.actual_overall);
+      rows += `<td class="u-cell ${poc}" title="planned ${row.total_planned.toLocaleString()}h total">${fmt(row.planned_overall, 0)}%</td>`;
+      rows += `<td class="u-cell ${aoc}" title="actual ${row.total_actual.toLocaleString()}h total">${fmt(row.actual_overall, 0)}%</td></tr>`;
     }
     $("#utilHead").innerHTML = head;
     $("#utilBody").innerHTML = rows;
+    // sticky alignment for the new 3-column frozen block (Resource + Projects + Cap/wk)
+    alignUtilSticky();
   }).catch((e) => toast(`Utilization failed: ${e.message}`, true));
+}
+
+/* Pin Resource + Projects + Cap/wk; the "Resource" header cell also pins to
+   the left. Projects & Cap/wk are intentionally NOT sticky (they scroll). */
+function alignUtilSticky() {
+  const table = document.getElementById("utilTable");
+  const probe = document.querySelector("#utilBody tr");
+  if (!table || !probe) return;
+  const tLeft = table.getBoundingClientRect().left;
+  // Resource column stays pinned at left:0 (CSS handles it).
+  // Just ensure the name header and body align after render.
+  const nameHead = document.querySelector("#utilHead th.u-th-name");
+  const nameBody = probe ? probe.children[0] : null;
+  if (nameHead && nameBody) {
+    const h = Math.round(nameHead.getBoundingClientRect().left - tLeft);
+    const b = Math.round(nameBody.getBoundingClientRect().left - tLeft);
+    if (h !== b) nameHead.style.left = `${b}px`;
+  }
 }
 
 /* ---------------- dashboard ---------------- */
