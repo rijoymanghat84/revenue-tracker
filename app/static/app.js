@@ -639,6 +639,12 @@ function pricingRowHTML(p) {
 }
 
 function renderPricing() {
+  // Ensure PM/project data is loaded (it's fetched async; without this the
+  // Add-PM row shows zero project checkboxes on first tab visit).
+  if (!loadPMDataStarted) {
+    loadPMDataStarted = true;
+    loadPMData().then(() => { if (state.view === "pricing") renderPMs(); });
+  }
   const rows = state.pricing || [];
   let html = `<thead><tr>
     <th>Title</th><th class="num">Rate</th><th class="num">Offshore Rate</th><th>Currency</th>
@@ -745,20 +751,29 @@ $("#btnApplyAll").addEventListener("click", async () => {
 });
 
 /* ---------------- PM assignment + capacity ---------------- */
-let users = [], projects = [];
+let users = [], projects = [], projectOwners = {};
 let editingUser = null;
+let loadPMDataStarted = false;
 
 async function loadPMData() {
   try {
-    const [u, p] = await Promise.all([api("/api/users"), api("/api/projects")]);
-    users = u; projects = p;
+    const [u, p, o] = await Promise.all([api("/api/users"), api("/api/projects"), api("/api/project-owners")]);
+    users = u; projects = p; projectOwners = o || {};
   } catch (e) { toast(`PM data failed: ${e.message}`, true); }
 }
 
-function projectCheckboxes(selected) {
+/* A project checkbox is disabled when another PM already owns it (one PM per
+   project). The PM currently being edited may keep its own projects. */
+function projectCheckboxes(selected, selfUsername) {
   const sel = new Set(selected || []);
-  return projects.map((pr) =>
-    `<label class="pm-proj"><input type="checkbox" value="${esc(pr)}"${sel.has(pr) ? " checked" : ""}> ${esc(pr)}</label>`).join("");
+  return projects.map((pr) => {
+    const owner = projectOwners[pr];
+    const taken = owner && owner !== selfUsername;
+    const checked = sel.has(pr);
+    const dis = taken ? " disabled" : "";
+    const tag = taken ? ` <span class="pm-taken">(${esc(owner)})</span>` : "";
+    return `<label class="pm-proj${dis ? " pm-disabled" : ""}"><input type="checkbox" value="${esc(pr)}"${checked ? " checked" : ""}${dis}> ${esc(pr)}${tag}</label>`;
+  }).join("");
 }
 
 function renderPMs() {
@@ -769,7 +784,7 @@ function renderPMs() {
     if (editingUser === u.id) {
       html += `<tr class="p-res p-edit" data-uid="${u.id}">
         <td><input class="rate-inp txt" data-field="username" value="${esc(u.username)}" disabled></td>
-        <td><div class="pm-projs">${projectCheckboxes(u.projects)}</div></td>
+        <td><div class="pm-projs">${projectCheckboxes(u.projects, u.username)}</div></td>
         <td><button class="btn mini save">Save</button> <button class="btn mini cancel">Cancel</button></td>
       </tr>`;
     } else {
@@ -782,8 +797,11 @@ function renderPMs() {
   }
   if (editingUser === -1) {
     html += `<tr class="p-res p-edit" data-uid="-1">
-      <td><input class="rate-inp txt" data-field="username" placeholder="PM username"></td>
-      <td><div class="pm-projs">${projectCheckboxes([])}</div></td>
+      <td>
+        <input class="rate-inp txt" data-field="username" placeholder="PM username" autocomplete="off">
+        <input class="rate-inp txt pm-pw" data-field="password" type="password" placeholder="Password" autocomplete="new-password">
+      </td>
+      <td><div class="pm-projs">${projectCheckboxes([], null)}</div></td>
       <td><button class="btn mini save">Save</button> <button class="btn mini cancel">Cancel</button></td>
     </tr>`;
   }
@@ -814,13 +832,13 @@ $("#pmBody").addEventListener("click", async (e) => {
   if (e.target.closest(".cancel")) { editingUser = null; renderPMs(); return; }
   if (e.target.closest(".save")) {
     const uname = (tr.querySelector('[data-field="username"]')?.value || "").trim();
+    const pw = (tr.querySelector('[data-field="password"]')?.value || "").trim();
     const projs = Array.from(tr.querySelectorAll('input[type="checkbox"]:checked')).map((c) => c.value);
     if (!uname) { toast("PM username required", true); return; }
+    if (uid === -1 && !pw) { toast("Password required for new PM", true); return; }
     const btn = tr.querySelector(".save"); btn.disabled = true; btn.textContent = "…";
     try {
       if (uid === -1) {
-        const pw = prompt("Set a password for this PM:");
-        if (!pw) { btn.disabled = false; btn.textContent = "Save"; return; }
         await api("/api/users", { method: "POST", body: JSON.stringify({ username: uname, password: pw, projects: projs }) });
       } else {
         await api(`/api/users/${uid}`, { method: "PUT", body: JSON.stringify({ projects: projs }) });

@@ -725,6 +725,26 @@ class UserUpdate(BaseModel):
     projects: list[str] | None = None
 
 
+def _project_owners(conn: sqlite3.Connection) -> dict[str, str]:
+    """Map project -> owning PM username. A project has AT MOST one PM (the
+    UI enforces this too, but the DB layer must guarantee it)."""
+    rows = conn.execute(
+        "SELECT up.project, u.username FROM user_projects up "
+        "JOIN users u ON u.id = up.user_id ORDER BY up.project"
+    ).fetchall()
+    return {r["project"]: r["username"] for r in rows}
+
+
+def _validate_project_ownership(conn, projects: list[str], self_username: str | None) -> None:
+    """Reject assigning a project that's already owned by a DIFFERENT PM.
+    self_username is the PM being edited (its own projects are fine)."""
+    owners = _project_owners(conn)
+    for p in projects:
+        owner = owners.get(p)
+        if owner and owner != self_username:
+            raise HTTPException(409, f"Project '{p}' is already assigned to PM '{owner}'")
+
+
 @app.get("/api/users")
 def api_users(request: Request):
     _require_admin(request)
@@ -742,6 +762,18 @@ def api_users(request: Request):
         conn.close()
 
 
+@app.get("/api/project-owners")
+def api_project_owners(request: Request):
+    """Which PM owns each project (so the UI can grey out projects already
+    taken). Only admin."""
+    _require_admin(request)
+    conn = get_db()
+    try:
+        return _project_owners(conn)
+    finally:
+        conn.close()
+
+
 @app.post("/api/users")
 def api_user_create(body: UserCreate, request: Request):
     _require_admin(request)
@@ -752,12 +784,14 @@ def api_user_create(body: UserCreate, request: Request):
             raise HTTPException(400, "username and password required")
         if conn.execute("SELECT 1 FROM users WHERE username=?", (uname,)).fetchone():
             raise HTTPException(409, f"User '{uname}' already exists")
+        projs = sorted({x.strip() for x in body.projects if x.strip()})
+        _validate_project_ownership(conn, projs, self_username=None)
         cur = conn.execute(
             "INSERT INTO users (username, password_hash, role) VALUES (?,?, 'pm')",
             (uname, _hash_password(body.password)),
         )
         uid = cur.lastrowid
-        for p in {x.strip() for x in body.projects if x.strip()}:
+        for p in projs:
             conn.execute("INSERT INTO user_projects (user_id, project) VALUES (?,?)", (uid, p))
         conn.commit()
         return {"ok": True, "id": uid, "username": uname}
@@ -776,8 +810,10 @@ def api_user_update(uid: int, body: UserUpdate, request: Request):
         if body.password:
             conn.execute("UPDATE users SET password_hash=? WHERE id=?", (_hash_password(body.password), uid))
         if body.projects is not None:
+            projs = sorted({x.strip() for x in body.projects if x.strip()})
+            _validate_project_ownership(conn, projs, self_username=row["username"])
             conn.execute("DELETE FROM user_projects WHERE user_id=?", (uid,))
-            for p in {x.strip() for x in body.projects if x.strip()}:
+            for p in projs:
                 conn.execute("INSERT INTO user_projects (user_id, project) VALUES (?,?)", (uid, p))
         conn.commit()
         return {"ok": True}

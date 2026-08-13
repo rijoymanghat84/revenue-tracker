@@ -419,6 +419,10 @@ td.week .a-inp { text-align: center; }
 .pm-projs { display: flex; flex-wrap: wrap; gap: 4px 14px; max-width: 520px; }
 .pm-proj { font-size: 12px; color: var(--text); display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
 .pm-proj input { accent-color: var(--accent); }
+.pm-proj.pm-disabled { opacity: 0.45; cursor: not-allowed; }
+.pm-proj.pm-disabled input { cursor: not-allowed; }
+.pm-taken { font-size: 10px; color: var(--muted); }
+.pm-pw { margin-top: 6px; }
 .cap-inp { width: 80px; text-align: right; }
 
 /* ---------- actuals entry popup (wizard) ---------- */
