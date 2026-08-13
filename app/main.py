@@ -504,8 +504,8 @@ def api_create_resource(body: ResourceUpdate | None = None, request: Request = N
     conn = get_db()
     try:
         cur = conn.execute(
-            "INSERT INTO resources (country, client, project, name, role, rate, offshore_rate, sort_order) "
-            "VALUES (?,?,?,?,?,?,?, "
+            "INSERT INTO resources (country, client, project, name, role, rate, offshore_rate, capacity, sort_order) "
+            "VALUES (?,?,?,?,?,?,?,?, "
             "COALESCE((SELECT MAX(sort_order)+1 FROM resources), 0))",
             (
                 (body.country or "") if body else "",
@@ -515,6 +515,7 @@ def api_create_resource(body: ResourceUpdate | None = None, request: Request = N
                 (body.role or "") if body else "",
                 body.rate if body else None,
                 body.offshore_rate if body else None,
+                (body.capacity if body and body.capacity else 40),
             ),
         )
         conn.commit()
