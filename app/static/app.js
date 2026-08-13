@@ -758,26 +758,30 @@ let loadPMDataStarted = false;
 async function loadPMData() {
   try {
     const [u, p, o] = await Promise.all([api("/api/users"), api("/api/projects"), api("/api/project-owners")]);
-    users = u; projects = p; projectOwners = o || {};
+    users = u; projects = p;
+    // projectOwners: map "client|project" -> pm username
+    projectOwners = {};
+    (o || []).forEach((x) => { projectOwners[`${x.client}|${x.project}`] = x.pm; });
   } catch (e) { toast(`PM data failed: ${e.message}`, true); }
 }
 
-/* A project checkbox is disabled when another PM already owns it (one PM per
-   project). The PM currently being edited may keep its own projects. */
+/* A (client, project) checkbox is disabled when another PM already owns it
+   (one PM per client+project). The PM being edited may keep its own. */
 function projectCheckboxes(selected, selfUsername) {
-  const sel = new Set(selected || []);
+  const sel = new Set((selected || []).map((s) => `${s.client}|${s.project}`));
   return projects.map((pr) => {
-    const owner = projectOwners[pr];
+    const key = `${pr.client}|${pr.project}`;
+    const owner = projectOwners[key];
     const taken = owner && owner !== selfUsername;
-    const checked = sel.has(pr);
+    const checked = sel.has(key);
     const dis = taken ? " disabled" : "";
     const tag = taken ? ` <span class="pm-taken">(${esc(owner)})</span>` : "";
-    return `<label class="pm-proj${dis ? " pm-disabled" : ""}"><input type="checkbox" value="${esc(pr)}"${checked ? " checked" : ""}${dis}> ${esc(pr)}${tag}</label>`;
+    return `<label class="pm-proj${dis ? " pm-disabled" : ""}"><input type="checkbox" value="${esc(key)}" data-client="${esc(pr.client)}" data-project="${esc(pr.project)}"${checked ? " checked" : ""}${dis}> ${esc(pr.client)} / ${esc(pr.project)}${tag}</label>`;
   }).join("");
 }
 
 function renderPMs() {
-  $("#pmHead").innerHTML = `<tr><th>PM</th><th>Assigned Projects</th><th></th></tr>`;
+  $("#pmHead").innerHTML = `<tr><th>PM</th><th>Assigned Client / Project</th><th></th></tr>`;
   let html = "<tbody>";
   if (!users.length) html += `<tr><td colspan="3" class="dim">No PMs yet — click + Add PM.</td></tr>`;
   for (const u of users) {
@@ -788,9 +792,10 @@ function renderPMs() {
         <td><button class="btn mini save">Save</button> <button class="btn mini cancel">Cancel</button></td>
       </tr>`;
     } else {
+      const projTxt = (u.projects || []).map((p) => `${p.client ? p.client + " / " : ""}${p.project}`).join(", ") || "—";
       html += `<tr class="p-res" data-uid="${u.id}">
         <td>${esc(u.username)}</td>
-        <td class="dim">${(u.projects || []).map(esc).join(", ") || "—"}</td>
+        <td class="dim">${esc(projTxt)}</td>
         <td><button class="btn mini edit">Edit</button> <button class="del" title="Delete PM">✕</button></td>
       </tr>`;
     }
@@ -833,7 +838,10 @@ $("#pmBody").addEventListener("click", async (e) => {
   if (e.target.closest(".save")) {
     const uname = (tr.querySelector('[data-field="username"]')?.value || "").trim();
     const pw = (tr.querySelector('[data-field="password"]')?.value || "").trim();
-    const projs = Array.from(tr.querySelectorAll('input[type="checkbox"]:checked')).map((c) => c.value);
+    const projs = Array.from(tr.querySelectorAll('input[type="checkbox"]:checked')).map((c) => ({
+      client: c.dataset.client || "",
+      project: c.dataset.project || "",
+    }));
     if (!uname) { toast("PM username required", true); return; }
     if (uid === -1 && !pw) { toast("Password required for new PM", true); return; }
     const btn = tr.querySelector(".save"); btn.disabled = true; btn.textContent = "…";
