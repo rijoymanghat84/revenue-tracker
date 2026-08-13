@@ -1649,6 +1649,148 @@ $("#btnAddActuals").addEventListener("click", openActualsModal);
 $("#actualsModalCancel").addEventListener("click", closeActualsModal);
 $("#actualsModalSave").addEventListener("click", saveActualsModal);
 
+/* ---------------- Add / Edit Planned Hours wizard ---------------- */
+let plannedEntry = { client: "", project: "", month: 0 };
+
+function plannedClients() {
+  return [...new Set(state.resources.map((r) => (r.client || "").trim()).filter(Boolean))].sort();
+}
+function plannedProjectsFor(client) {
+  return [...new Set(state.resources
+    .filter((r) => (r.client || "").trim() === client && (r.project || "").trim())
+    .map((r) => (r.project || "").trim()))].sort();
+}
+function plannedResourcesFor(client, project) {
+  return state.resources.filter((r) =>
+    (r.client || "").trim() === client && (r.project || "").trim() === project);
+}
+
+function openPlannedModal() {
+  plannedEntry = { client: "", project: "", month: 0 };
+  renderPlannedModal();
+  $("#plannedModal").classList.remove("hidden");
+}
+function closePlannedModal() { $("#plannedModal").classList.add("hidden"); }
+
+function renderPlannedModal() {
+  const e = plannedEntry;
+  const clients = plannedClients();
+  const projects = e.client ? plannedProjectsFor(e.client) : [];
+  const months = state.months || [];
+  let html = `
+    <div class="a-wizard">
+      <div class="a-pick-row">
+        <label>Client
+          <select id="pClient" class="cur-sel">
+            <option value="">— Select client —</option>
+            ${clients.map((c) => `<option value="${esc(c)}"${c === e.client ? " selected" : ""}>${esc(c)}</option>`).join("")}
+          </select>
+        </label>
+        <label>Project
+          <select id="pProject" class="cur-sel" ${e.client ? "" : "disabled"}>
+            <option value="">— Select project —</option>
+            ${projects.map((p) => `<option value="${esc(p)}"${p === e.project ? " selected" : ""}>${esc(p)}</option>`).join("")}
+          </select>
+        </label>
+        <label>Month
+          <select id="pMonth" class="cur-sel">
+            ${months.map((m, i) => `<option value="${i}"${i === e.month ? " selected" : ""}>${esc(m.name)}</option>`).join("")}
+          </select>
+        </label>
+        <label>Year <span class="a-year">2026</span></label>
+      </div>
+      <div id="pTeam"></div>
+    </div>`;
+  $("#plannedModalBody").innerHTML = html;
+  $("#pClient").addEventListener("change", (ev) => { plannedEntry.client = ev.target.value; plannedEntry.project = ""; renderPlannedModal(); });
+  $("#pProject").addEventListener("change", (ev) => { plannedEntry.project = ev.target.value; renderPlannedModal(); });
+  $("#pMonth").addEventListener("change", (ev) => { plannedEntry.month = +ev.target.value; renderPlannedModal(); });
+  if (e.client && e.project) renderPlannedTeam();
+}
+
+function renderPlannedTeam() {
+  const e = plannedEntry;
+  const resources = plannedResourcesFor(e.client, e.project);
+  const months = state.months || [];
+  const m = months[e.month];
+  if (!m) { $("#pTeam").innerHTML = `<div class="dim">No month data.</div>`; return; }
+  const weekIdx = [];
+  for (let i = m.start; i <= m.end; i++) weekIdx.push(i);
+  const weekLabels = weekIdx.map((i) => state.weeks[i] || `W${i + 1}`);
+  let html = `<div class="a-team-head">${resources.length} resource(s) · ${esc(e.client)} / ${esc(e.project)} · ${esc(m.name)}</div>`;
+  if (!resources.length) {
+    html += `<div class="dim">No resources assigned to this project.</div>`;
+    $("#pTeam").innerHTML = html;
+    return;
+  }
+  html += `<table class="a-entry-table">
+    <thead><tr><th>Resource</th><th>Title</th>${weekLabels.map((w) => `<th>${esc(w)}</th>`).join("")}<th>Total</th></tr></thead><tbody>`;
+  for (const r of resources) {
+    const planned = r.hours || [];
+    let total = 0;
+    html += `<tr data-rid="${r.id}">
+      <td class="a-res-name">${esc(r.name)}</td>
+      <td class="dim">${esc(r.role || "—")}</td>`;
+    for (const i of weekIdx) {
+      const p = planned[i] || 0;
+      total += p;
+      html += `<td class="a-week-cell" data-week="${i}">
+        <input class="inp a-inp" type="number" step="0.25" min="0" data-week="${i}" value="${p ? p : ""}" placeholder="0" inputmode="decimal">
+      </td>`;
+    }
+    html += `<td class="a-total" data-total>${total ? total : "—"}</td></tr>`;
+  }
+  html += `</tbody></table>`;
+  $("#pTeam").innerHTML = html;
+  // live total
+  $$("#pTeam tr[data-rid]").forEach((tr) => {
+    $$("input[data-week]", tr).forEach((inp) => {
+      inp.addEventListener("input", () => {
+        let t = 0;
+        $$("input[data-week]", tr).forEach((x) => { t += num(x.value) || 0; });
+        tr.querySelector("[data-total]").textContent = t ? t : "—";
+      });
+    });
+  });
+}
+
+async function savePlannedModal() {
+  const e = plannedEntry;
+  const resources = plannedResourcesFor(e.client, e.project);
+  const months = state.months || [];
+  const m = months[e.month];
+  if (!m) { toast("Select a month first", true); return; }
+  const weekIdx = [];
+  for (let i = m.start; i <= m.end; i++) weekIdx.push(i);
+  let any = false;
+  for (const r of resources) {
+    const tr = $(`#pTeam tr[data-rid="${r.id}"]`);
+    if (!tr) continue;
+    const hours = [...(r.hours || [])];
+    let changed = false;
+    for (const i of weekIdx) {
+      const inp = $(`input[data-week="${i}"]`, tr);
+      if (!inp) continue;
+      const v = num(inp.value) || 0;
+      if (v !== (r.hours || [])[i]) changed = true;
+      hours[i] = v;
+    }
+    if (!changed) continue;
+    any = true;
+    try {
+      await api(`/api/resources/${r.id}/hours`, { method: "PUT", body: JSON.stringify({ hours }) });
+    } catch (err) { toast(`Save failed: ${err.message}`, true); return; }
+  }
+  if (!any) { toast("No changes to save"); return; }
+  toast("Planned hours saved");
+  closePlannedModal();
+  await loadState();
+}
+
+$("#btnAddPlanned").addEventListener("click", openPlannedModal);
+$("#plannedModalCancel").addEventListener("click", closePlannedModal);
+$("#plannedModalSave").addEventListener("click", savePlannedModal);
+
 /* ---------------- Add / Edit Resource modal (Planned) ---------------- */
 let resEditId = null; // null = add, else resource id being edited
 

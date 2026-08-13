@@ -88,6 +88,7 @@
       <div class="sheet-note" id="gridNote"></div>
       <input type="search" id="filter" placeholder="Filter by name, client, project, title…" class="search">
       <div class="toolbar-right">
+        <button class="btn primary" id="btnAddPlanned" title="Enter or edit planned hours for a client/project/month">+ Add/Edit Planned Hours</button>
         <button class="btn mini" id="btnEditGrid" title="Unlock / lock editing for this grid">Edit</button>
         <button class="btn mini" id="btnExpandAll">Expand all</button>
         <button class="btn mini" id="btnCollapseAll">Collapse all</button>
@@ -236,7 +237,19 @@
   </div>
 </div>
 
-<script src="/app.js?v=62"></script>
+<!-- ============ ADD / EDIT PLANNED HOURS (wizard) ============ -->
+<div id="plannedModal" class="modal hidden">
+  <div class="modal-box glass actuals-modal">
+    <h3 id="plannedModalTitle">Add / Edit Planned Hours</h3>
+    <div id="plannedModalBody" class="modal-body"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="plannedModalCancel">Cancel</button>
+      <button class="btn primary" id="plannedModalSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<script src="/app.js?v=63"></script>
 <script>
   // PWA: register the service worker (only after load; skip on failure)
   if ("serviceWorker" in navigator) {
