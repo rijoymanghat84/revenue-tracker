@@ -1,4 +1,4 @@
-# README1 — Complete App Specification (Revenue Tracker)
+# README1 — Complete App Specification (Revenue Recon)
 
 > **READ THIS FIRST.** This document is the FULL specification of the app's look,
 > behavior, and data rules. The GitHub repo contains the working implementation —
