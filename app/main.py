@@ -16,6 +16,7 @@ import io
 import json
 import os
 import sqlite3
+import shutil
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -29,7 +30,103 @@ from . import importer
 BASE = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE / "data"
 DB_PATH = DATA_DIR / "revenue.db"
+DB_KEY_FILE = DATA_DIR / ".dbkey"   # holds the DB encryption password (gitignored)
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+# SQLCipher-backed connection (real encryption). Falls back to plain sqlite3
+# only if sqlcipher3 isn't installed (dev/test). Production requires it.
+try:
+    import sqlcipher3 as _cipher
+    _HAS_CIPHER = True
+except Exception:  # noqa: BLE001
+    _cipher = sqlite3
+    _HAS_CIPHER = False
+
+
+def _db_key() -> str:
+    """Return the DB encryption password: env var first, else the .dbkey file.
+    Empty string = no encryption (only when neither is set)."""
+    env = os.environ.get("REVENUE_DB_PASSWORD", "")
+    if env:
+        return env
+    kf = Path(DB_KEY_FILE)
+    if kf.exists():
+        return kf.read_text().strip()
+    return ""
+
+
+def _set_db_key(pw: str) -> None:
+    """Persist the DB password to the .dbkey file (0600, gitignored)."""
+    kf = Path(DB_KEY_FILE)
+    kf.parent.mkdir(parents=True, exist_ok=True)
+    kf.write_text(pw)
+    try:
+        os.chmod(kf, 0o600)
+    except OSError:
+        pass
+
+
+def _is_encrypted(path) -> bool:
+    """A SQLCipher DB is NOT readable by plain sqlite3 (or by sqlcipher3
+    without the key). Detect by trying to read a known table WITHOUT a key."""
+    path = Path(path)
+    if not path.exists() or path.stat().st_size == 0:
+        return False
+    try:
+        conn = _cipher.connect(str(path))
+        # no PRAGMA key -> if it's encrypted, reads fail
+        conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
+        conn.close()
+        return False  # readable without key => plain
+    except Exception:  # noqa: BLE001
+        return True   # not readable without key => encrypted
+
+
+def get_db() -> sqlite3.Connection:
+    """Open the DB with the SQLCipher key applied. If the DB is still plain
+    (pre-encryption), it stays readable; the migration step encrypts it."""
+    conn = _cipher.connect(str(DB_PATH))
+    # sqlcipher3 has its own Row factory; plain sqlite3 uses sqlite3.Row
+    conn.row_factory = _cipher.Row if _HAS_CIPHER else sqlite3.Row
+    key = _db_key()
+    if key:
+        conn.execute(f"PRAGMA key='{key}'")
+    conn.execute("PRAGMA foreign_keys=ON")
+    return conn
+
+
+def encrypt_db_in_place(pw: str) -> None:
+    """Encrypt an existing plain SQLite DB in place using SQLCipher's
+    sqlcipher_export. Backs up the plain DB first. No-op if already encrypted."""
+    dbp = Path(DB_PATH)
+    if not dbp.exists():
+        return
+    if _is_encrypted(dbp):
+        return
+    if not _HAS_CIPHER:
+        raise RuntimeError("sqlcipher3 not installed — cannot encrypt the DB")
+    # backup the plain DB
+    backups = Path(DATA_DIR) / "backups"
+    backups.mkdir(parents=True, exist_ok=True)
+    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    shutil.copy2(dbp, backups / f"revenue-plain-before-encrypt-{stamp}.db")
+    # open plain (via sqlcipher3 so sqlcipher_export is available), export into
+    # a new encrypted DB
+    plain = _cipher.connect(str(dbp))
+    enc_path = dbp.with_suffix(".enc.db")
+    if enc_path.exists():
+        enc_path.unlink()
+    enc = _cipher.connect(str(enc_path))
+    enc.execute(f"PRAGMA key='{pw}'")
+    enc.execute("PRAGMA cipher_migrate")
+    plain.execute("ATTACH DATABASE ? AS encrypted KEY ?", (str(enc_path), pw))
+    plain.execute("SELECT sqlcipher_export('encrypted')")
+    plain.execute("DETACH DATABASE encrypted")
+    plain.close()
+    enc.close()
+    # swap files
+    shutil.move(str(enc_path), str(dbp))
+    _set_db_key(pw)
 
 # Currency rules copied from the VBA GetCurrency()
 EU_COUNTRIES = {
@@ -228,13 +325,6 @@ def api_me(request: Request):
 
 
 # ---------------- DB ----------------
-def get_db() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys=ON")
-    return conn
-
-
 def init_db() -> None:
     conn = get_db()
     conn.executescript(
@@ -876,6 +966,51 @@ def api_user_delete(uid: int, request: Request):
         return {"ok": True}
     finally:
         conn.close()
+
+
+# ---------------- DB encryption (admin) ----------------
+class DbPasswordBody(BaseModel):
+    password: str
+
+
+@app.get("/api/db-security")
+def api_db_security(request: Request):
+    """Report whether the DB is encrypted and whether a key is set."""
+    _require_admin(request)
+    return {
+        "encrypted": _is_encrypted(DB_PATH),
+        "key_set": bool(_db_key()),
+        "cipher_available": _HAS_CIPHER,
+    }
+
+
+@app.post("/api/db-password")
+def api_db_password(body: DbPasswordBody, request: Request):
+    """Set or change the DB encryption password. If the DB is still plain,
+    encrypt it in place with the new password. If already encrypted, re-key
+    it to the new password."""
+    _require_admin(request)
+    pw = (body.password or "").strip()
+    if len(pw) < 6:
+        raise HTTPException(400, "DB password must be at least 6 characters")
+    if not _HAS_CIPHER:
+        raise HTTPException(500, "sqlcipher3 not installed — cannot encrypt the DB")
+    try:
+        if _is_encrypted(DB_PATH):
+            # re-key: open with current key, change to new key
+            conn = _cipher.connect(str(DB_PATH))
+            cur = _db_key()
+            if cur:
+                conn.execute(f"PRAGMA key='{cur}'")
+            conn.execute(f"PRAGMA rekey='{pw}'")
+            conn.commit()
+            conn.close()
+            _set_db_key(pw)
+        else:
+            encrypt_db_in_place(pw)
+        return {"ok": True, "encrypted": True}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, f"Could not set DB password: {e}")
 
 
 class ProjectBody(BaseModel):

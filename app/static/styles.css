@@ -443,6 +443,11 @@ td.week .a-inp { text-align: center; }
 .res-inp:focus { border-color: var(--accent); }
 .res-hint { font-size: 11px; color: var(--muted); align-self: flex-end; }
 
+/* ---------- DB security ---------- */
+.db-sec-ok { color: var(--green); font-weight: 700; }
+.db-sec-warn { color: var(--amber); font-weight: 700; }
+.db-pw { width: 260px; }
+
 /* ---------- actuals entry popup (wizard) ---------- */
 .actuals-modal { width: min(900px, 94vw); }
 .actuals-modal .modal-body { max-height: 70vh; }
