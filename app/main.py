@@ -1076,13 +1076,22 @@ def compute_utilization(weeks, months, resources) -> dict:
 
 @app.get("/api/utilization")
 def api_utilization(request: Request):
-    _require_admin(request)
+    """Utilization for admin (all resources) or PM (scoped to their
+    client/project pairs). PMs see planned + actual utilization for their
+    team only."""
+    user = _require_pm(request)
     conn = get_db()
     try:
         weeks, months = _load_layout()
         resources = _all_resources(conn, weeks)
+        if user.get("r") == "pm":
+            projs = _pm_projects(user["u"], conn)
+            resources = [r for r in resources
+                         if not (r["project"] or "").strip()
+                         or _pm_owns(projs, (r["client"] or "").strip(), (r["project"] or "").strip())]
         data = compute_utilization(weeks, months, resources)
         data["capacity_week"] = CAP_WEEK_HOURS
+        data["role"] = user.get("r")
         return data
     finally:
         conn.close()
