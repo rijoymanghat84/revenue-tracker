@@ -268,6 +268,14 @@ def init_db() -> None:
             currency TEXT NOT NULL DEFAULT 'USD',
             sort_order INTEGER NOT NULL DEFAULT 0
         );
+        CREATE TABLE IF NOT EXISTS projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client TEXT NOT NULL DEFAULT '',
+            project TEXT NOT NULL DEFAULT '',
+            start_date TEXT NOT NULL DEFAULT '',
+            end_date TEXT NOT NULL DEFAULT '',
+            UNIQUE (client, project)
+        );
         CREATE TABLE IF NOT EXISTS actual_hours (
             resource_id INTEGER NOT NULL,
             week INTEGER NOT NULL,
@@ -321,6 +329,13 @@ def init_db() -> None:
     # Seed the pricing library once from distinct resource roles
     if conn.execute("SELECT COUNT(*) FROM pricing").fetchone()[0] == 0:
         seed_pricing_from_roles(conn)
+    # Seed the projects table once from distinct (client, project) pairs
+    if conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 0:
+        conn.execute(
+            "INSERT OR IGNORE INTO projects (client, project) "
+            "SELECT DISTINCT TRIM(client), TRIM(project) FROM resources "
+            "WHERE TRIM(project) != ''"
+        )
     # Seed week/month layout if missing (defaults mirror Revenue_2026 layout)
     if conn.execute("SELECT COUNT(*) FROM meta WHERE key='layout'").fetchone()[0] == 0:
         weeks, months = importer.default_layout(2026)
@@ -863,17 +878,76 @@ def api_user_delete(uid: int, request: Request):
         conn.close()
 
 
+class ProjectBody(BaseModel):
+    client: str = ""
+    project: str = ""
+    start_date: str = ""
+    end_date: str = ""
+
+
 @app.get("/api/projects")
 def api_projects(request: Request):
-    """Distinct (client, project) pairs (for PM assignment)."""
+    """List all (client, project) entries with their start/end dates."""
     _require_admin(request)
     conn = get_db()
     try:
         rows = conn.execute(
-            "SELECT DISTINCT TRIM(client) AS client, TRIM(project) AS project "
-            "FROM resources WHERE TRIM(project) != '' ORDER BY client, project"
+            "SELECT id, client, project, start_date, end_date FROM projects ORDER BY client, project"
         ).fetchall()
-        return [{"client": r["client"], "project": r["project"]} for r in rows]
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+@app.post("/api/projects")
+def api_project_create(body: ProjectBody, request: Request):
+    _require_admin(request)
+    conn = get_db()
+    try:
+        client = (body.client or "").strip()
+        project = (body.project or "").strip()
+        if not client or not project:
+            raise HTTPException(400, "client and project are required")
+        if conn.execute("SELECT 1 FROM projects WHERE client=? AND project=?", (client, project)).fetchone():
+            raise HTTPException(409, f"'{client}/{project}' already exists")
+        cur = conn.execute(
+            "INSERT INTO projects (client, project, start_date, end_date) VALUES (?,?,?,?)",
+            (client, project, (body.start_date or "").strip(), (body.end_date or "").strip()),
+        )
+        conn.commit()
+        return {"ok": True, "id": cur.lastrowid}
+    finally:
+        conn.close()
+
+
+@app.put("/api/projects/{pid}")
+def api_project_update(pid: int, body: ProjectBody, request: Request):
+    _require_admin(request)
+    conn = get_db()
+    try:
+        row = conn.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
+        if not row:
+            raise HTTPException(404, "project not found")
+        client = (body.client or "").strip() or row["client"]
+        project = (body.project or "").strip() or row["project"]
+        conn.execute(
+            "UPDATE projects SET client=?, project=?, start_date=?, end_date=? WHERE id=?",
+            (client, project, (body.start_date or "").strip(), (body.end_date or "").strip(), pid),
+        )
+        conn.commit()
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@app.delete("/api/projects/{pid}")
+def api_project_delete(pid: int, request: Request):
+    _require_admin(request)
+    conn = get_db()
+    try:
+        conn.execute("DELETE FROM projects WHERE id=?", (pid,))
+        conn.commit()
+        return {"ok": True}
     finally:
         conn.close()
 
