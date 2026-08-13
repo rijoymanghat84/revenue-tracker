@@ -50,6 +50,9 @@
       <button class="tab" data-tab="util">Utilization</button>
     </div>
     <input type="file" id="fileInput" accept=".xlsm,.xlsx" hidden>
+    <select id="globalMonth" class="cur-sel" title="Filter all tabs to a single month (All = full year)">
+      <option value="all">All months</option>
+    </select>
     <select id="importMode" class="cur-sel" title="How the upload should apply to existing data">
       <option value="merge">Import: Merge (keep existing, add/update)</option>
       <option value="replace">Import: Replace (wipe &amp; load this file)</option>
@@ -67,11 +70,6 @@
     <div class="toolbar glass">
       <div class="sheet-note" id="utilNote"><span class="dot on"></span>Booked hours ÷ capacity (<b>40 hrs/week = 100%</b>) — 🔴 &gt;100% · 🟢 80–100% · 🟡 50–80% · 🟠 &lt;50%. Auto-calculated; never editable.</div>
       <div class="toolbar-right">
-        <label class="u-month-label">Month
-          <select id="utilMonth" class="cur-sel" title="View a single month's detail">
-            <option value="all">All months</option>
-          </select>
-        </label>
         <span class="hint">Export includes a locked Utilization sheet; uploads ignore it.</span>
       </div>
     </div>
@@ -199,7 +197,7 @@
   </div>
 </div>
 
-<script src="/app.js?v=56"></script>
+<script src="/app.js?v=57"></script>
 <script>
   // PWA: register the service worker (only after load; skip on failure)
   if ("serviceWorker" in navigator) {

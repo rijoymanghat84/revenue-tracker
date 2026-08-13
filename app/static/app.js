@@ -17,11 +17,33 @@
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
-const state = { resources: [], weeks: [], months: [], pricing: [], view: "dash", gridEdit: { planned: false }, me: null };
+const state = { resources: [], weeks: [], months: [], pricing: [], view: "dash", gridEdit: { planned: false }, me: null, globalMonth: "all" };
 const dirty = new Map();   // resource rid -> {fields:{}, hours:bool}
 const pDirty = new Map();  // pricing pid -> {title?, rate?, offshore_rate?}
 const aDirty = new Map();  // actuals rid -> {hours:bool, notes:{}}
 let flushTimer = null, pFlushTimer = null, aFlushTimer = null;
+
+/* Global month filter: returns the week-index range for the selected month,
+   or the full year when "all". Used by every tab to scope its columns/data. */
+function globalWeekRange() {
+  const m = state.globalMonth;
+  if (!m || m === "all") return null; // null = all weeks
+  const month = (state.months || []).find((x) => x.name === m);
+  if (!month) return null;
+  return { start: month.start, end: month.end };
+}
+function globalMonthLabel() {
+  return state.globalMonth === "all" ? "All months" : state.globalMonth;
+}
+/* Array of week indices to display under the current global month filter
+   (all weeks when "all"). */
+function visibleWeekIndices() {
+  const r = globalWeekRange();
+  if (!r) return (state.weeks || []).map((_, i) => i);
+  const out = [];
+  for (let i = r.start; i <= r.end; i++) out.push(i);
+  return out;
+}
 
 /* ---------------- helpers ---------------- */
 const fmt = (n, dp = 2) =>
@@ -134,8 +156,28 @@ $("#btnLogout").addEventListener("click", async () => {
 async function loadState() {
   const s = await api("/api/state");
   Object.assign(state, s);
+  populateGlobalMonth();
   renderView();
 }
+
+/* Fill the global month selector from the layout (once). */
+function populateGlobalMonth() {
+  const sel = $("#globalMonth");
+  if (!sel || sel.options.length > 1) return;
+  (state.months || []).forEach((m) => {
+    const o = document.createElement("option");
+    o.value = m.name; o.textContent = m.name;
+    sel.appendChild(o);
+  });
+}
+$("#globalMonth").addEventListener("change", (e) => {
+  state.globalMonth = e.target.value;
+  // re-render the current view with the new month scope
+  if (state.view === "actuals") loadActuals();
+  else if (state.view === "util") renderUtilization();
+  else if (state.view === "dash") renderDashboard();
+  else if (state.view === "planned") renderGrid();
+});
 
 const MODES = {
   planned: {
@@ -155,6 +197,7 @@ const WEEKS_START = 10;    // cell index where weeks begin (0-based children)
 
 function gridHeadHTML() {
   const weeks = state.weeks, months = state.months, mode = MODES[state.view];
+  const vis = visibleWeekIndices();
   const colHeads = [["Country", "sc1"], ["Client", "sc2"], ["Project", "sc3"], ["Resource Name", "sc4"],
                     ["Title", "sc5"], [esc(mode.rateLabels[0]), "sc6"], [esc(mode.rateLabels[1]), "sc7"],
                     ["Total Hours", "sc8"], ["Total Revenue", "sc9"], ["Total Expense", "sc10"]];
@@ -163,12 +206,17 @@ function gridHeadHTML() {
   const headBlank = (n) => (n > 0 ? "<th></th>".repeat(n) : "");
   const stickySpacers = Array.from({ length: N_LOCKED }, (_, i) =>
     `<th class="sticky-h sc${i + 1}"></th>`).join("");
-  const monthCells = months.map((m) => `<th colspan="${m.end - m.start + 1}">${esc(m.name)}</th>`).join("");
-  const weekCells = weeks.map((w) => `<th class="week-h">${esc(w)}</th>`).join("");
+  // month bands only for visible weeks
+  const monthCells = months.filter((m) => m.end >= vis[0] && m.start <= vis[vis.length - 1])
+    .map((m) => {
+      const s = Math.max(m.start, vis[0]), e = Math.min(m.end, vis[vis.length - 1]);
+      return `<th colspan="${e - s + 1}">${esc(m.name)}</th>`;
+    }).join("");
+  const weekCells = vis.map((i) => `<th class="week-h">${esc(weeks[i])}</th>`).join("");
   const actionBlank = "<th></th>";
   return `<tr class="head-row">
             ${headCells}
-            ${headBlank(weeks.length)}${actionBlank}
+            ${headBlank(vis.length)}${actionBlank}
           </tr>
           <tr class="month-row">${stickySpacers}${monthCells}${actionBlank}</tr>
           <tr class="week-row">${stickySpacers}${weekCells}${actionBlank}</tr>`;
@@ -178,7 +226,7 @@ function colgroupHTML() {
   const metaW = [70, 150, 140, 160, 160, 90, 90, 90, 110, 110];
   let s = "<colgroup>";
   metaW.forEach((w) => { s += `<col style="width:${w}px">`; });
-  for (let i = 0; i < state.weeks.length; i++) s += '<col style="width:54px">';
+  for (let i = 0; i < visibleWeekIndices().length; i++) s += '<col style="width:54px">';
   s += '<col style="width:40px">';
   return s + "</colgroup>";
 }
@@ -211,16 +259,17 @@ function gridRowHTML(r) {
   const es = gridEditState();
   const mode = MODES[state.view];
   const hours = r.hours || Array(state.weeks.length).fill(0);
+  const vis = visibleWeekIndices();
   const rate = effRate(r);
   const offRate = effOffshore(r);
-  const total = hours.reduce((a, b) => a + b, 0);
+  const total = vis.reduce((a, i) => a + (hours[i] || 0), 0);
   const rev = (rate || 0) * total;
   const cost = (offRate || 0) * total;
   const weekCell = (h, i) => es.hours
     ? `<input class="inp" type="number" step="0.25" min="0" data-week="${i}" value="${h ? h : ""}" placeholder="0" inputmode="decimal">`
     : `<input class="inp mirror" type="number" step="0.25" min="0" disabled value="${h ? h : ""}" data-week="${i}">`;
   let weekCells = "";
-  hours.forEach((h, i) => { weekCells += `<td class="week${es.hours ? "" : " mirror-cell"}">${weekCell(h, i)}</td>`; });
+  vis.forEach((i) => { const h = hours[i] || 0; weekCells += `<td class="week${es.hours ? "" : " mirror-cell"}">${weekCell(h, i)}</td>`; });
 
   const delBtn = es.meta ? `<button class="del" title="Delete resource">✕</button>` : "";
   const cur = gridCurrencyTag(r);
@@ -301,8 +350,9 @@ function renderGrid() {
   let html = "<tbody>";
   groups.forEach((g, gi) => {
     let hrs = 0, rev = 0, cost = 0;
+    const vis = visibleWeekIndices();
     for (const m of g.members) {
-      const total = (m.hours || []).reduce((a, b) => a + b, 0);
+      const total = vis.reduce((a, i) => a + ((m.hours || [])[i] || 0), 0);
       hrs += total; rev += (effRate(m) || 0) * total; cost += (effOffshore(m) || 0) * total;
     }
     html += `<tr class="group-row" data-group="${gi}" title="Expand / collapse">
@@ -310,7 +360,7 @@ function renderGrid() {
       <td class="sticky-l sc8 calc dim" data-calc="total_hrs">${fmt(hrs, 1)}</td>
       <td class="sticky-l sc9 calc" data-calc="total_rev">${fmt(rev)}</td>
       <td class="sticky-l sc10 calc dim" data-calc="total_exp">${fmt(cost)}</td>
-      ${weeks.map(() => "<td></td>").join("")}
+      ${visibleWeekIndices().map(() => "<td></td>").join("")}
       <td></td></tr>`;
 
     let body = "";
@@ -897,18 +947,10 @@ function utilClass(v) {
 }
 
 function renderUtilization() {
-  api("/api/utilization").then((data) => {
+  const m = state.globalMonth === "all" ? "" : state.globalMonth;
+  api(`/api/utilization?month=${encodeURIComponent(m)}`).then((data) => {
     const months = data.months;
-    // populate the month selector (once)
-    const sel = $("#utilMonth");
-    if (sel && sel.options.length <= 1) {
-      months.forEach((m) => {
-        const o = document.createElement("option");
-        o.value = m; o.textContent = m;
-        sel.appendChild(o);
-      });
-    }
-    const chosen = sel ? sel.value : "all";
+    const chosen = state.globalMonth;
     const sub = (lbl) => `<th class="u-sub">${lbl}</th>`;
 
     if (chosen !== "all") {
@@ -966,8 +1008,6 @@ function renderUtilization() {
   }).catch((e) => toast(`Utilization failed: ${e.message}`, true));
 }
 
-$("#utilMonth").addEventListener("change", () => renderUtilization());
-
 /* Pin Resource + Projects + Cap/wk; the "Resource" header cell also pins to
    the left. Projects & Cap/wk are intentionally NOT sticky (they scroll). */
 function alignUtilSticky() {
@@ -988,7 +1028,8 @@ function alignUtilSticky() {
 
 /* ---------------- dashboard ---------------- */
 function renderDashboard() {
-  api("/api/dashboard").then((data) => {
+  const m = state.globalMonth === "all" ? "" : state.globalMonth;
+  api(`/api/dashboard?month=${encodeURIComponent(m)}`).then((data) => {
     const groups = data.rows.groups, totals = data.rows.totals;
     let totalRev = 0, totalExp = 0, totalActRev = 0, totalActExp = 0;
     totals.forEach((t) => {
@@ -1042,12 +1083,17 @@ async function loadActuals() {
 
 function actualsHeadHTML() {
   const weeks = actualsData.weeks, months = actualsData.months;
+  const vis = visibleWeekIndices();
   const colHeads = [["Country", "sc1"], ["Client", "sc2"], ["Project", "sc3"], ["Resource Name", "sc4"],
                     ["Title", "sc5"], ["Planned", "sc6"], ["Actual", "sc7"], ["Δ", "sc8"]];
   const headCells = colHeads.map(([h, sc]) => `<th class="sticky-h ${sc} colh">${h}</th>`).join("");
   const stickySpacers = Array.from({ length: 8 }, (_, i) => `<th class="sticky-h sc${i + 1}"></th>`).join("");
-  const monthCells = months.map((m) => `<th colspan="${m.end - m.start + 1}">${esc(m.name)}</th>`).join("");
-  const weekCells = weeks.map((w) => `<th class="week-h">${esc(w)}</th>`).join("");
+  const monthCells = months.filter((m) => m.end >= vis[0] && m.start <= vis[vis.length - 1])
+    .map((m) => {
+      const s = Math.max(m.start, vis[0]), e = Math.min(m.end, vis[vis.length - 1]);
+      return `<th colspan="${e - s + 1}">${esc(m.name)}</th>`;
+    }).join("");
+  const weekCells = vis.map((i) => `<th class="week-h">${esc(weeks[i])}</th>`).join("");
   return `<tr class="head-row">${headCells}${weekCells}</tr>
           <tr class="month-row">${stickySpacers}${monthCells}</tr>
           <tr class="week-row">${stickySpacers}${weekCells}</tr>`;
@@ -1057,7 +1103,7 @@ function actualsColgroup() {
   const metaW = [70, 150, 140, 160, 160, 70, 70, 70];
   let s = "<colgroup>";
   metaW.forEach((w) => { s += `<col style="width:${w}px">`; });
-  for (let i = 0; i < actualsData.weeks.length; i++) s += '<col style="width:54px">';
+  for (let i = 0; i < visibleWeekIndices().length; i++) s += '<col style="width:54px">';
   return s + "</colgroup>";
 }
 
@@ -1065,9 +1111,10 @@ function actualsRowHTML(r) {
   const planned = r.hours || Array(actualsData.weeks.length).fill(0);
   const actual = r.actual_hours || Array(actualsData.weeks.length).fill(0);
   const notes = r.actual_notes || {};
+  const vis = visibleWeekIndices();
   const cap = r.capacity ?? 40;
-  const totalPlanned = planned.reduce((a, b) => a + b, 0);
-  const totalActual = actual.reduce((a, b) => a + b, 0);
+  const totalPlanned = vis.reduce((a, i) => a + (planned[i] || 0), 0);
+  const totalActual = vis.reduce((a, i) => a + (actual[i] || 0), 0);
   const delta = totalActual - totalPlanned;
   const weekCell = (p, a, i) => {
     const n = notes[i] || {};
@@ -1086,7 +1133,7 @@ function actualsRowHTML(r) {
     return `<td class="week"><input class="inp a-inp ${cls}" type="number" step="0.25" min="0" data-week="${i}" value="${a ? a : ""}" placeholder="0" inputmode="decimal" title="planned ${p}h">${chip}</td>`;
   };
   let weekCells = "";
-  planned.forEach((p, i) => { weekCells += weekCell(p, actual[i] || 0, i); });
+  vis.forEach((i) => { weekCells += weekCell(planned[i] || 0, actual[i] || 0, i); });
   const deltaCls = delta > 0 ? "a-over" : delta < 0 ? "a-under" : "";
   return `<tr class="resource-row" data-rid="${r.id}">
     <td class="sticky-l sc1 meta-col">${esc(r.country || "—")}</td>
@@ -1119,16 +1166,17 @@ function renderActuals() {
   let html = "<tbody>";
   groups.forEach((g, gi) => {
     let p = 0, a = 0;
+    const vis = visibleWeekIndices();
     for (const m of g.members) {
-      p += (m.hours || []).reduce((x, y) => x + y, 0);
-      a += (m.actual_hours || []).reduce((x, y) => x + y, 0);
+      p += vis.reduce((x, i) => x + ((m.hours || [])[i] || 0), 0);
+      a += vis.reduce((x, i) => x + ((m.actual_hours || [])[i] || 0), 0);
     }
     html += `<tr class="group-row" data-group="${gi}" title="Expand / collapse">
       <td class="sticky-l sc1" colspan="5"><span class="group-chevron">▼</span>${esc(g.client || "—")}${g.project ? ` · ${esc(g.project)}` : ""}<span class="proj-count-chip">${g.members.length} resource(s)</span></td>
       <td class="sticky-l sc6 calc dim">${fmt(p, 1)}</td>
       <td class="sticky-l sc7 calc">${fmt(a, 1)}</td>
       <td class="sticky-l sc8 calc">${fmt(a - p, 1)}</td>
-      ${weeks.map(() => "<td></td>").join("")}
+      ${vis.map(() => "<td></td>").join("")}
     </tr>`;
     let body = "";
     for (const m of g.members) {

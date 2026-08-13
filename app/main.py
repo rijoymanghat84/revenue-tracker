@@ -878,18 +878,30 @@ def api_projects(request: Request):
 
 
 @app.get("/api/dashboard")
-def api_dashboard(request: Request):
+def api_dashboard(request: Request, month: str = ""):
     _require_admin(request)
     conn = get_db()
     try:
-        weeks, _ = _load_layout()
+        weeks, months = _load_layout()
         resources = _all_resources(conn, weeks)
-        return {"rows": build_dashboard_rows(resources, weeks), "generated_at": None}
+        wr = _month_week_range(months, month)
+        return {"rows": build_dashboard_rows(resources, weeks, wr), "generated_at": None,
+                "month": month or "all"}
     finally:
         conn.close()
 
 
-def _actuals_financials(r: dict) -> dict:
+def _month_week_range(months: list[dict], month: str) -> tuple[int, int] | None:
+    """Return (start, end) week indices for a month name, or None for all."""
+    if not month or month == "all":
+        return None
+    for m in months:
+        if m["name"] == month.upper():
+            return (m["start"], m["end"])
+    return None
+
+
+def _actuals_financials(r: dict, week_range: tuple[int, int] | None = None) -> dict:
     """Actuals-based revenue/expense + reconciliation deltas.
     - actual_rev / actual_exp: computed ONLY from recorded actual hours.
       actual_rev counts what was actually billable (billed OT overage counts;
@@ -897,7 +909,8 @@ def _actuals_financials(r: dict) -> dict:
       actual hours). Zero actuals -> $0 — never assumes actual == planned.
     - add_rev / add_exp: overage deltas (billed overage × onsite; all overage
       × offshore).
-    - adj_rev / adj_exp: under-delivery deltas (negative on both sides)."""
+    - adj_rev / adj_exp: under-delivery deltas (negative on both sides).
+    week_range (start, end) restricts to a single month; None = all weeks."""
     add_rev = add_exp = adj_rev = adj_exp = 0.0
     actual_rev = actual_exp = 0.0
     rate = r["rate"] or 0.0
@@ -905,7 +918,9 @@ def _actuals_financials(r: dict) -> dict:
     planned = r["hours"] or []
     actual = r.get("actual_hours") or []
     notes = r.get("actual_notes") or {}
-    for i, a in enumerate(actual):
+    lo, hi = (week_range if week_range else (0, len(actual) - 1))
+    for i in range(lo, hi + 1):
+        a = actual[i] if i < len(actual) else 0.0
         if not a:
             continue
         p = planned[i] if i < len(planned) else 0.0
@@ -933,11 +948,13 @@ def _actuals_financials(r: dict) -> dict:
     }
 
 
-def build_dashboard_rows(resources: list[dict], weeks: list[str]) -> dict:
+def build_dashboard_rows(resources: list[dict], weeks: list[str],
+                         week_range: tuple[int, int] | None = None) -> dict:
     """Grouped country|client report — mirrors the VBA SyncDashboard but
     dedupes by (normalized country, normalized client) so the IMS bug
     (a subtotal row leaking into the group list) cannot recur. Includes the
-    Actuals reconciliation: Additional Revenue/Expense + Adjustment."""
+    Actuals reconciliation: Additional Revenue/Expense + Adjustment.
+    week_range (start, end) restricts to a single month; None = all weeks."""
     groups: dict[tuple, dict] = {}
     order: list[tuple] = []
     for r in resources:
@@ -963,16 +980,21 @@ def build_dashboard_rows(resources: list[dict], weeks: list[str]) -> dict:
         })
         if key not in order:
             order.append(key)
-        fin = _actuals_financials(r)
-        g["revenue"] += r["total_cost"]
-        g["expense"] += r["expense"]
+        # planned revenue/expense for the selected weeks only
+        hrs = r["hours"] or []
+        lo, hi = (week_range if week_range else (0, len(hrs) - 1))
+        sel_hrs = sum(hrs[i] for i in range(lo, min(hi, len(hrs) - 1) + 1) if i < len(hrs))
+        g["revenue"] += (r["rate"] or 0.0) * sel_hrs
+        g["expense"] += (r["offshore_rate"] or 0.0) * sel_hrs
+        fin = _actuals_financials(r, week_range)
         g["actual_rev"] += fin["actual_rev"]
         g["actual_exp"] += fin["actual_exp"]
         g["add_rev"] += fin["add_rev"]
         g["add_exp"] += fin["add_exp"]
         g["adj_rev"] += fin["adj_rev"]
         g["adj_exp"] += fin["adj_exp"]
-        g["difference"] += r["difference"] + fin["add_rev"] - fin["add_exp"] + fin["adj_rev"] - fin["adj_exp"]
+        g["difference"] += ((r["rate"] or 0.0) * sel_hrs - (r["offshore_rate"] or 0.0) * sel_hrs
+                            + fin["add_rev"] - fin["add_exp"] + fin["adj_rev"] - fin["adj_exp"])
         g["resources"] += 1
 
     rows = [groups[k] for k in order]
@@ -1075,10 +1097,10 @@ def compute_utilization(weeks, months, resources) -> dict:
 
 
 @app.get("/api/utilization")
-def api_utilization(request: Request):
+def api_utilization(request: Request, month: str = ""):
     """Utilization for admin (all resources) or PM (scoped to their
     client/project pairs). PMs see planned + actual utilization for their
-    team only."""
+    team only. month restricts to a single month's weeks."""
     user = _require_pm(request)
     conn = get_db()
     try:
@@ -1092,6 +1114,7 @@ def api_utilization(request: Request):
         data = compute_utilization(weeks, months, resources)
         data["capacity_week"] = CAP_WEEK_HOURS
         data["role"] = user.get("r")
+        data["month"] = month or "all"
         return data
     finally:
         conn.close()
