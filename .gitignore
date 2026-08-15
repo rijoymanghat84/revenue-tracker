@@ -17,5 +17,8 @@ logs/
 *.log
 *.tmp
 
+# ---- bug-fix approval operational state (never commit) ----
+approvals/
+
 # ---- os ----
 .DS_Store
