@@ -145,7 +145,7 @@ app = FastAPI(title="Revenue Recon")
 
 # ---------------- Auth (login + role-based sessions) ----------------
 def _admin_creds() -> tuple[str, str]:
-    user = os.environ.get("REVENUE_AUTH_USER", "rijoy")
+    user = os.environ.get("REVENUE_AUTH_USER", "admin")
     pw = os.environ.get("REVENUE_AUTH_PASSWORD", "")
     if not pw:
         pw_file = BASE / ".password"

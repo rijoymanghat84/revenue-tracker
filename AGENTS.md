@@ -39,7 +39,7 @@ source .venv/bin/activate
 pip install fastapi uvicorn openpyxl
 
 # Auth gate: create a file named  .password  containing one line with your
-# chosen password (the app logs in as user "rijoy"). Or run:
+# chosen password. Or run:
 #   bash scripts/setup.sh   (does all of the above for you)
 
 # Seed data (optional but recommended): point at an exported Revenue workbook
@@ -48,7 +48,7 @@ pip install fastapi uvicorn openpyxl
 
 # Start
 python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8802
-# → open http://127.0.0.1:8802  (login: user rijoy, your .password)
+# → open http://127.0.0.1:8802  (enter your .password)
 ```
 
 ## Verification checklist (report back on these)

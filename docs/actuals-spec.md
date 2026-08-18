@@ -94,10 +94,10 @@ Rev +$500, Exp +$200. Un-billed → Rev +$0, Exp +$200 (visible leak).
 
 ## 5. Auth & roles
 
-- **Admin** (existing `rijoy`): all tabs + user management.
-- **PM**: login → sees **only the Actuals tab**, scoped to their assigned
+- **Admin** (existing admin user): all tabs + user management.
+- **PM**: signs in → sees **only the Actuals tab**, scoped to their assigned
   projects, no rates/revenue. Planned hours shown as comparison baseline.
-- Login screen → role-based routing. Session via signed token (cookie).
+- Sign-in screen → role-based routing. Session via signed token (cookie).
 
 ## 6. Pricing tab — new section
 

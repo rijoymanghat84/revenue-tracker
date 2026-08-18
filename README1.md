@@ -41,8 +41,8 @@ Data lives in **SQLite** (never in git). Code lives in the repo (never data).
 ## 3. Authentication
 
 - **Basic auth** on every route except `/healthz`.
-- Username: `rijoy`. Password: read from a file named `.password` (one line) at
-  the app root; create it during setup. NEVER commit `.password` or any data.
+- Password: read from a file named `.password` (one line) at the app root;
+  create it during setup. NEVER commit `.password` or any data.
 - On wrong/missing credentials return `401` with `WWW-Authenticate: Basic realm="Revenue Tracker"`.
 
 ---
@@ -199,9 +199,8 @@ or your own file):
 
 - Repo = code only. `.password`, `data/`, env files are gitignored. NEVER
   commit data or credentials.
-- The app is public at `revenue.rijoybmanghat.com` (Cloudflare Tunnel) behind
-  basic auth. Clone repo → `bash scripts/setup.sh` → run → log in (user
-  `rijoy`, your `.password`).
+- The app is deployed behind basic auth. Clone repo → `bash scripts/setup.sh` →
+  run → log in with your `.password`.
 - To populate data on a new instance: **Export Excel** from the live app, then
   **Import Excel → Merge** on the new machine (all sections auto-fill: 64
   resources, projects, pricing, totals).

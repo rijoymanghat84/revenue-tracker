@@ -4,9 +4,6 @@ Web replacement for `Revenue_2026.xlsm` — resources × 53 weeks, with billing
 (On-Site) and expense (Off-Shore) rates, plus a **planned-vs-actual
 reconciliation** layer (Actuals) and role-based access for PMs.
 
-**URL:** https://revenue.rijoybmanghat.com (login — admin `rijoy`, password in
-`/opt/data/revenue-tracker/.password`; PMs created in-app)
-**Local:** http://127.0.0.1:8802 (healthz open, everything else behind login)
 **Stack:** FastAPI + SQLite + vanilla JS (dark frost-glass theme, no build step)
 
 ## PWA / Mobile
@@ -45,7 +42,7 @@ A **Month** selector in the top bar filters every tab (Dashboard, Planned,
 Actuals, Utilization) to a single month for all users. "All months" = full year.
 
 ## Roles
-- **Admin** (`rijoy`): all tabs + user/PM management.
+- **Admin**: all tabs + user/PM management.
 - **PM**: Actuals + Utilization only, scoped to their assigned
   (client, project) pairs, no rates. PM export/import = Actuals-only workbook
   scoped to their projects.
@@ -67,7 +64,7 @@ This repo is **code only** — no data, no credentials.
 git clone <this-repo> revenue-tracker && cd revenue-tracker
 python3 -m venv .venv && source .venv/bin/activate
 pip install fastapi uvicorn openpyxl
-# create .password (admin password); admin user is "rijoy"
+# create .password (admin password)
 /usr/bin/python3 scripts/seed.py /path/to/any_workbook.xlsm   # optional seed
 python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8802
 ```
@@ -78,7 +75,7 @@ python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8802
   `/opt/data/logs/revenue-tracker-watchdog.log`)
 - **Data:** SQLite at `data/revenue.db`. Backed up with the regular Sunday
   full-backup (it's under /opt/data).
-- **Run manually:** `cd /opt/data/revenue-tracker && /usr/bin/python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8802`
+- **Run manually:** `cd <repo-dir> && /usr/bin/python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8802`
 
 ## API
 | Endpoint | Meaning |
@@ -102,5 +99,5 @@ python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8802
 - **IMS total bug fixed:** the Excel macro's Dashboard double-counted IMS in
   the TOTAL rows; the app dedupes.
 - 2026 is fixed for now; new year files upload cleanly and rewire the layout.
-- Exposed via Cloudflare Tunnel at `revenue.rijoybmanghat.com` (VPS tunnel
-  `4c1ab785…`, ingress in `/opt/data/dashboard/config/config.yml`).
+- Exposed via Cloudflare Tunnel (VPS tunnel `4c1ab785…`, ingress in
+  `/opt/data/dashboard/config/config.yml`).
