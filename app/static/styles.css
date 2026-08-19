@@ -178,6 +178,14 @@ thead .week-row th.sticky-h { z-index: 33; }
 /* fixed layout: columns follow the <colgroup> exactly — no phantom columns,
    no content-driven gaps/overlaps, even widths */
 #gridTable { table-layout: fixed; }
+/* Don't stretch the grid tables to fill the container. With table-layout:fixed
+   the columns follow the <colgroup> widths exactly; the generic `table`
+   rule's `min-width:100%` would otherwise force the table to fill the wrap in
+   month view (few week columns → table narrower than the container) and
+   table-layout:fixed would distribute that extra space across ALL columns,
+   expanding them (Rijoy: "when we go from full year to month view all the
+   columns expand to accommodate the free space"). Keep the natural width. */
+#gridTable, #actualsTable { min-width: 0; }
 
 td, th { border-right: 1px solid rgba(255,255,255,0.26); }
 tbody td { padding: 0; height: 30px; white-space: nowrap; }
