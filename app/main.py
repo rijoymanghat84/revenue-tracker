@@ -268,6 +268,16 @@ def _require_admin(request):
         raise HTTPException(403, "Admin access required")
 
 
+def _require_super_admin(request):
+    """Only Rijoy (the main/shared .password admin) may manage ADMIN accounts.
+    Regular admins manage PMs and everything else, but cannot create, edit, or
+    delete other admins."""
+    _require_admin(request)
+    user = getattr(request.state, "user", None)
+    if not _super_admin(user):
+        raise HTTPException(403, "Only Rijoy (main admin) can manage admin accounts")
+
+
 def _require_pm(request):
     user = getattr(request.state, "user", None)
     if not user:
@@ -345,7 +355,7 @@ def api_login(body: LoginBody):
         # Admin: existing shared creds
         auser, apw = _admin_creds()
         if hmac.compare_digest(uname, auser) and apw and hmac.compare_digest(body.password or "", apw):
-            resp = JSONResponse({"role": "admin", "username": uname, "projects": []})
+            resp = JSONResponse({"role": "admin", "username": uname, "projects": [], "super_admin": True})
             resp.set_cookie("rt_session", _make_token(uname, "admin"), httponly=True, samesite="lax", max_age=7 * 86400)
             return resp
         # PM or admin: users table
@@ -358,6 +368,7 @@ def api_login(body: LoginBody):
             else:
                 projects = []
             resp = JSONResponse({"role": role, "username": uname, "projects": projects,
+                                 "super_admin": False,
                                  "permissions": sorted(_user_permissions(
                                      {"u": uname, "r": role}, conn))})
             resp.set_cookie("rt_session", _make_token(uname, role),
@@ -384,6 +395,7 @@ def api_me(request: Request):
     try:
         projects = _pm_projects(user["u"], conn) if user.get("r") == "pm" else []
         return {"role": user["r"], "username": user["u"], "projects": projects,
+                "super_admin": _super_admin(user),
                 "permissions": sorted(_user_permissions(user, conn))}
     finally:
         conn.close()
@@ -1021,6 +1033,9 @@ def api_user_create(body: UserCreate, request: Request):
         if conn.execute("SELECT 1 FROM users WHERE username=?", (uname,)).fetchone():
             raise HTTPException(409, f"User '{uname}' already exists")
         role = body.role if body.role in ("admin", "pm") else "pm"
+        # Only Rijoy (super-admin) may create admin accounts.
+        if role == "admin":
+            _require_super_admin(request)
         # Only allow a valid subset of admin permissions; PMs never carry any.
         perms = [p for p in body.permissions if p in ADMIN_PERMISSIONS] if role == "admin" else []
         projs = [ProjectAssign(client=(p.client or "").strip(), project=(p.project or "").strip())
@@ -1050,6 +1065,10 @@ def api_user_update(uid: int, body: UserUpdate, request: Request):
         row = conn.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
         if not row:
             raise HTTPException(404, "user not found")
+        # Managing an admin account (editing, or promoting/demoting to/from
+        # admin) is super-admin-only; regular admins manage PMs.
+        if row["role"] == "admin" or (body.role == "admin" and row["role"] != "admin"):
+            _require_super_admin(request)
         if body.password:
             conn.execute("UPDATE users SET password_hash=? WHERE id=?",
                          (_hash_password(body.password), uid))
@@ -1085,6 +1104,9 @@ def api_user_delete(uid: int, request: Request):
         row = conn.execute("SELECT id, username FROM users WHERE id=?", (uid,)).fetchone()
         if not row:
             raise HTTPException(404, "user not found")
+        # Only Rijoy may delete admin accounts.
+        if conn.execute("SELECT role FROM users WHERE id=?", (uid,)).fetchone()["role"] == "admin":
+            _require_super_admin(request)
         # A user must never delete their own account (would lock themselves out).
         me = getattr(request.state, "user", None)
         if me and hmac.compare_digest(str(row["username"]), str(me.get("u", ""))):

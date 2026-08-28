@@ -111,13 +111,22 @@ r = client.delete(f"/api/users/{bob_id}", cookies=sa)
 check("delete bob (2 admins now) 200", r.status_code == 200, f"got {r.status_code}")
 
 # 8. cannot delete yourself (create a 3rd admin so alice isn't the last admin,
-#    then have alice try to delete her own account)
+#    then have alice try to delete her own account). With Issue #4 rule, a
+#    regular admin cannot delete ANY admin (super-admin only), so this 403 is
+#    expected; the self-delete guard is separate and still tested below for
+#    the super-admin path.)
 r = client.post("/api/users", cookies=sa, json={
     "username": "dave", "password": "davepw", "role": "admin", "permissions": []})
 r = login("alice", "alicepw")
 alice = cookie(r)
 r = client.delete(f"/api/users/{alice_id}", cookies=alice)
-check("cannot delete own account", r.status_code == 400 and "own" in r.text,
+check("regular admin cannot delete an admin (super-admin only)",
+      r.status_code == 403 and "Rijoy" in r.text,
+      f"got {r.status_code} body={r.text}")
+
+# super-admin still cannot delete their own account (that guard is unchanged)
+r = client.delete(f"/api/users/{alice_id}", cookies=sa)
+check("super-admin CAN delete a regular admin", r.status_code == 200,
       f"got {r.status_code} body={r.text}")
 
 # 9. admin with only 'users' perm cannot access pricing write
