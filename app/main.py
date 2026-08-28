@@ -275,6 +275,62 @@ def _require_pm(request):
     return user
 
 
+# ---------------- Admin permissions (granular admin management) ----------------
+# Admin users (role='admin') carry a JSON list of permission keys in
+# users.permissions. The super-admin (the shared .password login, i.e. Rijoy)
+# implicitly holds ALL permissions and can never be created/deleted via the UI.
+# A PM has role='pm' and is denied every admin permission.
+ADMIN_PERMISSIONS = [
+    "pricing",        # Pricing tab: edit titles/rates, Apply, Update All
+    "resources",      # Planned tab: add/edit/delete resources + weekly hours
+    "projects",       # Client/Project CRUD + Project→PM assignment
+    "users",          # Manage users (create/edit/delete PMs AND admins)
+    "dashboard",      # Dashboard tab (planned vs actual money)
+    "actuals",        # Actuals tab (record actuals for anyone, not just own team)
+    "utilization",    # Utilization tab
+    "import_export",  # Import / Export Excel
+    "db_security",    # Database encryption management
+]
+
+
+def _super_admin(user) -> bool:
+    """True for the shared .password login (Rijoy, the biggest admin)."""
+    if not user:
+        return False
+    return bool(hmac.compare_digest(str(user.get("u", "")), _admin_creds()[0]))
+
+
+def _user_permissions(user, conn: sqlite3.Connection) -> set[str]:
+    """Resolve the permission set for a user. Super-admin → everything."""
+    if _super_admin(user):
+        return set(ADMIN_PERMISSIONS)
+    row = conn.execute("SELECT permissions FROM users WHERE username=?",
+                       (user.get("u", ""),)).fetchone()
+    try:
+        perms = json.loads(row["permissions"]) if row and row["permissions"] else []
+        if not isinstance(perms, list):
+            perms = []
+    except Exception:  # noqa: BLE001
+        perms = []
+    return set(str(p) for p in perms)
+
+
+def _require_perm(request, perm: str):
+    """Gate an admin endpoint by a specific permission. PMs are always denied."""
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(401, "Unauthorized")
+    if user.get("r") == "pm":
+        raise HTTPException(403, "PM access not permitted")
+    conn = get_db()
+    try:
+        perms = _user_permissions(user, conn)
+    finally:
+        conn.close()
+    if perm not in perms:
+        raise HTTPException(403, f"Missing admin permission: {perm}")
+
+
 # ---------------- Auth API ----------------
 class LoginBody(BaseModel):
     username: str
@@ -292,12 +348,20 @@ def api_login(body: LoginBody):
             resp = JSONResponse({"role": "admin", "username": uname, "projects": []})
             resp.set_cookie("rt_session", _make_token(uname, "admin"), httponly=True, samesite="lax", max_age=7 * 86400)
             return resp
-        # PM: users table
-        row = conn.execute("SELECT username, password_hash FROM users WHERE username=?", (uname,)).fetchone()
+        # PM or admin: users table
+        row = conn.execute("SELECT username, password_hash, role FROM users WHERE username=?",
+                           (uname,)).fetchone()
         if row and _verify_password(body.password or "", row["password_hash"]):
-            projects = _pm_projects(uname, conn)
-            resp = JSONResponse({"role": "pm", "username": uname, "projects": projects})
-            resp.set_cookie("rt_session", _make_token(uname, "pm"), httponly=True, samesite="lax", max_age=7 * 86400)
+            role = row["role"] if row["role"] in ("admin", "pm") else "pm"
+            if role == "pm":
+                projects = _pm_projects(uname, conn)
+            else:
+                projects = []
+            resp = JSONResponse({"role": role, "username": uname, "projects": projects,
+                                 "permissions": sorted(_user_permissions(
+                                     {"u": uname, "r": role}, conn))})
+            resp.set_cookie("rt_session", _make_token(uname, role),
+                            httponly=True, samesite="lax", max_age=7 * 86400)
             return resp
         raise HTTPException(401, "Invalid username or password")
     finally:
@@ -319,7 +383,8 @@ def api_me(request: Request):
     conn = get_db()
     try:
         projects = _pm_projects(user["u"], conn) if user.get("r") == "pm" else []
-        return {"role": user["r"], "username": user["u"], "projects": projects}
+        return {"role": user["r"], "username": user["u"], "projects": projects,
+                "permissions": sorted(_user_permissions(user, conn))}
     finally:
         conn.close()
 
@@ -404,6 +469,10 @@ def init_db() -> None:
     upcols = {r[1] for r in conn.execute("PRAGMA table_info(user_projects)").fetchall()}
     if "client" not in upcols:
         conn.execute("ALTER TABLE user_projects ADD COLUMN client TEXT NOT NULL DEFAULT ''")
+    # Migration: add permissions column to users if it predates it (admin management)
+    ucols = {r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
+    if "permissions" not in ucols:
+        conn.execute("ALTER TABLE users ADD COLUMN permissions TEXT NOT NULL DEFAULT '[]'")
     # Migration: add capacity column if the resources table predates it
     rcols = {r[1] for r in conn.execute("PRAGMA table_info(resources)").fetchall()}
     if "capacity" not in rcols:
@@ -605,7 +674,7 @@ def api_state(request: Request):
 
 @app.post("/api/resources")
 def api_create_resource(body: ResourceUpdate | None = None, request: Request = None):
-    _require_admin(request)
+    _require_perm(request, "resources")
     conn = get_db()
     try:
         cur = conn.execute(
@@ -634,7 +703,7 @@ def api_create_resource(body: ResourceUpdate | None = None, request: Request = N
 
 @app.put("/api/resources/{rid}")
 def api_update_resource(rid: int, body: ResourceUpdate, request: Request):
-    _require_admin(request)
+    _require_perm(request, "resources")
     conn = get_db()
     try:
         row = conn.execute("SELECT * FROM resources WHERE id=?", (rid,)).fetchone()
@@ -660,7 +729,7 @@ def api_update_resource(rid: int, body: ResourceUpdate, request: Request):
 
 @app.put("/api/resources/{rid}/hours")
 def api_update_hours(rid: int, body: HoursUpdate, request: Request):
-    _require_admin(request)
+    _require_perm(request, "resources")
     conn = get_db()
     try:
         weeks, _ = _load_layout()
@@ -699,7 +768,7 @@ def api_update_hours(rid: int, body: HoursUpdate, request: Request):
 
 @app.delete("/api/resources/{rid}")
 def api_delete_resource(rid: int, request: Request):
-    _require_admin(request)
+    _require_perm(request, "resources")
     conn = get_db()
     try:
         conn.execute("DELETE FROM weekly_hours WHERE resource_id=?", (rid,))
@@ -761,13 +830,16 @@ def api_update_actuals(rid: int, body: ActualsUpdate, request: Request):
         row = conn.execute("SELECT * FROM resources WHERE id=?", (rid,)).fetchone()
         if not row:
             raise HTTPException(404, "resource not found")
-        # PM scoping: only their (client, project) pairs
+        # Admin actuals are gated behind the 'actuals' permission; PMs keep
+        # their own scoped path (always allowed for their own projects).
         if user.get("r") == "pm":
             projs = _pm_projects(user["u"], conn)
             proj = (row["project"] or "").strip()
             client = (row["client"] or "").strip()
             if proj and not _pm_owns(projs, client, proj):
                 raise HTTPException(403, "Not assigned to this project")
+        else:
+            _require_perm(request, "actuals")
         weeks, _ = _load_layout()
         n = len(weeks)
         if body.hours is None:
@@ -848,11 +920,15 @@ class ProjectAssign(BaseModel):
 class UserCreate(BaseModel):
     username: str
     password: str
+    role: str = "pm"               # "pm" | "admin"
+    permissions: list[str] = []    # admin permission keys (ignored for PMs)
     projects: list[ProjectAssign] = []
 
 
 class UserUpdate(BaseModel):
     password: str | None = None
+    role: str | None = None
+    permissions: list[str] | None = None
     projects: list[ProjectAssign] | None = None
 
 
@@ -882,16 +958,44 @@ def api_users(request: Request):
     _require_admin(request)
     conn = get_db()
     try:
-        rows = conn.execute("SELECT id, username, role FROM users ORDER BY username").fetchall()
+        rows = conn.execute("SELECT id, username, role, permissions FROM users ORDER BY username").fetchall()
         out = []
         for r in rows:
             projs = [{"client": p["client"], "project": p["project"]} for p in conn.execute(
                 "SELECT client, project FROM user_projects WHERE user_id=? ORDER BY client, project", (r["id"],)
             ).fetchall()]
-            out.append({"id": r["id"], "username": r["username"], "role": r["role"], "projects": projs})
+            try:
+                perms = json.loads(r["permissions"]) if r["permissions"] else []
+                if not isinstance(perms, list):
+                    perms = []
+            except Exception:  # noqa: BLE001
+                perms = []
+            out.append({"id": r["id"], "username": r["username"], "role": r["role"],
+                        "permissions": [str(p) for p in perms], "projects": projs})
         return out
     finally:
         conn.close()
+
+
+@app.get("/api/permissions")
+def api_permissions(request: Request):
+    """Catalog of admin permissions so the UI can render checkboxes, with a
+    machine key + a human label. Only admins (any) may read it."""
+    _require_admin(request)
+    labels = {
+        "pricing": "Edit pricing (titles & rates)",
+        "resources": "Manage resources & planned hours",
+        "projects": "Manage clients/projects & PM assignment",
+        "users": "Manage users (PMs & admins)",
+        "dashboard": "View Dashboard",
+        "actuals": "Record actuals",
+        "utilization": "View Utilization",
+        "import_export": "Import / Export Excel",
+        "db_security": "Manage database security",
+    }
+    return {"permissions": [
+        {"key": k, "label": labels.get(k, k)} for k in ADMIN_PERMISSIONS
+    ]}
 
 
 @app.get("/api/project-owners")
@@ -908,7 +1012,7 @@ def api_project_owners(request: Request):
 
 @app.post("/api/users")
 def api_user_create(body: UserCreate, request: Request):
-    _require_admin(request)
+    _require_perm(request, "users")
     conn = get_db()
     try:
         uname = (body.username or "").strip()
@@ -916,39 +1020,57 @@ def api_user_create(body: UserCreate, request: Request):
             raise HTTPException(400, "username and password required")
         if conn.execute("SELECT 1 FROM users WHERE username=?", (uname,)).fetchone():
             raise HTTPException(409, f"User '{uname}' already exists")
+        role = body.role if body.role in ("admin", "pm") else "pm"
+        # Only allow a valid subset of admin permissions; PMs never carry any.
+        perms = [p for p in body.permissions if p in ADMIN_PERMISSIONS] if role == "admin" else []
         projs = [ProjectAssign(client=(p.client or "").strip(), project=(p.project or "").strip())
                  for p in body.projects if (p.project or "").strip()]
-        _validate_project_ownership(conn, projs, self_username=None)
+        if role == "pm":
+            _validate_project_ownership(conn, projs, self_username=None)
         cur = conn.execute(
-            "INSERT INTO users (username, password_hash, role) VALUES (?,?, 'pm')",
-            (uname, _hash_password(body.password)),
+            "INSERT INTO users (username, password_hash, role, permissions) VALUES (?,?,?,?)",
+            (uname, _hash_password(body.password), role, json.dumps(perms)),
         )
         uid = cur.lastrowid
-        for p in projs:
-            conn.execute("INSERT INTO user_projects (user_id, client, project) VALUES (?,?,?)", (uid, p.client, p.project))
+        if role == "pm":
+            for p in projs:
+                conn.execute("INSERT INTO user_projects (user_id, client, project) VALUES (?,?,?)",
+                             (uid, p.client, p.project))
         conn.commit()
-        return {"ok": True, "id": uid, "username": uname}
+        return {"ok": True, "id": uid, "username": uname, "role": role, "permissions": perms}
     finally:
         conn.close()
 
 
 @app.put("/api/users/{uid}")
 def api_user_update(uid: int, body: UserUpdate, request: Request):
-    _require_admin(request)
+    _require_perm(request, "users")
     conn = get_db()
     try:
         row = conn.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
         if not row:
             raise HTTPException(404, "user not found")
         if body.password:
-            conn.execute("UPDATE users SET password_hash=? WHERE id=?", (_hash_password(body.password), uid))
-        if body.projects is not None:
+            conn.execute("UPDATE users SET password_hash=? WHERE id=?",
+                         (_hash_password(body.password), uid))
+        new_role = row["role"]
+        if body.role is not None:
+            new_role = body.role if body.role in ("admin", "pm") else row["role"]
+        new_perms = row["permissions"]
+        if body.permissions is not None:
+            new_perms = json.dumps([p for p in body.permissions if p in ADMIN_PERMISSIONS]
+                                   if new_role == "admin" else [])
+        if (new_role, new_perms) != (row["role"], row["permissions"]):
+            conn.execute("UPDATE users SET role=?, permissions=? WHERE id=?",
+                         (new_role, new_perms, uid))
+        if body.projects is not None and new_role == "pm":
             projs = [ProjectAssign(client=(p.client or "").strip(), project=(p.project or "").strip())
                      for p in body.projects if (p.project or "").strip()]
             _validate_project_ownership(conn, projs, self_username=row["username"])
             conn.execute("DELETE FROM user_projects WHERE user_id=?", (uid,))
             for p in projs:
-                conn.execute("INSERT INTO user_projects (user_id, client, project) VALUES (?,?,?)", (uid, p.client, p.project))
+                conn.execute("INSERT INTO user_projects (user_id, client, project) VALUES (?,?,?)",
+                             (uid, p.client, p.project))
         conn.commit()
         return {"ok": True}
     finally:
@@ -957,9 +1079,21 @@ def api_user_update(uid: int, body: UserUpdate, request: Request):
 
 @app.delete("/api/users/{uid}")
 def api_user_delete(uid: int, request: Request):
-    _require_admin(request)
+    _require_perm(request, "users")
     conn = get_db()
     try:
+        row = conn.execute("SELECT id, username FROM users WHERE id=?", (uid,)).fetchone()
+        if not row:
+            raise HTTPException(404, "user not found")
+        # A user must never delete their own account (would lock themselves out).
+        me = getattr(request.state, "user", None)
+        if me and hmac.compare_digest(str(row["username"]), str(me.get("u", ""))):
+            raise HTTPException(400, "You cannot delete your own account")
+        # Never delete the last remaining admin — Rijoy must always have a way in.
+        if conn.execute("SELECT role FROM users WHERE id=?", (uid,)).fetchone()["role"] == "admin":
+            n_admin = conn.execute("SELECT COUNT(*) FROM users WHERE role='admin' AND id!=?", (uid,)).fetchone()[0]
+            if n_admin == 0:
+                raise HTTPException(400, "Cannot delete the last admin account")
         conn.execute("DELETE FROM user_projects WHERE user_id=?", (uid,))
         conn.execute("DELETE FROM users WHERE id=?", (uid,))
         conn.commit()
@@ -989,7 +1123,7 @@ def api_db_password(body: DbPasswordBody, request: Request):
     """Set or change the DB encryption password. If the DB is still plain,
     encrypt it in place with the new password. If already encrypted, re-key
     it to the new password."""
-    _require_admin(request)
+    _require_perm(request, "db_security")
     pw = (body.password or "").strip()
     if len(pw) < 6:
         raise HTTPException(400, "DB password must be at least 6 characters")
@@ -1036,7 +1170,7 @@ def api_projects(request: Request):
 
 @app.post("/api/projects")
 def api_project_create(body: ProjectBody, request: Request):
-    _require_admin(request)
+    _require_perm(request, "projects")
     conn = get_db()
     try:
         client = (body.client or "").strip()
@@ -1057,7 +1191,7 @@ def api_project_create(body: ProjectBody, request: Request):
 
 @app.put("/api/projects/{pid}")
 def api_project_update(pid: int, body: ProjectBody, request: Request):
-    _require_admin(request)
+    _require_perm(request, "projects")
     conn = get_db()
     try:
         row = conn.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
@@ -1077,7 +1211,7 @@ def api_project_update(pid: int, body: ProjectBody, request: Request):
 
 @app.delete("/api/projects/{pid}")
 def api_project_delete(pid: int, request: Request):
-    _require_admin(request)
+    _require_perm(request, "projects")
     conn = get_db()
     try:
         conn.execute("DELETE FROM projects WHERE id=?", (pid,))
@@ -1353,7 +1487,7 @@ def api_pricing_list(request: Request):
 
 @app.post("/api/pricing")
 def api_pricing_create(body: PricingUpdate, request: Request):
-    _require_admin(request)
+    _require_perm(request, "pricing")
     conn = get_db()
     try:
         title = (body.title or "").strip()
@@ -1376,7 +1510,7 @@ def api_pricing_create(body: PricingUpdate, request: Request):
 
 @app.put("/api/pricing/{pid}")
 def api_pricing_update(pid: int, body: PricingUpdate, request: Request):
-    _require_admin(request)
+    _require_perm(request, "pricing")
     conn = get_db()
     try:
         row = conn.execute("SELECT * FROM pricing WHERE id=?", (pid,)).fetchone()
@@ -1408,7 +1542,7 @@ def api_pricing_update(pid: int, body: PricingUpdate, request: Request):
 
 @app.delete("/api/pricing/{pid}")
 def api_pricing_delete(pid: int, request: Request):
-    _require_admin(request)
+    _require_perm(request, "pricing")
     conn = get_db()
     try:
         row = conn.execute("SELECT * FROM pricing WHERE id=?", (pid,)).fetchone()
@@ -1425,7 +1559,7 @@ def api_pricing_delete(pid: int, request: Request):
 def api_pricing_apply(pid: int, request: Request):
     """Push this title's rates onto every resource using it (null rates kept
     as-is so an unpriced title can't zero out resources)."""
-    _require_admin(request)
+    _require_perm(request, "pricing")
     conn = get_db()
     try:
         row = conn.execute("SELECT * FROM pricing WHERE id=?", (pid,)).fetchone()
@@ -1459,7 +1593,7 @@ def api_pricing_apply(pid: int, request: Request):
 def api_pricing_apply_all(request: Request):
     """Push EVERY title's rates onto all resources using them, then every
     total (Onsite/Offshore/Dashboard) reflects the Pricing tab."""
-    _require_admin(request)
+    _require_perm(request, "pricing")
     conn = get_db()
     try:
         rows = conn.execute(
@@ -1528,6 +1662,8 @@ async def api_import(file: UploadFile = File(...), mode: str = Form("merge"), re
         finally:
             conn.close()
 
+    # Admin import (non-PM): gated behind the import_export permission.
+    _require_perm(request, "import_export")
     try:
         parsed = importer.parse_workbook_bytes(data)
     except Exception as e:  # noqa: BLE001
@@ -1772,6 +1908,8 @@ def api_export(request: Request):
                 media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 headers={"Content-Disposition": 'attachment; filename="Actuals_export.xlsx"'},
             )
+        # Admin export (non-PM): gated behind the import_export permission.
+        _require_perm(request, "import_export")
         dash = build_dashboard_rows(resources, weeks)
         pricing = conn.execute(
             "SELECT title, rate, offshore_rate, currency FROM pricing ORDER BY sort_order, title"

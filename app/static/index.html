@@ -161,6 +161,21 @@
         <tbody id="pmBody"></tbody>
       </table>
     </div>
+
+    <!-- Admin management section (mirrors PMs; granular permissions) -->
+    <div class="toolbar glass pm-toolbar">
+      <div class="sheet-note"><span class="dot on"></span><b>Admin management</b> — create admin accounts and choose which admin options each one gets. Rijoy stays the biggest admin (full access, cannot be removed).</div>
+      <div class="toolbar-right">
+        <button class="btn mini" id="btnAddAdmin">+ Add Admin</button>
+      </div>
+    </div>
+    <div class="table-wrap glass narrow" id="adminWrap">
+      <table id="adminTable">
+        <thead id="adminHead"></thead>
+        <tbody id="adminBody"></tbody>
+      </table>
+    </div>
+
     <div class="table-wrap glass narrow" id="capWrap">
       <table id="capTable">
         <thead id="capHead"></thead>
@@ -249,7 +264,7 @@
   </div>
 </div>
 
-<script src="/app.js?v=64"></script>
+<script src="/app.js?v=65"></script>
 <script>
   // PWA: register the service worker (only after load; skip on failure)
   if ("serviceWorker" in navigator) {
