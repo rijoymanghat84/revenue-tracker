@@ -103,21 +103,30 @@ function showApp() {
   $("#loginView").classList.add("hidden");
   $("#topbar").classList.remove("hidden");
   const isAdmin = state.me.role === "admin";
-  // PMs see Actuals + Utilization (scoped to their clients); admin sees all
+  const perms = new Set(state.me.permissions || []);
+  const can = (p) => !isAdmin || perms.has(p);
+  // Map each tab to the permission that unlocks it. PMs (non-admin) always see
+  // Actuals + Utilization; admins see only what their permissions allow.
+  const tabPerm = { dash: "dashboard", planned: "resources", actuals: "actuals", pricing: "pricing", util: "utilization" };
   $$(".tab").forEach((t) => {
-    const adminOnly = ["dash", "pricing", "planned"].includes(t.dataset.tab);
-    t.style.display = (isAdmin || !adminOnly) ? "" : "none";
+    const p = tabPerm[t.dataset.tab];
+    t.style.display = (isAdmin ? (p ? can(p) : true) : (p === "actuals" || p === "utilization")) ? "" : "none";
   });
-  $("#btnImport").style.display = isAdmin ? "" : "none";
-  $("#btnExport").style.display = isAdmin ? "" : "none";
-  $("#importMode").style.display = isAdmin ? "" : "none";
+  // Admin write actions gated by permissions (super-admin has all).
+  $("#btnImport").style.display = (isAdmin && can("import_export")) ? "" : "none";
+  $("#btnExport").style.display = (isAdmin && can("import_export")) ? "" : "none";
+  $("#importMode").style.display = (isAdmin && can("import_export")) ? "" : "none";
+  $("#btnAddProject").style.display = (isAdmin && can("projects")) ? "" : "none";
   $("#btnAdd").style.display = "none";
+  const visibleTabs = $$(".tab").filter((t) => t.style.display !== "none");
+  const names = visibleTabs.map((t) => t.textContent.trim()).join(" · ");
   $("#subLine").textContent = isAdmin
-    ? "Planned · Actuals · Dashboard · Pricing · Utilization"
+    ? (names ? names : "No permissions assigned")
     : `Actuals · Utilization — signed in as ${esc(state.me.username)}`;
+  // PMs land on Actuals. Admins land on their first permitted tab so they
+  // never see a view they lack permission for.
   if (!isAdmin) {
     state.view = "actuals";
-    // show only the actuals + utilization views
     $$(".tab").forEach((x) => x.classList.toggle("active", x.dataset.tab === "actuals"));
     $("#gridView").classList.add("hidden");
     $("#dashView").classList.add("hidden");
@@ -126,6 +135,8 @@ function showApp() {
     $("#actualsView").classList.remove("hidden");
     loadActuals();
   } else {
+    const firstTab = visibleTabs[0];
+    if (firstTab) { switchView(firstTab.dataset.tab); return; }
     loadState();
   }
 }
@@ -714,6 +725,7 @@ function renderPricing() {
   html += "</tbody>";
   $("#pricingBody").innerHTML = html;
   renderPMs();
+  renderAdmins();
   renderCapacity();
   renderDbSec();
 }
@@ -807,18 +819,22 @@ $("#btnApplyAll").addEventListener("click", async () => {
   btn.disabled = false; btn.textContent = "Update All Pricing";
 });
 
-/* ---------------- PM assignment + capacity ---------------- */
+/* ---------------- PM assignment + capacity + admin management ---------------- */
 let users = [], projects = [], projectOwners = {};
-let editingUser = null;
+let admins = [], permCatalog = [];
+let editingUser = null, editingAdmin = null;
 let loadPMDataStarted = false;
 
 async function loadPMData() {
   try {
     const [u, p, o] = await Promise.all([api("/api/users"), api("/api/projects"), api("/api/project-owners")]);
     users = u; projects = p;
+    admins = u.filter((x) => x.role === "admin");
     // projectOwners: map "client|project" -> pm username
     projectOwners = {};
     (o || []).forEach((x) => { projectOwners[`${x.client}|${x.project}`] = x.pm; });
+    try { permCatalog = (await api("/api/permissions")).permissions || []; }
+    catch (_) { permCatalog = []; }
   } catch (e) { toast(`PM data failed: ${e.message}`, true); }
 }
 
@@ -957,6 +973,96 @@ $("#pmBody").addEventListener("click", async (e) => {
 function unameOf(uid) { const u = users.find((x) => x.id === uid); return u ? u.username : "this PM"; }
 
 $("#btnAddUser").addEventListener("click", () => { editingUser = -1; renderPMs(); });
+
+/* ---------------- Admin management (mirrors PMs + granular permissions) ---------------- */
+function permCheckboxes(selected) {
+  const sel = new Set(selected || []);
+  if (!permCatalog.length) return '<span class="dim">(no permissions catalog — reload)</span>';
+  return permCatalog.map((p) => {
+    const checked = sel.has(p.key);
+    return `<label class="pm-proj"><input type="checkbox" value="${esc(p.key)}" data-perm="${esc(p.key)}"${checked ? " checked" : ""}> ${esc(p.label)}</label>`;
+  }).join("");
+}
+
+function renderAdmins() {
+  const head = $("#adminHead");
+  head.innerHTML = `<tr><th>Admin</th><th>Permissions</th><th></th></tr>`;
+  let html = "<tbody>";
+  if (!admins.length) html += `<tr><td colspan="3" class="dim">No admin accounts yet — click + Add Admin.</td></tr>`;
+  for (const u of admins) {
+    if (editingAdmin === u.id) {
+      html += `<tr class="p-res p-edit" data-aid="${u.id}">
+        <td>
+          <input class="rate-inp txt" data-field="username" value="${esc(u.username)}" disabled>
+          <input class="rate-inp txt pm-pw" data-field="password" type="password" placeholder="New password (leave blank to keep)" autocomplete="new-password">
+        </td>
+        <td><div class="pm-projs">${permCheckboxes(u.permissions)}</div></td>
+        <td><button class="btn mini save">Save</button> <button class="btn mini cancel">Cancel</button></td>
+      </tr>`;
+    } else {
+      const permTxt = (u.permissions || []).length
+        ? u.permissions.map((p) => {
+            const c = permCatalog.find((x) => x.key === p);
+            return c ? c.label : p;
+          }).join(", ")
+        : "—";
+      html += `<tr class="p-res" data-aid="${u.id}">
+        <td>${esc(u.username)}</td>
+        <td class="dim">${esc(permTxt)}</td>
+        <td><button class="btn mini edit">Edit</button> <button class="del" title="Delete Admin">✕</button></td>
+      </tr>`;
+    }
+  }
+  if (editingAdmin === -1) {
+    html += `<tr class="p-res p-edit" data-aid="-1">
+      <td>
+        <input class="rate-inp txt" data-field="username" placeholder="Admin username" autocomplete="off">
+        <input class="rate-inp txt pm-pw" data-field="password" type="password" placeholder="Password" autocomplete="new-password">
+      </td>
+      <td><div class="pm-projs">${permCheckboxes([])}</div></td>
+      <td><button class="btn mini save">Save</button> <button class="btn mini cancel">Cancel</button></td>
+    </tr>`;
+  }
+  html += "</tbody>";
+  $("#adminBody").innerHTML = html;
+}
+
+function adminUnameOf(aid) { const a = admins.find((x) => x.id === aid); return a ? a.username : "this Admin"; }
+
+$("#adminBody").addEventListener("click", async (e) => {
+  const tr = e.target.closest("tr[data-aid]");
+  if (!tr) return;
+  const aid = +tr.dataset.aid;
+  if (e.target.closest(".edit")) { editingAdmin = aid; renderAdmins(); return; }
+  if (e.target.closest(".cancel")) { editingAdmin = null; renderAdmins(); return; }
+  if (e.target.closest(".save")) {
+    const uname = (tr.querySelector('[data-field="username"]')?.value || "").trim();
+    const pw = (tr.querySelector('[data-field="password"]')?.value || "").trim();
+    const perms = Array.from(tr.querySelectorAll('input[data-perm]:checked')).map((c) => c.dataset.perm);
+    if (!uname) { toast("Admin username required", true); return; }
+    if (aid === -1 && !pw) { toast("Password required for new admin", true); return; }
+    const btn = tr.querySelector(".save"); btn.disabled = true; btn.textContent = "…";
+    try {
+      if (aid === -1) {
+        await api("/api/users", { method: "POST", body: JSON.stringify({ username: uname, password: pw, role: "admin", permissions: perms }) });
+      } else {
+        const body = { permissions: perms };
+        if (pw) body.password = pw;
+        await api(`/api/users/${aid}`, { method: "PUT", body: JSON.stringify(body) });
+      }
+      editingAdmin = null;
+      toast("Admin saved");
+      await loadPMData(); renderAdmins();
+    } catch (err) { toast(`Admin save failed: ${err.message}`, true); btn.disabled = false; btn.textContent = "Save"; }
+    return;
+  }
+  if (e.target.closest(".del")) {
+    if (!confirm(`Delete admin "${adminUnameOf(aid)}"?`)) return;
+    try { await api(`/api/users/${aid}`, { method: "DELETE" }); await loadPMData(); renderAdmins(); }
+    catch (err) { toast(`Delete failed: ${err.message}`, true); }
+  }
+});
+$("#btnAddAdmin").addEventListener("click", () => { editingAdmin = -1; renderAdmins(); });
 
 // capacity save (debounced)
 let capTimer = null;
