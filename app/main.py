@@ -1954,4 +1954,26 @@ def healthz():
     return {"ok": True}
 
 
+def _deployed_commit() -> str:
+    """Best-effort short SHA of the currently deployed code (from git HEAD)."""
+    try:
+        head = BASE / ".git" / "HEAD"
+        if not head.exists():
+            return ""
+        ref = head.read_text().strip()
+        if ref.startswith("ref: "):
+            ref_path = BASE / ".git" / ref[5:]
+            if ref_path.exists():
+                return ref_path.read_text().strip()[:7]
+        return ref[:7]
+    except Exception:
+        return ""
+
+
+@app.get("/api/version")
+def api_version():
+    """Report the deployed commit so the frontend can detect pending updates."""
+    return {"commit": _deployed_commit()}
+
+
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
