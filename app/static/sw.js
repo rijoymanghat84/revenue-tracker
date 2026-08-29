@@ -10,7 +10,7 @@
      fresh and private. Only 200 responses are ever stored — never 401s — so
      the basic-auth gate can't be poisoned.
 */
-const CACHE = "revenue-v5";
+const CACHE = "revenue-v6";
 const SHELL = ["/", "/styles.css", "/app.js", "/manifest.webmanifest",
                "/icons/icon-192.png", "/icons/icon-512.png"];
 

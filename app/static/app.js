@@ -729,7 +729,6 @@ function renderPricing() {
   renderCapacity();
   renderDbSec();
 }
-
 function readEditRow(tr) {
   const g = (f) => tr.querySelector(`[data-field="${f}"]`);
   return {
@@ -855,9 +854,10 @@ function projectCheckboxes(selected, selfUsername) {
 
 function renderPMs() {
   $("#pmHead").innerHTML = `<tr><th>PM</th><th>Assigned Client / Project</th><th></th></tr>`;
+  const pms = users.filter((u) => u.role !== "admin");
   let html = "<tbody>";
-  if (!users.length) html += `<tr><td colspan="3" class="dim">No PMs yet — click + Add PM.</td></tr>`;
-  for (const u of users) {
+  if (!pms.length) html += `<tr><td colspan="3" class="dim">No PMs yet — click + Add PM.</td></tr>`;
+  for (const u of pms) {
     if (editingUser === u.id) {
       html += `<tr class="p-res p-edit" data-uid="${u.id}">
         <td>
@@ -985,6 +985,12 @@ function permCheckboxes(selected) {
 }
 
 function renderAdmins() {
+  // Only Rijoy (super-admin) manages admin accounts. Regular admins and PMs
+  // never see this section at all.
+  const isSuper = state.me && state.me.super_admin;
+  $("#adminToolbar").style.display = isSuper ? "" : "none";
+  $("#adminWrap").style.display = isSuper ? "" : "none";
+  if (!isSuper) { editingAdmin = null; return; }
   const head = $("#adminHead");
   head.innerHTML = `<tr><th>Admin</th><th>Permissions</th><th></th></tr>`;
   let html = "<tbody>";
