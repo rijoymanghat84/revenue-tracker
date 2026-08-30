@@ -368,6 +368,32 @@ tr.p-edit .rate-inp, tr.p-edit .cur-sel { border-color: var(--accent); }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 .toast.err { border-color: var(--red); color: var(--red); }
 
+/* ---------- update banner (discreet, flashing) ---------- */
+.update-banner {
+  position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
+  z-index: 150; display: flex; align-items: center; gap: 10px;
+  background: rgba(16,22,42,0.94); border: 1px solid var(--border-strong);
+  border-radius: 12px; padding: 9px 16px; font-size: 13px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.5); max-width: 90vw;
+  animation: updateFlash 2.4s ease-in-out infinite;
+}
+.update-banner.hidden { display: none; }
+.update-banner-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto;
+  background: var(--accent); box-shadow: 0 0 8px var(--accent);
+}
+.update-banner a { color: var(--accent); font-weight: 600; text-decoration: none; }
+.update-banner a:hover { text-decoration: underline; }
+.update-banner-close {
+  border: 0; background: transparent; color: var(--muted); cursor: pointer;
+  font-size: 14px; line-height: 1; padding: 2px 4px; margin-left: 2px;
+}
+.update-banner-close:hover { color: var(--text); }
+@keyframes updateFlash {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
 .modal { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.55); }
 .modal.hidden { display: none; }
 .modal-box { width: min(560px, 92vw); padding: 18px 22px; }

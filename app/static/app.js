@@ -90,7 +90,45 @@ async function boot() {
   } catch (e) {
     showLogin();
   }
+  checkForUpdate();
 }
+
+/* ---------------- update check (discreet flashing banner) ---------------- */
+const UPDATE_REPO = "rijoymanghat84/revenue-tracker";
+const UPDATE_BRANCH = "main";
+let updateDismissed = false;
+
+async function checkForUpdate() {
+  try {
+    const ver = await api("/api/version");
+    const deployed = (ver.commit || "").toLowerCase();
+    if (!deployed) return; // no git HEAD available — nothing to compare
+    // Compare against the latest commit on the default branch (public repo).
+    const res = await fetch(
+      `https://api.github.com/repos/${UPDATE_REPO}/commits/${UPDATE_BRANCH}`,
+      { headers: { Accept: "application/vnd.github+json" } }
+    );
+    if (!res.ok) return; // offline / rate-limited — stay quiet
+    const latest = (await res.json()).sha || "";
+    if (!latest) return;
+    if (latest.toLowerCase().startsWith(deployed)) return; // up to date
+    showUpdateBanner();
+  } catch (_) {
+    /* network hiccup — never block the app on the update check */
+  }
+}
+
+function showUpdateBanner() {
+  if (updateDismissed) return;
+  const b = $("#updateBanner");
+  if (!b) return;
+  b.classList.remove("hidden");
+}
+
+$("#updateBannerClose").addEventListener("click", () => {
+  updateDismissed = true;
+  $("#updateBanner").classList.add("hidden");
+});
 
 function showLogin() {
   $("#loginView").classList.remove("hidden");
