@@ -10,10 +10,18 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icons/icon-192.png">
 <title>Revenue Recon</title>
-<link rel="stylesheet" href="/styles.css?v=46">
+<link rel="stylesheet" href="/styles.css?v=47">
 </head>
 <body>
 <div class="bg-glow"></div>
+
+<!-- ============ UPDATE BANNER (discreet, flashing) ============ -->
+<div id="updateBanner" class="update-banner hidden">
+  <span class="update-banner-dot"></span>
+  <span id="updateBannerText">A new version is available.</span>
+  <a id="updateBannerLink" href="https://github.com/rijoymanghat84/revenue-tracker" target="_blank" rel="noopener">View update</a>
+  <button class="update-banner-close" id="updateBannerClose" title="Dismiss">✕</button>
+</div>
 
 <!-- ============ LOGIN ============ -->
 <div id="loginView" class="login-wrap hidden">
@@ -266,7 +274,7 @@
   </div>
 </div>
 
-<script src="/app.js?v=67"></script>
+<script src="/app.js?v=68"></script>
 <script>
   // PWA: register the service worker (only after load; skip on failure)
   if ("serviceWorker" in navigator) {
