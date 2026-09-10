@@ -13,7 +13,7 @@ Covers:
     creating the same username as admin then as PM (or vice versa) is a 409.
 """
 import os, sys, json, tempfile, shutil
-sys.path.insert(0, "/opt/data/revenue-tracker")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import app.main as m
 

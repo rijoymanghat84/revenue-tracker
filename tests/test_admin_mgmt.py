@@ -5,7 +5,7 @@ then drives the TestClient: login as super-admin, create an admin with
 permissions, verify permission gating, verify the last-admin safeguard.
 """
 import os, sys, json, tempfile, shutil
-sys.path.insert(0, "/opt/data/revenue-tracker")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import app.main as m
 
