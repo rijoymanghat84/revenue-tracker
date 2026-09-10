@@ -1501,8 +1501,8 @@ async function actualsPrompt(rid, w, hours) {
   const actual = hours[w] || 0;
   const overage = actual - planned;
   const note = (r && r.actual_notes && r.actual_notes[w]) || {};
-  const weekLabel = actualsData.weeks[w] || `week ${w + 1}`;
-  const who = r ? r.name : "";
+  const weekLabel = esc(actualsData.weeks[w] || `week ${w + 1}`);
+  const who = esc(r ? r.name : "");
 
   if (overage < 0) {
     // under-delivery: mandatory comment

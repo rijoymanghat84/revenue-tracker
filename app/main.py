@@ -90,6 +90,8 @@ def get_db() -> sqlite3.Connection:
     conn.row_factory = _cipher.Row if _HAS_CIPHER else sqlite3.Row
     key = _db_key()
     if key:
+        if "'" in key:
+            raise RuntimeError("DB key must not contain a single quote")
         conn.execute(f"PRAGMA key='{key}'")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
@@ -117,6 +119,8 @@ def encrypt_db_in_place(pw: str) -> None:
     if enc_path.exists():
         enc_path.unlink()
     enc = _cipher.connect(str(enc_path))
+    if "'" in pw:
+        raise RuntimeError("DB password must not contain a single quote")
     enc.execute(f"PRAGMA key='{pw}'")
     enc.execute("PRAGMA cipher_migrate")
     plain.execute("ATTACH DATABASE ? AS encrypted KEY ?", (str(enc_path), pw))
@@ -912,11 +916,16 @@ def api_actuals(request: Request):
             resources = [r for r in resources
                          if not (r["project"] or "").strip()
                          or _pm_owns(projs, (r["client"] or "").strip(), (r["project"] or "").strip())]
-        # Strip rates for PMs
+        # Strip rates for PMs — and the derived money fields that would let a
+        # PM recover the billing rate (total_cost = rate × hours, expense =
+        # offshore_rate × hours). Nulling rate alone is not enough.
         if user.get("r") == "pm":
             for r in resources:
                 r["rate"] = None
                 r["offshore_rate"] = None
+                r["total_cost"] = None
+                r["expense"] = None
+                r["difference"] = None
         return {"weeks": weeks, "months": _load_layout()[1], "resources": resources,
                 "role": user["r"], "username": user["u"], "year": 2026}
     finally:
@@ -1157,7 +1166,11 @@ def api_db_password(body: DbPasswordBody, request: Request):
             conn = _cipher.connect(str(DB_PATH))
             cur = _db_key()
             if cur:
+                if "'" in cur:
+                    raise HTTPException(500, "Current DB key contains a single quote — re-key manually")
                 conn.execute(f"PRAGMA key='{cur}'")
+            if "'" in pw:
+                raise HTTPException(400, "DB password must not contain a single quote")
             conn.execute(f"PRAGMA rekey='{pw}'")
             conn.commit()
             conn.close()
@@ -1659,9 +1672,39 @@ async def api_import(file: UploadFile = File(...), mode: str = Form("merge"), re
             parsed_actuals = importer.parse_actuals_sheet(data)
             res_by_key = {
                 (_norm(r["client"]), _norm(r["name"])): r
-                for r in conn.execute("SELECT id, client, project, name FROM resources").fetchall()
+                for r in conn.execute("SELECT id, client, project, name, capacity FROM resources").fetchall()
             }
             added = 0
+            problems = []
+            for pa in parsed_actuals:
+                cur = res_by_key.get((_norm(pa["client"]), _norm(pa["name"])))
+                if not cur:
+                    continue
+                proj = (cur["project"] or "").strip()
+                client = (cur["client"] or "").strip()
+                if proj and not _pm_owns(projs, client, proj):
+                    continue  # not this PM's project — skip
+                rid = cur["id"]
+                # Enforce the same reconciliation rules as the UI: an import
+                # must not silently bypass the OT/approval/comment flow.
+                planned = _hours_map(rid, conn)
+                capacity = cur.get("capacity") or 40.0
+                for i, h in enumerate(pa["hours"]):
+                    if not h:
+                        continue
+                    v = _validate_actual_week(planned.get(i, 0.0), h, capacity, {})
+                    if v["status"] != "ok":
+                        problems.append({
+                            "resource": cur["name"], "week": i,
+                            "status": v["status"], "overage": v["overage"],
+                        })
+            if problems:
+                raise HTTPException(400, {
+                    "detail": "Import rejected — actuals violate reconciliation rules "
+                              "(OT approval / under-delivery comment required). "
+                              "Fix these rows or enter them via the Actuals tab.",
+                    "problems": problems[:20],
+                })
             for pa in parsed_actuals:
                 cur = res_by_key.get((_norm(pa["client"]), _norm(pa["name"])))
                 if not cur:
