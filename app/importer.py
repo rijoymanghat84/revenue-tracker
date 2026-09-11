@@ -292,8 +292,8 @@ def build_workbook(weeks: list[str], months: list[dict],
     ws_d = wb.active
     ws_d.title = "Dashboard"
     headers = ["Country", "Client", "Project", "Resource(s)", "Planned Revenue",
-               "Planned Expense", "Planned Savings", "Actual Revenue",
-               "Actual Expense", "Actual Savings"]
+               "Planned Expense", "Planned Savings", "Revenue till date",
+               "Expense till date", "Savings till date"]
     for c, h in enumerate(headers, start=1):
         cell = ws_d.cell(1, c, h)
         cell.font = Font(bold=True)
