@@ -230,32 +230,102 @@ $("#globalMonth").addEventListener("change", (e) => {
 
 const MODES = {
   planned: {
-    rateFields: ["rate", "offshore_rate"],
-    rateLabels: ["Rate", "Offshore Rate"],
-    hoursEditable: true,
-    metaEditable: true,
     note: "PLANNED hours — what you CHARGE (Rate) and what it COSTS (Offshore Rate). Enter hours & both rates. Pick a Title from Pricing to auto-fill both.",
     dot: "on",
   },
 };
 
 /* ---------------- combined grid (Planned: both rate sides) ---------------- */
-const N_META = 5;          // Country..Title fields under the group label
-const N_LOCKED = 10;       // sticky-left: Country, Client, Project, Name, Title, Rate, OffRate, TH, TR, TE
-const WEEKS_START = 10;    // cell index where weeks begin (0-based children)
 
+/*
+ * Column registry — single source of truth for BOTH grids.
+ * Each def: key | header label | width | type (meta field / rate / calc subtotal).
+ * `meta`/`rate` columns carry the group row's identity label; `calc` columns get
+ * their own subtotal cell on the group row. Visibility + freeze are per-view,
+ * persisted in localStorage (see viewPrefs / savePrefs).
+ */
+const COLUMNS = {
+  planned: [
+    { key: "country", h: "Country",       w: 70,  meta: true, field: "country" },
+    { key: "client",  h: "Client",        w: 150, meta: true, field: "client" },
+    { key: "project", h: "Project",       w: 140, meta: true, field: "project" },
+    { key: "name",    h: "Resource Name", w: 160, meta: true, field: "name" },
+    { key: "title",   h: "Title",         w: 160, meta: true, field: "role", dropdown: true },
+    { key: "rate",    h: "Rate",          w: 90,  rate: "rate" },
+    { key: "offrate", h: "Offshore Rate", w: 90,  rate: "offshore_rate" },
+    { key: "th",      h: "Total Hours",   w: 90,  calc: "total_hrs", dim: true },
+    { key: "tr",      h: "Total Revenue", w: 110, calc: "total_rev" },
+    { key: "te",      h: "Total Expense", w: 110, calc: "total_exp", dim: true },
+  ],
+  actuals: [
+    { key: "country", h: "Country",       w: 70,  meta: true },
+    { key: "client",  h: "Client",        w: 150, meta: true },
+    { key: "project", h: "Project",       w: 140, meta: true },
+    { key: "name",    h: "Resource Name", w: 160, meta: true },
+    { key: "title",   h: "Title",         w: 160, meta: true },
+    { key: "planned", h: "Planned",       w: 70,  calc: "total_planned" },
+    { key: "actual",  h: "Actual",        w: 70,  calc: "total_actual" },
+    { key: "delta",   h: "Δ",             w: 70,  calc: "delta" },
+  ],
+};
+
+/* ---------------- combined grid (Planned: both rate sides) ---------------- */
+
+function defaultPrefs(view) {
+  return { hidden: [], freeze: COLUMNS[view].length };
+}
+function viewPrefs(view) {
+  let p = null;
+  try { p = JSON.parse(localStorage.getItem("revCols_" + view) || "null"); } catch (_) { p = null; }
+  if (!p || typeof p !== "object") p = defaultPrefs(view);
+  const allKeys = COLUMNS[view].map((c) => c.key);
+  const hidden = Array.isArray(p.hidden) ? p.hidden.filter((k) => allKeys.includes(k)) : [];
+  let freeze = Number(p.freeze);
+  if (!Number.isFinite(freeze)) freeze = COLUMNS[view].length;
+  freeze = Math.max(0, Math.min(freeze, allKeys.length - hidden.length));
+  return { hidden, freeze };
+}
+function savePrefs(view, prefs) {
+  try { localStorage.setItem("revCols_" + view, JSON.stringify(prefs)); } catch (_) {}
+}
+function visibleCols(view) {
+  const p = viewPrefs(view);
+  return COLUMNS[view].filter((c) => !p.hidden.includes(c.key));
+}
+// effective contiguous freeze count = clamp(prefs.freeze) on the VISIBLE set
+function frozenCount(view) {
+  const p = viewPrefs(view);
+  return Math.max(0, Math.min(p.freeze, visibleCols(view).length));
+}
+// does the group row's identity label stay frozen (i.e. the entire non-calc block is pinned)?
+function labelFrozen(view) {
+  const vis = visibleCols(view);
+  const fz = frozenCount(view);
+  const labelEnd = vis.findIndex((c) => c.calc) ; // first calc column position
+  const labelCount = labelEnd === -1 ? vis.length : labelEnd;
+  return fz >= labelCount;
+}
+
+/* Build the 3-row sticky header for ANY grid from the visible column registry.
+   Frozen columns (idx <= frozenCount) get sc-pinned cells; unfrozen ones render
+   as plain (non-sticky) headers that scroll away with the weeks. */
 function gridHeadHTML() {
-  const weeks = state.weeks, months = state.months, mode = MODES[state.view];
+  const weeks = state.weeks, months = state.months;
+  const view = state.view;
   const vis = visibleWeekIndices();
-  const colHeads = [["Country", "sc1"], ["Client", "sc2"], ["Project", "sc3"], ["Resource Name", "sc4"],
-                    ["Title", "sc5"], [esc(mode.rateLabels[0]), "sc6"], [esc(mode.rateLabels[1]), "sc7"],
-                    ["Total Hours", "sc8"], ["Total Revenue", "sc9"], ["Total Expense", "sc10"]];
-  const headCells = colHeads.map(([h, sc]) =>
-    `<th class="sticky-h ${sc} colh">${h}</th>`).join("");
+  const cols = visibleCols(view);
+  const fz = frozenCount(view);
+  const headCells = cols.map((c, i) => {
+    const idx = i + 1;
+    const cls = idx <= fz ? `sticky-h sc${idx} colh` : "colh";
+    return `<th class="${cls}">${esc(c.h)}</th>`;
+  }).join("");
   const headBlank = (n) => (n > 0 ? "<th></th>".repeat(n) : "");
-  const stickySpacers = Array.from({ length: N_LOCKED }, (_, i) =>
-    `<th class="sticky-h sc${i + 1}"></th>`).join("");
-  // month bands only for visible weeks
+  // month/week spacer row: frozen columns get a pinned blank; others are plain
+  const spacers = cols.map((c, i) => {
+    const idx = i + 1;
+    return idx <= fz ? `<th class="sticky-h sc${idx}"></th>` : "<th></th>";
+  }).join("");
   const monthCells = months.filter((m) => m.end >= vis[0] && m.start <= vis[vis.length - 1])
     .map((m) => {
       const s = Math.max(m.start, vis[0]), e = Math.min(m.end, vis[vis.length - 1]);
@@ -267,14 +337,14 @@ function gridHeadHTML() {
             ${headCells}
             ${headBlank(vis.length)}${actionBlank}
           </tr>
-          <tr class="month-row">${stickySpacers}${monthCells}${actionBlank}</tr>
-          <tr class="week-row">${stickySpacers}${weekCells}${actionBlank}</tr>`;
+          <tr class="month-row">${spacers}${monthCells}${actionBlank}</tr>
+          <tr class="week-row">${spacers}${weekCells}${actionBlank}</tr>`;
 }
 
 function colgroupHTML() {
-  const metaW = [70, 150, 140, 160, 160, 90, 90, 90, 110, 110];
+  const cols = visibleCols(state.view);
   let s = "<colgroup>";
-  metaW.forEach((w) => { s += `<col style="width:${w}px">`; });
+  cols.forEach((c) => { s += `<col style="width:${c.w}px">`; });
   for (let i = 0; i < visibleWeekIndices().length; i++) s += '<col style="width:54px">';
   s += '<col style="width:40px">';
   return s + "</colgroup>";
@@ -319,29 +389,36 @@ function gridRowHTML(r) {
     : `<input class="inp mirror" type="number" step="0.25" min="0" disabled value="${h ? h : ""}" data-week="${i}">`;
   let weekCells = "";
   vis.forEach((i) => { const h = hours[i] || 0; weekCells += `<td class="week${es.hours ? "" : " mirror-cell"}">${weekCell(h, i)}</td>`; });
-
   const delBtn = es.meta ? `<button class="del" title="Delete resource">✕</button>` : "";
   const cur = gridCurrencyTag(r);
-  const titleCell = es.meta
-    ? titleSelectHTML(r)
-    : `<span class="mirror-val">${esc(r.role || "—")}</span>`;
-  const rateCell = (field, label) => {
-    const val = field === "offshore_rate" ? offRate : rate;
-    return es.meta
-      ? `${cur}<input class="inp num" type="number" min="0" step="any" data-field="${field}" value="${val ?? ""}" placeholder="—" title="${label} (auto-fills from Title)">`
-      : `<span class="mirror-val">${cur}${val !== null && val !== undefined ? fmt(val) : "—"}</span>`;
-  };
+  // registry-driven cell emission (same order as the header / colgroup)
+  const cols = visibleCols(state.view);
+  const fz = frozenCount(state.view);
+  const cells = cols.map((c, i) => {
+    const idx = i + 1;
+    const sticky = idx <= fz ? ` sticky-l sc${idx}` : "";
+    if (c.meta && c.field) {
+      const body = c.key === "title"
+        ? (es.meta ? titleSelectHTML(r) : `<span class="mirror-val">${esc(r.role || "—")}</span>`)
+        : metaCell(r, c.field, es.meta);
+      return `<td class="${sticky} meta-col">${body}</td>`;
+    }
+    if (c.rate) {
+      const val = c.rate === "offshore_rate" ? offRate : rate;
+      const body = es.meta
+        ? `${cur}<input class="inp num" type="number" min="0" step="any" data-field="${c.rate}" value="${val ?? ""}" placeholder="—" title="${c.h} (auto-fills from Title)">`
+        : `<span class="mirror-val">${cur}${val !== null && val !== undefined ? fmt(val) : "—"}</span>`;
+      return `<td class="${sticky} meta-col num-cell">${body}</td>`;
+    }
+    if (c.calc) {
+      const v = c.calc === "total_hrs" ? total : c.calc === "total_rev" ? rev : cost;
+      const dimCls = c.dim ? " dim" : "";
+      return `<td class="${sticky} calc${dimCls}" data-calc="${c.calc}">${fmt(v, c.calc === "total_hrs" ? 1 : 2)}</td>`;
+    }
+    return `<td${sticky ? ` class="${sticky}"` : ""}></td>`;
+  }).join("");
   return `<tr class="resource-row" data-rid="${r.id}">
-    <td class="sticky-l sc1 meta-col">${metaCell(r, "country", es.meta)}</td>
-    <td class="sticky-l sc2 meta-col">${metaCell(r, "client", es.meta)}</td>
-    <td class="sticky-l sc3 meta-col">${metaCell(r, "project", es.meta)}</td>
-    <td class="sticky-l sc4 meta-col">${metaCell(r, "name", es.meta)}</td>
-    <td class="sticky-l sc5 meta-col">${titleCell}</td>
-    <td class="sticky-l sc6 meta-col num-cell">${rateCell("rate", mode.rateLabels[0])}</td>
-    <td class="sticky-l sc7 meta-col num-cell">${rateCell("offshore_rate", mode.rateLabels[1])}</td>
-    <td class="sticky-l sc8 calc dim" data-calc="total_hrs">${fmt(total, 1)}</td>
-    <td class="sticky-l sc9 calc" data-calc="total_rev">${fmt(rev)}</td>
-    <td class="sticky-l sc10 calc dim" data-calc="total_exp">${fmt(cost)}</td>
+    ${cells}
     ${weekCells}
     <td>${es.meta ? `<button class="edit-res" title="Edit resource">✎</button>` : ""}${delBtn}</td>
   </tr>`;
@@ -357,16 +434,18 @@ function alignSticky() {
   const els = document.querySelectorAll("#gridHead [class*=sc], #gridBody [class*=sc]");
   els.forEach((el) => { el.style.left = ""; el.style.position = "static"; });
   const tLeft = table.getBoundingClientRect().left;
+  const fz = frozenCount(state.view);
   const xs = [];
-  for (let i = 1; i <= N_LOCKED; i++) {
-    const cell = probe.children[i - 1];
+  for (let i = 0; i < fz; i++) {
+    const cell = probe.children[i];
     xs.push(cell ? Math.round(cell.getBoundingClientRect().left - tLeft) : null);
   }
   els.forEach((el) => { el.style.position = ""; });
-  for (let i = 1; i <= N_LOCKED; i++) {
-    if (xs[i - 1] === null) continue;
-    document.querySelectorAll(`#gridHead .sc${i}, #gridBody .sc${i}`).forEach((el) => {
-      el.style.left = `${xs[i - 1]}px`;
+  for (let i = 0; i < fz; i++) {
+    if (xs[i] === null) continue;
+    const idx = i + 1;
+    document.querySelectorAll(`#gridHead .sc${idx}, #gridBody .sc${idx}`).forEach((el) => {
+      el.style.left = `${xs[i]}px`;
     });
   }
   wrap.scrollLeft = prev;
@@ -398,17 +477,32 @@ function renderGrid() {
   document.querySelector("#gridTable").insertAdjacentHTML("afterbegin", colgroupHTML());
   let html = "<tbody>";
   groups.forEach((g, gi) => {
-    let hrs = 0, rev = 0, cost = 0;
+    // group row: label spans the leading non-calc (meta/rate) columns; each calc
+    // column gets its own subtotal cell. If the label block is fully frozen, the
+    // label cell is pinned so it scrolls with the row identity.
     const vis = visibleWeekIndices();
+    const cols = visibleCols(state.view);
+    const fz = frozenCount(state.view);
+    // accumulate group subtotals across member resources
+    let hrs = 0, rev = 0, cost = 0;
     for (const m of g.members) {
-      const total = vis.reduce((a, i) => a + ((m.hours || [])[i] || 0), 0);
-      hrs += total; rev += (effRate(m) || 0) * total; cost += (effOffshore(m) || 0) * total;
+      const mtot = vis.reduce((a, i) => a + ((m.hours || [])[i] || 0), 0);
+      hrs += mtot; rev += (effRate(m) || 0) * mtot; cost += (effOffshore(m) || 0) * mtot;
     }
+    const labelSpan = cols.findIndex((c) => c.calc);
+    const nLabel = labelSpan === -1 ? cols.length : labelSpan;
+    const labelSticky = labelFrozen(state.view) && nLabel > 0 ? " sticky-l sc1" : "";
+    let grp = `<td class="${labelSticky}" colspan="${nLabel}"><span class="group-chevron">▼</span>${esc(g.client || "—")}${g.project ? ` · ${esc(g.project)}` : ""}<span class="proj-count-chip">${g.members.length} resource(s)</span></td>`;
+    cols.forEach((c, i) => {
+      if (!c.calc) return;
+      const idx = i + 1;
+      const sticky = idx <= fz ? ` sticky-l sc${idx}` : "";
+      const v = c.calc === "total_hrs" ? hrs : c.calc === "total_rev" ? rev : cost;
+      const dimCls = c.dim ? " dim" : "";
+      grp += `<td class="${sticky} calc${dimCls}" data-calc="${c.calc}">${fmt(v, c.calc === "total_hrs" ? 1 : 2)}</td>`;
+    });
     html += `<tr class="group-row" data-group="${gi}" title="Expand / collapse">
-      <td class="sticky-l sc1" colspan="${N_META + 2}"><span class="group-chevron">▼</span>${esc(g.client || "—")}${g.project ? ` · ${esc(g.project)}` : ""}<span class="proj-count-chip">${g.members.length} resource(s)</span></td>
-      <td class="sticky-l sc8 calc dim" data-calc="total_hrs">${fmt(hrs, 1)}</td>
-      <td class="sticky-l sc9 calc" data-calc="total_rev">${fmt(rev)}</td>
-      <td class="sticky-l sc10 calc dim" data-calc="total_exp">${fmt(cost)}</td>
+      ${grp}
       ${visibleWeekIndices().map(() => "<td></td>").join("")}
       <td></td></tr>`;
 
@@ -639,7 +733,9 @@ $("#gridBody").addEventListener("paste", (e) => {
   const anchorCol = inp.closest("td").cellIndex;
   const lines = text.replace(/\r/g, "").split("\n");
   let rowEl = tr;
-  const META = ["country", "client", "project", "name", "role"];
+  const vcols = visibleCols("planned");
+  const nVcols = vcols.length;
+  const nVisWeeks = visibleWeekIndices().length;
   for (let li = 0; li < lines.length; li++) {
     if (li > 0) { rowEl = nextResourceRow(rowEl); if (!rowEl) break; }
     const cols = lines[li].split("\t");
@@ -648,23 +744,21 @@ $("#gridBody").addEventListener("paste", (e) => {
       const val = cols[ci].trim();
       if (!val) continue;
       const rid = +rowEl.dataset.rid;
-      if (col < N_META) {
-        const f = META[col];
-        if (f && es.meta) {
-          const mi = $(`input[data-field="${f}"]`, rowEl);
-          if (mi) { mi.value = val; markDirty(rid, "fields", f, val); }
+      if (col < nVcols) {
+        const c = vcols[col];
+        if (!c) continue;
+        if (c.meta && c.field && es.meta) {
+          const mi = $(`input[data-field="${c.field}"]`, rowEl);
+          if (mi) { mi.value = val; markDirty(rid, "fields", c.field, val); }
+        } else if (c.rate && es.meta) {
+          const ri = $(`input[data-field="${c.rate}"]`, rowEl);
+          if (ri) { ri.value = val; markDirty(rid, "fields", c.rate, num(val) ?? null); }
+        } else if (c.calc) {
+          // calc (read-only totals) — ignore pasted values
         }
-      } else if (col === N_META) {
-        // rate column (5)
-        const ri = $(`input[data-field="rate"]`, rowEl);
-        if (ri) { ri.value = val; markDirty(rid, "fields", "rate", num(val) ?? null); }
-      } else if (col === N_META + 1) {
-        // offshore rate column (6)
-        const ri = $(`input[data-field="offshore_rate"]`, rowEl);
-        if (ri) { ri.value = val; markDirty(rid, "fields", "offshore_rate", num(val) ?? null); }
-      } else if (col >= WEEKS_START && col < WEEKS_START + state.weeks.length) {
+      } else if (col >= nVcols && col < nVcols + nVisWeeks) {
         if (!es.hours) continue;
-        const w = col - WEEKS_START;
+        const w = visibleWeekIndices()[col - nVcols];
         const wi = $(`input[data-week="${w}"]`, rowEl);
         if (wi) { wi.value = val; markDirty(rid, "hours"); }
       }
@@ -1270,10 +1364,17 @@ async function loadActuals() {
 function actualsHeadHTML() {
   const weeks = actualsData.weeks, months = actualsData.months;
   const vis = visibleWeekIndices();
-  const colHeads = [["Country", "sc1"], ["Client", "sc2"], ["Project", "sc3"], ["Resource Name", "sc4"],
-                    ["Title", "sc5"], ["Planned", "sc6"], ["Actual", "sc7"], ["Δ", "sc8"]];
-  const headCells = colHeads.map(([h, sc]) => `<th class="sticky-h ${sc} colh">${h}</th>`).join("");
-  const stickySpacers = Array.from({ length: 8 }, (_, i) => `<th class="sticky-h sc${i + 1}"></th>`).join("");
+  const cols = visibleCols("actuals");
+  const fz = frozenCount("actuals");
+  const headCells = cols.map((c, i) => {
+    const idx = i + 1;
+    const cls = idx <= fz ? `sticky-h sc${idx} colh` : "colh";
+    return `<th class="${cls}">${esc(c.h)}</th>`;
+  }).join("");
+  const spacers = cols.map((c, i) => {
+    const idx = i + 1;
+    return idx <= fz ? `<th class="sticky-h sc${idx}"></th>` : "<th></th>";
+  }).join("");
   const monthCells = months.filter((m) => m.end >= vis[0] && m.start <= vis[vis.length - 1])
     .map((m) => {
       const s = Math.max(m.start, vis[0]), e = Math.min(m.end, vis[vis.length - 1]);
@@ -1281,14 +1382,14 @@ function actualsHeadHTML() {
     }).join("");
   const weekCells = vis.map((i) => `<th class="week-h">${esc(weeks[i])}</th>`).join("");
   return `<tr class="head-row">${headCells}${weekCells}</tr>
-          <tr class="month-row">${stickySpacers}${monthCells}</tr>
-          <tr class="week-row">${stickySpacers}${weekCells}</tr>`;
+          <tr class="month-row">${spacers}${monthCells}</tr>
+          <tr class="week-row">${spacers}${weekCells}</tr>`;
 }
 
 function actualsColgroup() {
-  const metaW = [70, 150, 140, 160, 160, 70, 70, 70];
+  const cols = visibleCols("actuals");
   let s = "<colgroup>";
-  metaW.forEach((w) => { s += `<col style="width:${w}px">`; });
+  cols.forEach((c) => { s += `<col style="width:${c.w}px">`; });
   for (let i = 0; i < visibleWeekIndices().length; i++) s += '<col style="width:54px">';
   return s + "</colgroup>";
 }
@@ -1298,7 +1399,6 @@ function actualsRowHTML(r) {
   const actual = r.actual_hours || Array(actualsData.weeks.length).fill(0);
   const notes = r.actual_notes || {};
   const vis = visibleWeekIndices();
-  const cap = r.capacity ?? 40;
   const totalPlanned = vis.reduce((a, i) => a + (planned[i] || 0), 0);
   const totalActual = vis.reduce((a, i) => a + (actual[i] || 0), 0);
   const delta = totalActual - totalPlanned;
@@ -1321,15 +1421,23 @@ function actualsRowHTML(r) {
   let weekCells = "";
   vis.forEach((i) => { weekCells += weekCell(planned[i] || 0, actual[i] || 0, i); });
   const deltaCls = delta > 0 ? "a-over" : delta < 0 ? "a-under" : "";
+  const cols = visibleCols("actuals");
+  const fz = frozenCount("actuals");
+  const cells = cols.map((c, i) => {
+    const idx = i + 1;
+    const sticky = idx <= fz ? ` sticky-l sc${idx}` : "";
+    if (c.key === "country") return `<td class="${sticky} meta-col">${esc(r.country || "—")}</td>`;
+    if (c.key === "client") return `<td class="${sticky} meta-col">${esc(r.client || "—")}</td>`;
+    if (c.key === "project") return `<td class="${sticky} meta-col">${esc(r.project || "—")}</td>`;
+    if (c.key === "name") return `<td class="${sticky} meta-col">${esc(r.name)}</td>`;
+    if (c.key === "title") return `<td class="${sticky} meta-col">${esc(r.role || "—")}</td>`;
+    if (c.key === "planned") return `<td class="${sticky} calc dim" data-calc="total_planned">${fmt(totalPlanned, 1)}</td>`;
+    if (c.key === "actual") return `<td class="${sticky} calc" data-calc="total_actual">${fmt(totalActual, 1)}</td>`;
+    if (c.key === "delta") return `<td class="${sticky} calc ${deltaCls}" data-calc="delta">${delta > 0 ? "+" : ""}${fmt(delta, 1)}</td>`;
+    return `<td${sticky ? ` class="${sticky}"` : ""}></td>`;
+  }).join("");
   return `<tr class="resource-row" data-rid="${r.id}">
-    <td class="sticky-l sc1 meta-col">${esc(r.country || "—")}</td>
-    <td class="sticky-l sc2 meta-col">${esc(r.client || "—")}</td>
-    <td class="sticky-l sc3 meta-col">${esc(r.project || "—")}</td>
-    <td class="sticky-l sc4 meta-col">${esc(r.name)}</td>
-    <td class="sticky-l sc5 meta-col">${esc(r.role || "—")}</td>
-    <td class="sticky-l sc6 calc dim">${fmt(totalPlanned, 1)}</td>
-    <td class="sticky-l sc7 calc">${fmt(totalActual, 1)}</td>
-    <td class="sticky-l sc8 calc ${deltaCls}">${delta > 0 ? "+" : ""}${fmt(delta, 1)}</td>
+    ${cells}
     ${weekCells}
   </tr>`;
 }
@@ -1350,6 +1458,9 @@ function renderActuals() {
   if (oldCols) oldCols.remove();
   document.querySelector("#actualsTable").insertAdjacentHTML("afterbegin", actualsColgroup());
   let html = "<tbody>";
+  const vis0 = visibleWeekIndices();
+  const cols0 = visibleCols("actuals");
+  const fz0 = frozenCount("actuals");
   groups.forEach((g, gi) => {
     let p = 0, a = 0;
     const vis = visibleWeekIndices();
@@ -1357,11 +1468,20 @@ function renderActuals() {
       p += vis.reduce((x, i) => x + ((m.hours || [])[i] || 0), 0);
       a += vis.reduce((x, i) => x + ((m.actual_hours || [])[i] || 0), 0);
     }
+    const labelSpan = cols0.findIndex((c) => c.calc);
+    const nLabel = labelSpan === -1 ? 5 : labelSpan;
+    const labelSticky = labelFrozen("actuals") && nLabel > 0 ? " sticky-l sc1" : "";
+    let grp = `<td class="${labelSticky}" colspan="${nLabel}"><span class="group-chevron">▼</span>${esc(g.client || "—")}${g.project ? ` · ${esc(g.project)}` : ""}<span class="proj-count-chip">${g.members.length} resource(s)</span></td>`;
+    cols0.forEach((c, i) => {
+      if (!c.calc) return;
+      const idx = i + 1;
+      const sticky = idx <= fz0 ? ` sticky-l sc${idx}` : "";
+      const v = c.key === "planned" ? p : c.key === "actual" ? a : (a - p);
+      const dimCls = c.key === "planned" ? " dim" : "";
+      grp += `<td class="${sticky} calc${dimCls}" data-calc="${c.calc}">${fmt(v, 1)}</td>`;
+    });
     html += `<tr class="group-row" data-group="${gi}" title="Expand / collapse">
-      <td class="sticky-l sc1" colspan="5"><span class="group-chevron">▼</span>${esc(g.client || "—")}${g.project ? ` · ${esc(g.project)}` : ""}<span class="proj-count-chip">${g.members.length} resource(s)</span></td>
-      <td class="sticky-l sc6 calc dim">${fmt(p, 1)}</td>
-      <td class="sticky-l sc7 calc">${fmt(a, 1)}</td>
-      <td class="sticky-l sc8 calc">${fmt(a - p, 1)}</td>
+      ${grp}
       ${vis.map(() => "<td></td>").join("")}
     </tr>`;
     let body = "";
@@ -1386,15 +1506,17 @@ function alignActualsSticky() {
   const els = document.querySelectorAll("#actualsHead [class*=sc], #actualsBody [class*=sc]");
   els.forEach((el) => { el.style.left = ""; el.style.position = "static"; });
   const tLeft = table.getBoundingClientRect().left;
+  const fz = frozenCount("actuals");
   const xs = [];
-  for (let i = 1; i <= 8; i++) {
-    const cell = probe.children[i - 1];
+  for (let i = 0; i < fz; i++) {
+    const cell = probe.children[i];
     xs.push(cell ? Math.round(cell.getBoundingClientRect().left - tLeft) : null);
   }
   els.forEach((el) => { el.style.position = ""; });
-  for (let i = 1; i <= 8; i++) {
-    if (xs[i - 1] === null) continue;
-    document.querySelectorAll(`#actualsHead .sc${i}, #actualsBody .sc${i}`).forEach((el) => { el.style.left = `${xs[i - 1]}px`; });
+  for (let i = 0; i < fz; i++) {
+    if (xs[i] === null) continue;
+    const idx = i + 1;
+    document.querySelectorAll(`#actualsHead .sc${idx}, #actualsBody .sc${idx}`).forEach((el) => { el.style.left = `${xs[i]}px`; });
   }
   wrap.scrollLeft = prev;
 }
@@ -2166,6 +2288,99 @@ $("#btnExpandAll").addEventListener("click", () => {
 });
 let filterT = null;
 $("#filter").addEventListener("input", () => { clearTimeout(filterT); filterT = setTimeout(renderGrid, 250); });
+
+/* ---------------- column panel (⚙) ---------------- */
+function closeColPanel() {
+  $("#colPanel").classList.add("hidden");
+  $("#colPanel").innerHTML = "";
+}
+function rebuildColPanel(view) {
+  const p = viewPrefs(view);
+  const rows = COLUMNS[view].map((c) => {
+    const checked = !p.hidden.includes(c.key) ? " checked" : "";
+    const fz = frozenCount(view);
+    const fzIdx = Math.min(fz, COLUMNS[view].length) - 1;
+    const pinned = COLUMNS[view].indexOf(c) <= fzIdx ? " pinned" : "";
+    return `<label class="col-row" data-key="${c.key}">
+        <input type="checkbox" class="col-hide" data-view="${view}" data-key="${c.key}"${checked}>
+        <span class="col-name${pinned}">${esc(c.h)}</span>
+        <button class="col-pin" data-view="${view}" data-key="${c.key}" title="Lock / freeze up to and including this column" aria-pressed="${pinned ? "true" : "false"}">${pinned ? "📌" : "📍"}</button>
+      </label>`;
+  }).join("");
+  $("#colPanel").innerHTML = `<div class="col-panel-head">Columns — <b>${view === "planned" ? "Planned grid" : "Actuals grid"}</b>
+      <button class="col-close" title="Close">✕</button></div>
+    <div class="col-panel-sub">Visible columns scroll horizontally; locked columns stay pinned on the left. Locking up to a column locks everything before it. Saved automatically per view.</div>
+    <div class="col-list">${rows}</div>
+    <div class="col-panel-actions"><button class="btn mini" data-reset="${view}">Reset</button></div>`;
+  $("#colPanel").classList.remove("hidden");
+  $("#colPanel").dataset.open = view;
+}
+function toggleColPanel(view, anchor) {
+  const isOpen = !$("#colPanel").classList.contains("hidden");
+  const sameView = $("#colPanel").dataset.open === view;
+  if (isOpen && sameView) { closeColPanel(); return; }   // same ⚙ clicked again → close
+  rebuildColPanel(view);
+  const el = $("#colPanel");
+  if (anchor) {
+    const r = anchor.getBoundingClientRect();
+    el.style.top = `${Math.max(70, r.bottom + 8)}px`;
+    el.style.left = `${Math.min(window.innerWidth - 320, Math.max(8, r.left))}px`;
+  }
+}
+$("#btnColumnsPlanned").addEventListener("click", (e) => toggleColPanel("planned", e.currentTarget));
+$("#btnColumnsActuals").addEventListener("click", (e) => toggleColPanel("actuals", e.currentTarget));
+// hide checkbox → toggle visibility
+$("#colPanel").addEventListener("change", (e) => {
+  e.stopPropagation(); // rebuild detaches target; keep the panel open
+  const t = e.target;
+  if (!t.classList.contains("col-hide")) return;
+  const view = t.dataset.view, key = t.dataset.key;
+  const p = viewPrefs(view);
+  if (t.checked) p.hidden = p.hidden.filter((k) => k !== key);
+  else p.hidden = [...p.hidden.filter((k) => k !== key), key];
+  savePrefs(view, p);
+  rebuildColPanel(view);    // rebuild so pinned state updates
+  renderColsFor(view);
+});
+// pin button → freeze up to and including this column (contiguous)
+$("#colPanel").addEventListener("click", (e) => {
+  // rebuild replaces innerHTML and detaches e.target; stopPropagation so the
+  // document-level close-listener (which checks contains()) can't see the old,
+  // detached target as "outside" and close the panel after every action.
+  e.stopPropagation();
+  const t = e.target;
+  if (t.classList.contains("col-close")) { closeColPanel(); return; }
+  if (t.classList.contains("col-pin")) {
+    const view = t.dataset.view, key = t.dataset.key;
+    const p = viewPrefs(view);
+    const vis = visibleCols(view);
+    const visIdx = vis.findIndex((c) => c.key === key);
+    if (visIdx === -1) return;
+    const cur = frozenCount(view);
+    // if this is the trailing frozen column, clicking again unpins it down one;
+    // otherwise set the freeze point AT this column (freezes it and everything before)
+    p.freeze = (cur === visIdx + 1) ? Math.max(0, cur - 1) : (visIdx + 1);
+    savePrefs(view, p);
+    rebuildColPanel(view);
+    renderColsFor(view);
+    return;
+  }
+  if (t.dataset.reset) {
+    savePrefs(t.dataset.reset, defaultPrefs(t.dataset.reset));
+    rebuildColPanel(t.dataset.reset);
+    renderColsFor(t.dataset.reset);
+  }
+});
+function renderColsFor(view) {
+  if (view === "planned") renderGrid();
+  else if (view === "actuals") renderActuals();
+}
+document.addEventListener("click", (e) => {
+  if ($("#colPanel").classList.contains("hidden")) return;
+  if ($("#colPanel").contains(e.target)) return;
+  if (e.target.closest("#btnColumnsPlanned, #btnColumnsActuals")) return;
+  closeColPanel();
+});
 
 /* ---------------- import / export ---------------- */
 $("#btnImport").addEventListener("click", () => $("#fileInput").click());
