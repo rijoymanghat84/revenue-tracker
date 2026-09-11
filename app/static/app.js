@@ -1228,10 +1228,10 @@ function renderDashboard() {
       <div class="card glass"><div class="k">Planned Revenue</div><div class="v cyan">$${fmt(totalRev)}</div></div>
       <div class="card glass"><div class="k">Planned Expense</div><div class="v">$${fmt(totalExp)}</div></div>
       <div class="card glass"><div class="k">Planned Savings</div><div class="v ${plannedSavings >= 0 ? "green" : "red"}">$${fmt(plannedSavings)}</div></div>
-      <div class="card glass"><div class="k">Actual Revenue</div><div class="v cyan">$${fmt(totalActRev)}</div></div>
-      <div class="card glass"><div class="k">Actual Expense</div><div class="v">$${fmt(totalActExp)}</div></div>
-      <div class="card glass"><div class="k">Actual Savings</div><div class="v ${actualSavings >= 0 ? "green" : "red"}">$${fmt(actualSavings)}</div></div>`;
-    let rows = `<thead><tr><th>Country</th><th>Client</th><th>Project</th><th>Resource(s)</th><th>Planned Revenue</th><th>Planned Expense</th><th>Planned Savings</th><th>Actual Revenue</th><th>Actual Expense</th><th>Actual Savings</th></tr></thead><tbody>`;
+      <div class="card glass"><div class="k">Revenue till date</div><div class="v cyan">$${fmt(totalActRev)}</div></div>
+      <div class="card glass"><div class="k">Expense till date</div><div class="v">$${fmt(totalActExp)}</div></div>
+      <div class="card glass"><div class="k">Savings till date</div><div class="v ${actualSavings >= 0 ? "green" : "red"}">$${fmt(actualSavings)}</div></div>`;
+    let rows = `<thead><tr><th>Country</th><th>Client</th><th>Project</th><th>Resource(s)</th><th>Planned Revenue</th><th>Planned Expense</th><th>Planned Savings</th><th>Revenue till date</th><th>Expense till date</th><th>Savings till date</th></tr></thead><tbody>`;
     for (const g of groups) {
       const pSavings = g.revenue - g.expense;
       const aSavings = (g.actual_rev || 0) - (g.actual_exp || 0);
