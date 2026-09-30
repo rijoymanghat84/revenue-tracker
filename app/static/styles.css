@@ -680,3 +680,31 @@ td.week .a-inp { text-align: center; }
 .res-table tbody tr:hover td { background: var(--surface-3); }
 .res-table th.num, .res-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .res-name { font-weight: 600; color: var(--text); }
+
+/* ============ PRICING (feature #11) ============ */
+/* 11.2 — Rate / Offshore Rate / Currency were left-aligned because the cell
+   only carried class="num" on the EDIT row's input (which is right-aligned),
+   while the READ row's value sat in a plain cell. Centre them as asked. */
+.p-table th.num, .p-table td.num,
+#pricingTable th.num, #pricingTable td.num { text-align: center; }
+.p-table th.p-cur, .p-table td.p-cur,
+#pricingTable th.p-cur, #pricingTable td.p-cur { text-align: center; }
+.p-table .p-read { display: inline-block; text-align: center; }
+.p-table .rate-inp { text-align: center; }
+
+/* 11.1 — "Used by" becomes a button */
+.used-btn {
+  border: 0; background: rgba(var(--accent-rgb), 0.14); color: var(--accent);
+  font: inherit; font-weight: 700; font-size: 12px;
+  padding: 3px 11px; border-radius: 999px; cursor: pointer;
+}
+.used-btn:hover { background: rgba(var(--accent-rgb), 0.28); }
+
+/* 11.3 — collapse/expand toolbar */
+.p-tools {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 9px 13px; margin-bottom: 10px; border-radius: var(--radius);
+}
+.p-tools-right { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.p-tools .search { max-width: 220px; }
+.p-tools .btn.mini[disabled] { opacity: 0.45; cursor: default; }
