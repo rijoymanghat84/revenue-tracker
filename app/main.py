@@ -359,7 +359,9 @@ def api_login(body: LoginBody):
         # Admin: existing shared creds
         auser, apw = _admin_creds()
         if hmac.compare_digest(uname, auser) and apw and hmac.compare_digest(body.password or "", apw):
-            resp = JSONResponse({"role": "admin", "username": uname, "projects": [], "super_admin": True})
+            resp = JSONResponse({"role": "admin", "username": uname, "projects": [],
+                                 "super_admin": True,
+                                 "permissions": sorted(ADMIN_PERMISSIONS)})
             resp.set_cookie("rt_session", _make_token(uname, "admin"), httponly=True, samesite="lax", max_age=7 * 86400)
             return resp
         # PM or admin: users table

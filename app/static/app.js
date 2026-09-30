@@ -18,6 +18,12 @@ const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
 const state = { resources: [], weeks: [], months: [], pricing: [], view: "dash", gridEdit: { planned: false }, me: null, globalMonth: "all" };
+
+/* Full admin permission key set — mirrors ADMIN_PERMISSIONS in app/main.py.
+   Used only as a defensive fallback when /api/login omits `permissions`. */
+const ADMIN_PERM_KEYS = ["pricing", "resources", "projects", "users", "dashboard",
+                         "actuals", "utilization", "import_export", "db_security"];
+
 const dirty = new Map();   // resource rid -> {fields:{}, hours:bool}
 const pDirty = new Map();  // pricing pid -> {title?, rate?, offshore_rate?}
 const aDirty = new Map();  // actuals rid -> {hours:bool, notes:{}}
@@ -141,7 +147,12 @@ function showApp() {
   $("#loginView").classList.add("hidden");
   $("#topbar").classList.remove("hidden");
   const isAdmin = state.me.role === "admin";
-  const perms = new Set(state.me.permissions || []);
+  // Defensive: /api/login and /api/me must both supply `permissions`. If the
+  // field is ever missing, fall back to the full set for an admin instead of
+  // hiding every tab (a refresh would mask the bug — see /api/me).
+  const perms = new Set(
+    state.me.permissions || (state.me.super_admin ? ADMIN_PERM_KEYS : [])
+  );
   const can = (p) => !isAdmin || perms.has(p);
   // Map each tab to the permission that unlocks it. PMs (non-admin) always see
   // Actuals + Utilization; admins see only what their permissions allow.
