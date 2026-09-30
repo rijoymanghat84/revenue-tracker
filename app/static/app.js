@@ -154,6 +154,7 @@ function showApp() {
     state.me.permissions || (state.me.super_admin ? ADMIN_PERM_KEYS : [])
   );
   const can = (p) => !isAdmin || perms.has(p);
+  initUserMenu();
   initThemeSwitcher();
   // Map each tab to the permission that unlocks it. PMs (non-admin) always see
   // Actuals + Utilization; admins see only what their permissions allow.
@@ -213,6 +214,92 @@ $("#btnLogout").addEventListener("click", async () => {
   showLogin();
 });
 
+/* ---------------- user section (feature #9) ----------------
+ * A single account dropdown on the right of the topbar, replacing the loose
+ * GitHub / Report-issue / Sign-out buttons that used to sit in the bar. Holds
+ * identity, theme, password change, repo links and sign out.
+ */
+function initUserMenu() {
+  const me = state.me || {};
+  const name = me.username || "?";
+  $("#userAvatar").textContent = (name[0] || "?").toUpperCase();
+  $("#userName").textContent = name;
+  $("#umName").textContent = name;
+  $("#umRole").textContent = me.super_admin
+    ? "Administrator (owner)"
+    : (me.role === "admin" ? "Administrator" : "Project Manager");
+
+  const menu = $("#userMenu");
+  const btn = $("#btnUser");
+  if (btn.dataset.bound === "1") return;
+  btn.dataset.bound = "1";
+
+  const close = () => menu.classList.add("hidden");
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    menu.classList.toggle("hidden");
+  });
+  // Click-away and Escape both close it, like any normal menu.
+  document.addEventListener("click", (e) => {
+    if (!menu.classList.contains("hidden") && !e.target.closest(".user-wrap")) close();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") close();
+  });
+  // Keep the theme <select> inside the menu from closing it.
+  $("#themeSelMenu").addEventListener("click", (e) => e.stopPropagation());
+
+  $("#umPassword").addEventListener("click", () => {
+    close();
+    openPasswordModal();
+  });
+  $("#umLogout").addEventListener("click", () => {
+    close();
+    $("#btnLogout").click();
+  });
+}
+
+/* ---------------- change password (feature #9) ---------------- */
+function openPasswordModal() {
+  $("#pwErr").textContent = "";
+  ["#pwCurrent", "#pwNew", "#pwConfirm"].forEach((s) => { $(s).value = ""; });
+  $("#pwModal").classList.remove("hidden");
+  $("#pwCurrent").focus();
+}
+function closePasswordModal() { $("#pwModal").classList.add("hidden"); }
+
+function bindPasswordModal() {
+  $("#pwCancel").addEventListener("click", closePasswordModal);
+  $("#pwModal").addEventListener("click", (e) => {
+    if (e.target.id === "pwModal") closePasswordModal();
+  });
+  $("#pwSave").addEventListener("click", async () => {
+    const err = $("#pwErr");
+    err.textContent = "";
+    const cur = $("#pwCurrent").value;
+    const nw = $("#pwNew").value;
+    const cf = $("#pwConfirm").value;
+    if (!cur) { err.textContent = "Enter your current password."; return; }
+    if (nw.length < 8) { err.textContent = "New password must be at least 8 characters."; return; }
+    if (nw !== cf) { err.textContent = "The two new passwords do not match."; return; }
+    if (nw === cur) { err.textContent = "New password must differ from the current one."; return; }
+    const btn = $("#pwSave");
+    btn.disabled = true; btn.textContent = "Updating…";
+    try {
+      await api("/api/me/password", {
+        method: "POST",
+        body: JSON.stringify({ current_password: cur, new_password: nw }),
+      });
+      closePasswordModal();
+      alert("Password updated ✓  Use the new password next time you sign in.");
+    } catch (ex) {
+      err.textContent = ex.message || "Could not update the password.";
+    } finally {
+      btn.disabled = false; btn.textContent = "Update password";
+    }
+  });
+}
+
 /* ---------------- themes (feature #8, option C) ----------------
  * The theme itself is applied SERVER-SIDE: app/main.py injects an inline
  * `:root{...}` block plus window.__THEME__ into index.html, so the correct look
@@ -228,24 +315,29 @@ $("#btnLogout").addEventListener("click", async () => {
 let THEME_LIST = [];
 
 async function initThemeSwitcher() {
-  const sel = $("#themeSel");
+  const sel = $("#themeSelMenu");
   if (!sel) return;
   let data;
   try {
     data = await api("/api/themes");
   } catch (_) {
-    sel.classList.add("hidden");
     return;
   }
   THEME_LIST = data.themes || [];
   if (!data.can_change) {
-    sel.classList.add("hidden");
+    // No permission — remove the Theme row entirely rather than showing a
+    // dropdown that cannot work.
+    const row = $("#umTheme");
+    if (row) row.style.display = "none";
     return;
   }
   sel.innerHTML = THEME_LIST
     .map((t) => `<option value="${esc(t.key)}"${t.key === data.current ? " selected" : ""}>${esc(t.label)}</option>`)
     .join("");
   sel.classList.remove("hidden");
+  // The old standalone picker is superseded by the one inside the user menu.
+  const legacy = $("#themeSel");
+  if (legacy) legacy.classList.add("hidden");
 
   if (sel.dataset.bound === "1") return;
   sel.dataset.bound = "1";
@@ -2524,6 +2616,7 @@ function renderView() {
 }
 
 $$(".tab").forEach((t) => t.addEventListener("click", () => switchView(t.dataset.tab)));
+bindPasswordModal();
 
 /* ---------------- boot ---------------- */
 window.addEventListener("error", (e) => {

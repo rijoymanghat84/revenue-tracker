@@ -10,7 +10,7 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icons/icon-192.png">
 <title>Revenue Recon</title>
-<link rel="stylesheet" href="/styles.css?v=50">
+<link rel="stylesheet" href="/styles.css?v=51">
 </head>
 <body>
 <div class="bg-glow"></div>
@@ -69,10 +69,37 @@
     <a class="btn ghost" id="btnExport" href="/api/export" title="Download an Excel file (Dashboard + On-Site + Off-Shore + Pricing + Actuals tabs)">Export Excel</a>
     <button class="btn primary" id="btnAdd">+ Add/Edit Resource</button>
     <button class="btn ghost" id="btnAddProject">+ Add/Edit Client Project</button>
-    <a class="btn ghost" id="btnGitHub" href="https://github.com/rijoymanghat84/revenue-tracker" target="_blank" rel="noopener" title="View the source code on GitHub">GitHub</a>
-    <a class="btn ghost" id="btnReportIssue" href="https://github.com/rijoymanghat84/revenue-tracker/issues/new" target="_blank" rel="noopener" title="Report a bug or request a feature">Report issue</a>
+    <a class="btn ghost hidden" id="btnGitHub" href="https://github.com/rijoymanghat84/revenue-tracker" target="_blank" rel="noopener" title="View the source code on GitHub">GitHub</a>
+    <a class="btn ghost hidden" id="btnReportIssue" href="https://github.com/rijoymanghat84/revenue-tracker/issues/new" target="_blank" rel="noopener" title="Report a bug or request a feature">Report issue</a>
     <select id="themeSel" class="cur-sel hidden" title="Choose a theme (saved to your account)"></select>
-    <button class="btn ghost" id="btnLogout" title="Sign out">Sign out</button>
+    <button class="btn ghost hidden" id="btnLogout" title="Sign out">Sign out</button>
+
+    <!-- Feature #9: the user section. GitHub + Report issue + sign out moved
+         INSIDE this dropdown (they were loose buttons in the bar), alongside
+         the theme picker and change-password. -->
+    <div class="user-wrap">
+      <button class="btn ghost user-btn" id="btnUser" title="Your account">
+        <span class="user-avatar" id="userAvatar">?</span>
+        <span class="user-name" id="userName">Account</span>
+        <span class="user-caret">▾</span>
+      </button>
+      <div class="user-menu hidden" id="userMenu">
+        <div class="user-menu-head">
+          <div class="user-menu-name" id="umName">—</div>
+          <div class="user-menu-role" id="umRole">—</div>
+        </div>
+        <div class="user-menu-sep"></div>
+        <div class="user-menu-item" id="umTheme">
+          <span>🎨</span><span class="um-label">Theme</span>
+          <select id="themeSelMenu" class="user-menu-sel"></select>
+        </div>
+        <button class="user-menu-item" id="umPassword"><span>🔑</span>Change password</button>
+        <a class="user-menu-item" id="umGitHub" href="https://github.com/rijoymanghat84/revenue-tracker" target="_blank" rel="noopener"><span>💻</span>GitHub repo</a>
+        <a class="user-menu-item" id="umIssue" href="https://github.com/rijoymanghat84/revenue-tracker/issues/new" target="_blank" rel="noopener"><span>🐞</span>Raise a bug / feature</a>
+        <div class="user-menu-sep"></div>
+        <button class="user-menu-item danger" id="umLogout"><span>⏻</span>Sign out</button>
+      </div>
+    </div>
   </div>
 </header>
 
@@ -222,6 +249,33 @@
   </div>
 </div>
 
+<!-- ============ CHANGE PASSWORD (feature #9) ============ -->
+<div id="pwModal" class="modal hidden">
+  <div class="modal-box glass pw-modal">
+    <h3>Change password</h3>
+    <div class="modal-body">
+      <div class="pw-row">
+        <label class="login-label">Current password</label>
+        <input class="inp" id="pwCurrent" type="password" autocomplete="current-password">
+      </div>
+      <div class="pw-row">
+        <label class="login-label">New password</label>
+        <input class="inp" id="pwNew" type="password" autocomplete="new-password">
+        <div class="pw-hint" id="pwHint">At least 8 characters.</div>
+      </div>
+      <div class="pw-row">
+        <label class="login-label">Confirm new password</label>
+        <input class="inp" id="pwConfirm" type="password" autocomplete="new-password">
+      </div>
+      <div class="login-err" id="pwErr"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="pwCancel">Cancel</button>
+      <button class="btn primary" id="pwSave">Update password</button>
+    </div>
+  </div>
+</div>
+
 <!-- ============ ACTUALS ENTRY POPUP (wizard) ============ -->
 <div id="actualsModal" class="modal hidden">
   <div class="modal-box glass actuals-modal">
@@ -278,7 +332,7 @@
   </div>
 </div>
 
-<script src="/app.js?v=73"></script>
+<script src="/app.js?v=74"></script>
 <script>
   // PWA: register the service worker (only after load; skip on failure)
   if ("serviceWorker" in navigator) {
