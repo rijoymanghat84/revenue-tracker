@@ -131,6 +131,18 @@ body {
 
 /* ---------- layout ---------- */
 main { padding: 0 14px 40px; }
+
+/* ---------- visibility utility (see note) ----------
+ * ROOT CAUSE FIX (2026-09-30): the app toggles `hidden` on many elements via
+ * classList, but every rule in this file was SCOPED (.view.hidden,
+ * .modal.hidden, .col-panel.hidden, .login-wrap.hidden, .update-banner.hidden)
+ * and there was NO generic `.hidden` rule. Any element toggled that way but
+ * lacking its own scoped rule therefore stayed VISIBLE forever — the account
+ * dropdown (.user-menu.hidden) and the topbar (hidden while on the login
+ * screen) both leaked through. One generic rule replaces that whole class of
+ * bug; the scoped rules below are now redundant but harmless and are kept so
+ * this fix can't regress if it is ever reverted in isolation. */
+.hidden { display: none !important; }
 .view.hidden { display: none; }
 
 /* ---------- toolbar ---------- */

@@ -10,7 +10,7 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icons/icon-192.png">
 <title>Revenue Recon</title>
-<link rel="stylesheet" href="/styles.css?v=53">
+<link rel="stylesheet" href="/styles.css?v=54">
 </head>
 <body>
 <div class="bg-glow"></div>
@@ -69,14 +69,18 @@
     <a class="btn ghost" id="btnExport" href="/api/export" title="Download an Excel file (Dashboard + On-Site + Off-Shore + Pricing + Actuals tabs)">Export Excel</a>
     <button class="btn primary" id="btnAdd">+ Add/Edit Resource</button>
     <button class="btn ghost" id="btnAddProject">+ Add/Edit Client Project</button>
-    <a class="btn ghost hidden" id="btnGitHub" href="https://github.com/rijoymanghat84/revenue-tracker" target="_blank" rel="noopener" title="View the source code on GitHub">GitHub</a>
-    <a class="btn ghost hidden" id="btnReportIssue" href="https://github.com/rijoymanghat84/revenue-tracker/issues/new" target="_blank" rel="noopener" title="Report a bug or request a feature">Report issue</a>
+
+    <!-- Superseded by the account dropdown (feature #9): kept as JS hooks only,
+         never shown. #btnLogout is what the menu's "Sign out" calls; #themeSel
+         is the legacy standalone picker the menu's #themeSelMenu replaced. -->
     <select id="themeSel" class="cur-sel hidden" title="Choose a theme (saved to your account)"></select>
     <button class="btn ghost hidden" id="btnLogout" title="Sign out">Sign out</button>
 
-    <!-- Feature #9: the user section. GitHub + Report issue + sign out moved
-         INSIDE this dropdown (they were loose buttons in the bar), alongside
-         the theme picker and change-password. -->
+    <!-- Feature #9: the user section is the ONLY home for the repo links and
+         sign-out. GitHub + Report issue were originally loose buttons in the
+         topbar; they were hidden (not removed) when #9 landed, and on
+         2026-09-30 removed from the markup outright. They now live in the
+         account dropdown as #umGitHub and #umIssue only. -->
     <div class="user-wrap">
       <button class="btn ghost user-btn" id="btnUser" title="Your account">
         <span class="user-avatar" id="userAvatar">?</span>
@@ -343,7 +347,7 @@
   </div>
 </div>
 
-<script src="/app.js?v=76"></script>
+<script src="/app.js?v=77"></script>
 <script>
   // PWA: register the service worker (only after load; skip on failure)
   if ("serviceWorker" in navigator) {
