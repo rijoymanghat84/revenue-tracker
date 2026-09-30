@@ -15,6 +15,40 @@
   --sticky-bg: rgba(16, 22, 42, 0.88);
   --corner-bg: rgba(24, 31, 56, 0.95);
   --radius: 14px;
+  --orange: #fb923c;
+
+  /* ── semantic surface scale (themeable) ───────────────────────────
+     These reproduce the original dark palette 1:1, so the default look is
+     unchanged. Every theme overrides them. */
+  --surface-1: #0b101f;   /* raised panel            (was #0b101f / #0d1326) */
+  --surface-2: #0e1428;   /* deeper panel            */
+  --surface-3: #1a2238;   /* hover / active row      */
+  --surface-4: #08121c;   /* inset well              */
+  --surface-5: #101831;   /* header band             */
+  --surface-6: #151e36;   /* table stripe            */
+  --surface-7: #121829;   /* modal body              */
+  --header-bg: #0d1326;   /* sticky table header / corner — intentionally SOLID
+                             (must not show through under any header cell) */
+  --hairline:   #4a5878;  /* strong 1px divider      */
+  --hairline-2: #7a88a5;  /* subtle 1px divider      */
+
+  /* ── status pill backgrounds (dark tint of the status hue) ─────── */
+  --pill-red-bg:    #3a1b22;
+  --pill-green-bg:  #10301f;
+  --pill-amber-bg:  #332a12;
+  --pill-orange-bg: #33200f;
+
+  /* ── RGB triplets for rgba() composition ─────────────────────────
+     Lets a theme recolour translucent overlays without rewriting every
+     rgba() literal. Usage: rgba(var(--accent-rgb), 0.16) */
+  --bg-rgb:     11, 16, 32;
+  --text-rgb:   230, 236, 245;
+  --accent-rgb: 34, 211, 238;
+  --accent2-rgb:167, 139, 250;
+  --green-rgb:  52, 211, 153;
+  --red-rgb:    248, 113, 113;
+  --amber-rgb:  251, 191, 36;
+  --muted-rgb:  147, 161, 184;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
@@ -32,9 +66,9 @@ body {
 .bg-glow {
   position: fixed; inset: 0; z-index: -1;
   background:
-    radial-gradient(900px 500px at 15% -10%, rgba(34, 211, 238, 0.16), transparent 60%),
-    radial-gradient(800px 600px at 90% 10%, rgba(167, 139, 250, 0.13), transparent 60%),
-    radial-gradient(700px 700px at 50% 110%, rgba(52, 211, 153, 0.08), transparent 55%);
+    radial-gradient(900px 500px at 15% -10%, rgba(var(--accent-rgb), 0.16), transparent 60%),
+    radial-gradient(800px 600px at 90% 10%, rgba(var(--accent2-rgb), 0.13), transparent 60%),
+    radial-gradient(700px 700px at 50% 110%, rgba(var(--green-rgb), 0.08), transparent 55%);
 }
 .glass {
   background: var(--panel);
@@ -59,7 +93,7 @@ body {
 }
 .brand h1 { font-size: 18px; margin: 0; letter-spacing: 0.2px; }
 .year-badge {
-  font-size: 11px; font-weight: 600; color: #08121c;
+  font-size: 11px; font-weight: 600; color: var(--surface-4);
   background: linear-gradient(135deg, var(--accent), var(--accent2));
   border-radius: 999px; padding: 2px 8px; vertical-align: 2px;
 }
@@ -71,7 +105,7 @@ body {
   border: 0; background: transparent; color: var(--muted);
   font-size: 13px; font-weight: 600; padding: 6px 14px; border-radius: 8px; cursor: pointer;
 }
-.tab.active { background: linear-gradient(135deg, rgba(34,211,238,0.25), rgba(167,139,250,0.25)); color: var(--text); }
+.tab.active { background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.25), rgba(var(--accent2-rgb), 0.25)); color: var(--text); }
 
 .btn {
   border: 1px solid var(--border-strong); background: var(--panel-strong);
@@ -83,17 +117,17 @@ body {
 .btn:active { transform: translateY(1px); }
 .btn.primary {
   background: linear-gradient(135deg, var(--accent), var(--accent2));
-  color: #08121c; border: 0;
+  color: var(--surface-4); border: 0;
 }
 .btn.primary:hover { filter: brightness(1.1); }
 .btn.ghost { background: transparent; }
 .btn.mini { padding: 4px 10px; font-size: 12px; }
 .btn.edit-active {
-  background: rgba(34,211,238,0.18); border-color: var(--accent); color: var(--accent);
-  box-shadow: 0 0 10px rgba(34,211,238,0.25);
+  background: rgba(var(--accent-rgb), 0.18); border-color: var(--accent); color: var(--accent);
+  box-shadow: 0 0 10px rgba(var(--accent-rgb), 0.25);
 }
-.btn.danger { color: var(--red); background: rgba(248,113,113,0.08); border-color: rgba(248,113,113,0.35); }
-.btn.danger:hover { background: rgba(248,113,113,0.18); }
+.btn.danger { color: var(--red); background: rgba(var(--red-rgb), 0.08); border-color: rgba(var(--red-rgb), 0.35); }
+.btn.danger:hover { background: rgba(var(--red-rgb), 0.18); }
 
 /* ---------- layout ---------- */
 main { padding: 0 14px 40px; }
@@ -125,7 +159,7 @@ table { border-collapse: separate; border-spacing: 0; font-size: 12.5px; width: 
 th, td { box-sizing: border-box; } /* borders stay inside the pinned header row heights — no 1px seams on scroll */
 thead th {
   position: sticky; z-index: 30;
-  background: #0d1326;   /* SOLID — no see-through under any header cell */
+  background: var(--header-bg);   /* SOLID — no see-through under any header cell */
   border-bottom: 1px solid var(--border-strong);
   border-right: 1px solid rgba(255,255,255,0.26);
   text-align: center; font-size: 11px; color: var(--muted);
@@ -133,16 +167,16 @@ thead th {
 }
 /* three-row header: headings (0), months (34), weeks (58) — solid everywhere */
 thead .head-row th { top: 0; height: 34px; }
-thead .month-row th { top: 34px; height: 24px; color: var(--text); font-size: 11.5px; background: #101831; }
+thead .month-row th { top: 34px; height: 24px; color: var(--text); font-size: 11.5px; background: var(--surface-5); }
 thead .week-row th { top: 58px; height: 28px; }
 
 /* SOLID opaque sticky cells — no transparency, nothing shows through on scroll */
 td.sticky-l, th.sticky-h {
   position: sticky; z-index: 10;
-  background: #0e1428;
+  background: var(--surface-2);
   border-right: 1px solid rgba(255,255,255,0.26);
 }
-tbody tr:hover td.sticky-l { background: #1a2238; }
+tbody tr:hover td.sticky-l { background: var(--surface-3); }
 /* sticky offsets are set inline by alignSticky() to each column's natural
    layout position — CSS fallbacks are all 0 so pre-JS rendering stays natural */
 td.sc1, th.sc1 { left: 0; }
@@ -153,7 +187,7 @@ td.sc5, th.sc5 { left: 0; }
 td.sc6, th.sc6 { left: 0; }
 td.sc7, th.sc7 { left: 0; }
 td.sc8, th.sc8 { left: 0; }
-thead th.sticky-h { z-index: 35; background: #0e1428; }
+thead th.sticky-h { z-index: 35; background: var(--header-bg); }
 thead .head-row th.sticky-h { font-size: 12px; color: var(--text); font-weight: 700; text-align: left; padding: 6px 8px; }
 thead .month-row th.sticky-h { z-index: 33; }
 thead .week-row th.sticky-h { z-index: 33; }
@@ -162,7 +196,7 @@ thead .week-row th.sticky-h { z-index: 33; }
 .table-wrap::-webkit-scrollbar { width: 12px; height: 12px; }
 .table-wrap::-webkit-scrollbar-track { background: rgba(255,255,255,0.04); border-radius: 8px; }
 .table-wrap::-webkit-scrollbar-thumb {
-  background: rgba(148,163,184,0.4); border-radius: 8px; border: 2px solid #0b1020;
+  background: rgba(148,163,184,0.4); border-radius: 8px; border: 2px solid var(--bg);
 }
 .table-wrap::-webkit-scrollbar-thumb:hover { background: rgba(148,163,184,0.65); }
 .table-wrap::-webkit-scrollbar-corner { background: transparent; }
@@ -173,8 +207,8 @@ thead .week-row th.sticky-h { z-index: 33; }
 
 /* the whole grid surface is opaque — blank cells, spacer cells and gaps never
    show the page through, while scrolling horizontally or vertically */
-#gridWrap, #dashWrap, #pricingWrap { background: #0b101f; }
-#gridTable, #dashTable, #pricingTable { background: #0b101f; }
+#gridWrap, #dashWrap, #pricingWrap { background: var(--surface-1); }
+#gridTable, #dashTable, #pricingTable { background: var(--surface-1); }
 /* fixed layout: columns follow the <colgroup> exactly — no phantom columns,
    no content-driven gaps/overlaps, even widths */
 #gridTable { table-layout: fixed; }
@@ -202,13 +236,13 @@ td.week .inp { text-align: center; }
 /* group header row — SOLID band (was a translucent gradient that read as
    see-through under the header) */
 tr.group-row td {
-  background: #151e36;
+  background: var(--surface-6);
   border-top: 1px solid var(--border-strong); border-bottom: 1px solid var(--border-strong);
   font-weight: 700; color: var(--text); padding: 0 8px; height: 32px; font-size: 12.5px;
 }
 /* keep the locked label/total cells fully opaque inside group & total rows */
-tr.group-row td.sticky-l, tr.subtotal-row td.sticky-l { background: #121829; }
-tbody tr.group-row:hover td.sticky-l { background: #1a2238; }
+tr.group-row td.sticky-l, tr.subtotal-row td.sticky-l { background: var(--surface-7); }
+tbody tr.group-row:hover td.sticky-l { background: var(--surface-3); }
 .proj-count-chip {
   font-size: 10px; font-weight: 600; color: var(--muted); margin-left: 8px;
   background: rgba(255,255,255,0.06); border: 1px solid var(--border);
@@ -224,11 +258,11 @@ tr.resource-row.collapsed { display: none; }
   color: var(--text); font-size: 12.5px; padding: 4px 6px; text-align: left;
 }
 td.week .inp { text-align: center; font-size: 12px; padding: 4px 2px; }
-.inp:focus { background: rgba(34,211,238,0.10); box-shadow: inset 0 -2px 0 var(--accent); }
-.inp::placeholder { color: #4a5878; }
+.inp:focus { background: rgba(var(--accent-rgb), 0.10); box-shadow: inset 0 -2px 0 var(--accent); }
+.inp::placeholder { color: var(--hairline); }
 .inp.num { text-align: right; font-variant-numeric: tabular-nums; }
 .inp.mirror, .inp:disabled {
-  color: #7a88a5; background: rgba(255,255,255,0.02);
+  color: var(--hairline-2); background: rgba(255,255,255,0.02);
   cursor: default; text-align: center;
 }
 .inp.sel {
@@ -252,12 +286,12 @@ td.meta-col { width: auto; min-width: 0; }
   border: 0; background: transparent; color: var(--muted); cursor: pointer;
   font-size: 13px; padding: 4px 7px; border-radius: 6px;
 }
-.del:hover { color: var(--red); background: rgba(248,113,113,0.12); }
+.del:hover { color: var(--red); background: rgba(var(--red-rgb), 0.12); }
 .edit-res {
   border: 0; background: transparent; color: var(--muted); cursor: pointer;
   font-size: 13px; padding: 4px 7px; border-radius: 6px;
 }
-.edit-res:hover { color: var(--accent); background: rgba(34,211,238,0.12); }
+.edit-res:hover { color: var(--accent); background: rgba(var(--accent-rgb), 0.12); }
 
 /* ---------- dashboard ---------- */
 .cards { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
@@ -273,15 +307,15 @@ td.meta-col { width: auto; min-width: 0; }
 #dashTable th { text-align: left; padding: 8px 12px; }
 #dashTable td { padding: 8px 12px; text-align: right; font-variant-numeric: tabular-nums; }
 #dashTable td:first-child, #dashTable td:nth-child(2), #dashTable th:first-child, #dashTable th:nth-child(2) { text-align: left; }
-#dashTable tr.total-row td { font-weight: 800; background: rgba(34,211,238,0.08); border-top: 1px solid var(--border-strong); }
+#dashTable tr.total-row td { font-weight: 800; background: rgba(var(--accent-rgb), 0.08); border-top: 1px solid var(--border-strong); }
 .cur-chip {
   display: inline-block; font-size: 10.5px; font-weight: 700; padding: 2px 8px;
-  border-radius: 999px; background: rgba(251,191,36,0.12); color: var(--amber);
-  border: 1px solid rgba(251,191,36,0.35);
+  border-radius: 999px; background: rgba(var(--amber-rgb), 0.12); color: var(--amber);
+  border: 1px solid rgba(var(--amber-rgb), 0.35);
 }
 .diffbar { display: inline-block; height: 6px; border-radius: 3px; vertical-align: middle; margin-left: 6px; }
-.diffbar.pos { background: linear-gradient(90deg, rgba(52,211,153,0.9), rgba(52,211,153,0.25)); }
-.diffbar.neg { background: linear-gradient(90deg, rgba(248,113,113,0.9), rgba(248,113,113,0.25)); }
+.diffbar.pos { background: linear-gradient(90deg, rgba(var(--green-rgb), 0.9), rgba(var(--green-rgb), 0.25)); }
+.diffbar.neg { background: linear-gradient(90deg, rgba(var(--red-rgb), 0.9), rgba(var(--red-rgb), 0.25)); }
 
 /* number inputs: no spinner arrows anywhere */
 input[type=number]::-webkit-inner-spin-button,
@@ -298,15 +332,15 @@ input[type=number] { -moz-appearance: textfield; appearance: textfield; }
 #projectsTable td { padding: 6px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
 #projectsTable td.num, #projectsTable th.num { text-align: right; font-variant-numeric: tabular-nums; }
 #projectsTable tr.p-group td {
-  background: #151e36;
+  background: var(--surface-6);
   border-top: 1px solid var(--border-strong); font-weight: 700; padding: 8px 10px;
 }
 #projectsTable tr.p-total td {
-  background: rgba(167,139,250,0.07); border-top: 1px dashed var(--border-strong);
+  background: rgba(var(--accent2-rgb), 0.07); border-top: 1px dashed var(--border-strong);
   font-weight: 700; color: var(--accent2);
 }
 #projectsTable tr.grand-total td {
-  background: rgba(34,211,238,0.10); font-weight: 800; border-top: 2px solid var(--border-strong);
+  background: rgba(var(--accent-rgb), 0.10); font-weight: 800; border-top: 2px solid var(--border-strong);
 }
 .rate-inp {
   width: 92px; text-align: right; font-variant-numeric: tabular-nums;
@@ -329,30 +363,37 @@ input[type=number] { -moz-appearance: textfield; appearance: textfield; }
 }
 .cur-sel:focus { border-color: var(--accent); }
 .cur-tag { color: var(--amber); font-size: 11.5px; font-weight: 700; margin-right: 3px; }
-tr.p-edit td { background: rgba(34,211,238,0.06); }
+tr.p-edit td { background: rgba(var(--accent-rgb), 0.06); }
 tr.p-edit .rate-inp, tr.p-edit .cur-sel { border-color: var(--accent); }
 
 /* ---------- utilization board ---------- */
-#utilWrap { background: #0b101f; }
-#utilTable { background: #0b101f; font-size: 12.5px; }
-#utilTable th { position: sticky; top: 0; z-index: 20; background: #0d1326; text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border-strong); font-size: 11px; color: var(--muted); }
+#utilWrap { background: var(--surface-1); }
+#utilTable { background: var(--surface-1); font-size: 12.5px; }
+#utilTable th { position: sticky; top: 0; z-index: 20; background: var(--header-bg); text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border-strong); font-size: 11px; color: var(--muted); }
 #utilTable th.num { text-align: right; }
 /* "Resource" header cell: pins to the left too (matches the frozen name column) */
-#utilTable th.u-th-name { position: sticky; left: 0; top: 0; z-index: 30; background: #0d1326; border-right: 1px solid rgba(255,255,255,0.26); }
-#utilTable td { padding: 6px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; background: #0b101f; }
+#utilTable th.u-th-name { position: sticky; left: 0; top: 0; z-index: 30; background: var(--header-bg); border-right: 1px solid rgba(255,255,255,0.26); }
+#utilTable td { padding: 6px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; background: var(--surface-1); }
 /* Resource-name column: fully opaque + always paints above scrolled cells */
-.u-name-td { position: sticky; left: 0; z-index: 4; background: #0b101f; }
-.u-name { display: block; position: sticky; left: 0; z-index: 5; background: #0e1428; padding: 6px 10px; margin: -6px -10px; font-weight: 600; }
-#utilTable tbody tr:hover .u-name { background: #1a2238; }
+.u-name-td { position: sticky; left: 0; z-index: 4; background: var(--surface-1); }
+.u-name { display: block; position: sticky; left: 0; z-index: 5; background: var(--header-bg); padding: 6px 10px; margin: -6px -10px; font-weight: 600; }
+#utilTable tbody tr:hover .u-name { background: var(--surface-3); }
 .u-proj { color: var(--muted); max-width: 340px; overflow: hidden; text-overflow: ellipsis; }
 .u-cell { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
 /* SOLID backgrounds everywhere — no rgba, nothing can show through.
    (Higher specificity than the base td rule so colors actually apply.) */
-#utilTable td.u-cell.red { color: #f87171; background: #3a1b22; }
-#utilTable td.u-cell.green { color: #34d399; background: #10301f; }
-#utilTable td.u-cell.yellow { color: #fbbf24; background: #332a12; }
-#utilTable td.u-cell.orange { color: #fb923c; background: #33200f; }
-#utilTable th.u-sub { font-size: 10px; color: var(--muted); background: #101831; }
+#utilTable td.u-cell.red { color: var(--red); background: var(--pill-red-bg); }
+#utilTable td.u-cell.green { color: var(--green); background: var(--pill-green-bg); }
+#utilTable td.u-cell.yellow { color: var(--amber); background: var(--pill-amber-bg); }
+#utilTable td.u-cell.orange { color: var(--orange); background: var(--pill-orange-bg); }
+/* Light themes: the status hues are DARKENED so a pale pill keeps enough
+   contrast on a light surface. Theme #8 — set by data-theme-dark="0" on <html>
+   server-side, so no JS is involved and there is no flash. */
+html[data-theme-dark="0"] #utilTable td.u-cell.red { color: #a3241a; }
+html[data-theme-dark="0"] #utilTable td.u-cell.green { color: #0b6b3a; }
+html[data-theme-dark="0"] #utilTable td.u-cell.yellow { color: #7a4d00; }
+html[data-theme-dark="0"] #utilTable td.u-cell.orange { color: #8a3d00; }
+#utilTable th.u-sub { font-size: 10px; color: var(--muted); background: var(--surface-5); }
 #utilTable th[colspan="2"] { text-align: center; }
 #utilTable tr:first-child th { border-bottom: 1px solid var(--border-strong); }
 .u-month-label { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
@@ -405,7 +446,7 @@ tr.p-edit .rate-inp, tr.p-edit .cur-sel { border-color: var(--accent); }
 .col-panel {
   position: fixed; z-index: 120;
   width: min(300px, 92vw); max-height: 70vh; overflow: auto;
-  background: #0e1428; border: 1px solid var(--border-strong);
+  background: var(--surface-2); border: 1px solid var(--border-strong);
   border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,0.55);
   padding: 12px 14px;
 }
@@ -422,7 +463,7 @@ tr.p-edit .rate-inp, tr.p-edit .cur-sel { border-color: var(--accent); }
 .col-name { flex: 1; font-size: 12.5px; color: var(--text); }
 .col-name.pinned { color: var(--green); font-weight: 600; }
 .col-pin { background: transparent; border: 0; font-size: 14px; cursor: pointer; padding: 0 4px; }
-.col-pin[aria-pressed=true] { filter: drop-shadow(0 0 4px rgba(52,211,153,0.6)); }
+.col-pin[aria-pressed=true] { filter: drop-shadow(0 0 4px rgba(var(--green-rgb), 0.6)); }
 .col-panel-actions { margin-top: 10px; display: flex; justify-content: flex-end; }
 
 
@@ -458,15 +499,15 @@ tr.p-edit .rate-inp, tr.p-edit .cur-sel { border-color: var(--accent); }
 .login-err { color: var(--red); font-size: 12.5px; margin-top: 12px; min-height: 16px; }
 
 /* ---------- actuals tab ---------- */
-#actualsWrap, #actualsTable { background: #0b101f; }
+#actualsWrap, #actualsTable { background: var(--surface-1); }
 #actualsTable { table-layout: fixed; }
-#actualsTable td.sticky-l, #actualsTable th.sticky-h { background: #0e1428; }
-#actualsTable tbody tr:hover td.sticky-l { background: #1a2238; }
-#actualsTable tr.group-row td.sticky-l { background: #121829; }
-#actualsTable tbody tr.group-row:hover td.sticky-l { background: #1a2238; }
+#actualsTable td.sticky-l, #actualsTable th.sticky-h { background: var(--header-bg); }
+#actualsTable tbody tr:hover td.sticky-l { background: var(--surface-3); }
+#actualsTable tr.group-row td.sticky-l { background: var(--surface-7); }
+#actualsTable tbody tr.group-row:hover td.sticky-l { background: var(--surface-3); }
 .a-inp { text-align: center; }
-.a-inp.a-over { color: var(--amber); background: rgba(251,191,36,0.10); }
-.a-inp.a-under { color: var(--red); background: rgba(248,113,113,0.10); }
+.a-inp.a-over { color: var(--amber); background: rgba(var(--amber-rgb), 0.10); }
+.a-inp.a-under { color: var(--red); background: rgba(var(--red-rgb), 0.10); }
 td.calc.a-over { color: var(--amber); }
 td.calc.a-under { color: var(--red); }
 td.week .a-inp { text-align: center; }
@@ -476,7 +517,7 @@ td.week .a-inp { text-align: center; }
 #pmWrap, #capWrap { margin-top: 12px; }
 #pmTable, #capTable { width: 100%; min-width: 0; }
 #pmTable th, #capTable th {
-  position: sticky; top: 0; z-index: 20; background: #0d1326; text-align: left;
+  position: sticky; top: 0; z-index: 20; background: var(--header-bg); text-align: left;
   padding: 8px 10px; border-bottom: 1px solid var(--border-strong); font-size: 11px; color: var(--muted);
 }
 #pmTable td, #capTable td { padding: 6px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
@@ -518,7 +559,7 @@ td.week .a-inp { text-align: center; }
 .a-team-head { font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 6px; }
 .a-entry-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12px; }
 .a-entry-table th {
-  position: sticky; top: 0; z-index: 20; background: #0d1326; text-align: center;
+  position: sticky; top: 0; z-index: 20; background: var(--header-bg); text-align: center;
   padding: 6px 4px; border-bottom: 1px solid var(--border-strong); font-size: 10.5px; color: var(--muted);
 }
 .a-entry-table td { padding: 4px 6px; border-bottom: 1px solid var(--border); white-space: nowrap; }
@@ -546,7 +587,7 @@ td.week .a-inp { text-align: center; }
   display: inline-block; font-size: 9px; font-weight: 700; padding: 1px 5px;
   border-radius: 999px; margin-top: 1px; line-height: 1.4; white-space: nowrap;
 }
-.ot-chip.ot-ok { color: var(--green); background: rgba(52,211,153,0.12); border: 1px solid rgba(52,211,153,0.4); }
-.ot-chip.ot-unbilled { color: var(--amber); background: rgba(251,191,36,0.12); border: 1px solid rgba(251,191,36,0.4); }
-.ot-chip.ot-block { color: var(--red); background: rgba(248,113,113,0.12); border: 1px solid rgba(248,113,113,0.4); }
+.ot-chip.ot-ok { color: var(--green); background: rgba(var(--green-rgb), 0.12); border: 1px solid rgba(var(--green-rgb), 0.4); }
+.ot-chip.ot-unbilled { color: var(--amber); background: rgba(var(--amber-rgb), 0.12); border: 1px solid rgba(var(--amber-rgb), 0.4); }
+.ot-chip.ot-block { color: var(--red); background: rgba(var(--red-rgb), 0.12); border: 1px solid rgba(var(--red-rgb), 0.4); }
 .ot-chip.ot-not { color: var(--muted); background: rgba(255,255,255,0.06); border: 1px solid var(--border); }

@@ -10,7 +10,7 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icons/icon-192.png">
 <title>Revenue Recon</title>
-<link rel="stylesheet" href="/styles.css?v=49">
+<link rel="stylesheet" href="/styles.css?v=50">
 </head>
 <body>
 <div class="bg-glow"></div>
@@ -71,6 +71,7 @@
     <button class="btn ghost" id="btnAddProject">+ Add/Edit Client Project</button>
     <a class="btn ghost" id="btnGitHub" href="https://github.com/rijoymanghat84/revenue-tracker" target="_blank" rel="noopener" title="View the source code on GitHub">GitHub</a>
     <a class="btn ghost" id="btnReportIssue" href="https://github.com/rijoymanghat84/revenue-tracker/issues/new" target="_blank" rel="noopener" title="Report a bug or request a feature">Report issue</a>
+    <select id="themeSel" class="cur-sel hidden" title="Choose a theme (saved to your account)"></select>
     <button class="btn ghost" id="btnLogout" title="Sign out">Sign out</button>
   </div>
 </header>
@@ -277,7 +278,7 @@
   </div>
 </div>
 
-<script src="/app.js?v=72"></script>
+<script src="/app.js?v=73"></script>
 <script>
   // PWA: register the service worker (only after load; skip on failure)
   if ("serviceWorker" in navigator) {

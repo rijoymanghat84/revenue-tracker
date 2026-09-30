@@ -154,6 +154,7 @@ function showApp() {
     state.me.permissions || (state.me.super_admin ? ADMIN_PERM_KEYS : [])
   );
   const can = (p) => !isAdmin || perms.has(p);
+  initThemeSwitcher();
   // Map each tab to the permission that unlocks it. PMs (non-admin) always see
   // Actuals + Utilization; admins see only what their permissions allow.
   const tabPerm = { dash: "dashboard", planned: "resources", actuals: "actuals", pricing: "pricing", util: "utilization" };
@@ -211,6 +212,57 @@ $("#btnLogout").addEventListener("click", async () => {
   state.me = null;
   showLogin();
 });
+
+/* ---------------- themes (feature #8, option C) ----------------
+ * The theme itself is applied SERVER-SIDE: app/main.py injects an inline
+ * `:root{...}` block plus window.__THEME__ into index.html, so the correct look
+ * is painted on the first frame — a purely client-side apply would flash the
+ * default theme on every load.
+ *
+ * This code fills the picker, hides it when the user may not change the theme,
+ * POSTs the choice, and then reloads. The reload is deliberate: it is the only
+ * way to get a result that is byte-identical to what the server renders next
+ * time (including the light-theme status pills, which need a document-level
+ * attribute, not just custom properties). On a local app the reload is instant.
+ */
+let THEME_LIST = [];
+
+async function initThemeSwitcher() {
+  const sel = $("#themeSel");
+  if (!sel) return;
+  let data;
+  try {
+    data = await api("/api/themes");
+  } catch (_) {
+    sel.classList.add("hidden");
+    return;
+  }
+  THEME_LIST = data.themes || [];
+  if (!data.can_change) {
+    sel.classList.add("hidden");
+    return;
+  }
+  sel.innerHTML = THEME_LIST
+    .map((t) => `<option value="${esc(t.key)}"${t.key === data.current ? " selected" : ""}>${esc(t.label)}</option>`)
+    .join("");
+  sel.classList.remove("hidden");
+
+  if (sel.dataset.bound === "1") return;
+  sel.dataset.bound = "1";
+  sel.addEventListener("change", async () => {
+    const key = sel.value;
+    const prev = data.current;
+    sel.disabled = true;
+    try {
+      await api("/api/themes", { method: "POST", body: JSON.stringify({ theme: key }) });
+      location.reload();
+    } catch (ex) {
+      sel.value = prev; // put it back — the server kept the old value
+      sel.disabled = false;
+      alert("Could not save theme: " + (ex.message || "unknown"));
+    }
+  });
+}
 
 /* ---------------- data load ---------------- */
 async function loadState() {

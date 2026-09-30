@@ -20,7 +20,7 @@ import shutil
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -304,6 +304,7 @@ ADMIN_PERMISSIONS = [
     "utilization",    # Utilization tab
     "import_export",  # Import / Export Excel
     "db_security",    # Database encryption management
+    "theming",        # Change own UI theme (feature #8)
 ]
 
 
@@ -407,7 +408,262 @@ def api_me(request: Request):
         conn.close()
 
 
-# ---------------- DB ----------------
+# ---------------- Themes (feature #8, option C — server-side, per-user) --------
+# Eight themes defined as CSS custom-property overrides. The KEY is what gets
+# stored in users.theme (or meta['theme:<user>'] for the super-admin); the
+# values are injected as inline custom properties on <html> server-side, so the
+# correct theme paints on FIRST byte — no flash of the wrong theme.
+#
+# Order matters: 'midnight' is the default and MUST reproduce the original
+# palette exactly (see the drift check in scripts/semanticize_css.py).
+THEMES: dict[str, dict] = {
+    "midnight": {
+        "label": "Midnight (default)", "dark": True,
+        # Empty override = the :root values in styles.css, i.e. the look that
+        # shipped before themes. Kept explicit-absent on purpose.
+        "vars": {},
+    },
+    "belwo": {
+        "label": "BelWo", "dark": True,
+        "vars": {
+            "--bg": "#070d18", "--surface-1": "#0b1424", "--surface-2": "#0e1a2e",
+            "--surface-3": "#132340", "--surface-4": "#050a13", "--surface-5": "#0d1a2d",
+            "--surface-6": "#101f36", "--surface-7": "#0c1626", "--header-bg": "#0a1626",
+            "--text": "#eaf2ff", "--muted": "#8ba0c0",
+            "--accent": "#2dd4bf", "--accent2": "#38bdf8",
+            "--accent-rgb": "45, 212, 191", "--accent2-rgb": "56, 189, 248",
+            "--hairline": "#3d5470", "--hairline-2": "#6f88a8",
+            "--sticky-bg": "rgba(10, 22, 38, 0.9)", "--corner-bg": "rgba(13, 26, 45, 0.96)",
+        },
+    },
+    "apple": {
+        "label": "Apple", "dark": True,
+        "vars": {
+            "--bg": "#000000", "--surface-1": "#1c1c1e", "--surface-2": "#2c2c2e",
+            "--surface-3": "#3a3a3c", "--surface-4": "#0a0a0a", "--surface-5": "#242426",
+            "--surface-6": "#28282a", "--surface-7": "#1f1f21", "--header-bg": "#1c1c1e",
+            "--text": "#f5f5f7", "--muted": "#98989d",
+            "--accent": "#0a84ff", "--accent2": "#bf5af2",
+            "--accent-rgb": "10, 132, 255", "--accent2-rgb": "191, 90, 242",
+            "--green": "#30d158", "--red": "#ff453a", "--amber": "#ffd60a",
+            "--green-rgb": "48, 209, 88", "--red-rgb": "255, 69, 58", "--amber-rgb": "255, 214, 10",
+            "--pill-green-bg": "#0d2a15", "--pill-red-bg": "#2e1210",
+            "--pill-amber-bg": "#2e2810", "--pill-orange-bg": "#2e1d0c",
+            "--hairline": "#48484a", "--hairline-2": "#7c7c80",
+            "--sticky-bg": "rgba(28, 28, 30, 0.92)", "--corner-bg": "rgba(44, 44, 46, 0.96)",
+        },
+    },
+    "paper": {
+        "label": "Paper (light)", "dark": False,
+        "vars": {
+            "--bg": "#f4f5f7", "--surface-1": "#ffffff", "--surface-2": "#fafbfc",
+            "--surface-3": "#eef0f4", "--surface-4": "#f7f8fa", "--surface-5": "#ffffff",
+            "--surface-6": "#f6f7f9", "--surface-7": "#ffffff", "--header-bg": "#eef0f4",
+            "--text": "#1a2233", "--muted": "#667085", "--muted-rgb": "102, 112, 133",
+            "--text-rgb": "26, 34, 51", "--bg-rgb": "244, 245, 247",
+            "--accent": "#0d7d8f", "--accent2": "#6d4fd8",
+            "--accent-rgb": "13, 125, 143", "--accent2-rgb": "109, 79, 216",
+            "--green": "#0f7a4a", "--red": "#c0362b", "--amber": "#a3690a",
+            "--green-rgb": "15, 122, 74", "--red-rgb": "192, 54, 43", "--amber-rgb": "163, 105, 10",
+            "--pill-green-bg": "#e2f5e9", "--pill-red-bg": "#fbe6e4",
+            "--pill-amber-bg": "#f7e4b8", "--pill-orange-bg": "#f8dfc2",
+            "--panel": "rgba(10, 20, 40, 0.04)", "--panel-strong": "rgba(10, 20, 40, 0.07)",
+            "--border": "rgba(10, 20, 40, 0.13)", "--border-strong": "rgba(10, 20, 40, 0.26)",
+            "--hairline": "#b9c0cc", "--hairline-2": "#8b95a5",
+            "--sticky-bg": "rgba(255, 255, 255, 0.94)", "--corner-bg": "rgba(238, 240, 244, 0.97)",
+        },
+    },
+    "nord": {
+        "label": "Nord", "dark": True,
+        "vars": {
+            "--bg": "#2e3440", "--surface-1": "#3b4252", "--surface-2": "#434c5e",
+            "--surface-3": "#4c566a", "--surface-4": "#2b303b", "--surface-5": "#3b4252",
+            "--surface-6": "#414a5c", "--surface-7": "#3b4252", "--header-bg": "#3b4252",
+            "--text": "#eceff4", "--muted": "#a9b3c4", "--muted-rgb": "169, 179, 196",
+            "--text-rgb": "236, 239, 244", "--bg-rgb": "46, 52, 64",
+            "--accent": "#88c0d0", "--accent2": "#b48ead",
+            "--accent-rgb": "136, 192, 208", "--accent2-rgb": "180, 142, 173",
+            "--green": "#a3be8c", "--red": "#cf7a82", "--amber": "#ebcb8b",
+            "--green-rgb": "163, 190, 140", "--red-rgb": "207, 122, 130", "--amber-rgb": "235, 203, 139",
+            "--pill-green-bg": "#3b4a3a", "--pill-red-bg": "#1d1214",
+            "--pill-amber-bg": "#4a4436", "--pill-orange-bg": "#4a3b2f",
+            "--hairline": "#5e6b80", "--hairline-2": "#8a95a8",
+            "--sticky-bg": "rgba(59, 66, 82, 0.93)", "--corner-bg": "rgba(67, 76, 94, 0.96)",
+        },
+    },
+    "solarized": {
+        "label": "Solarized", "dark": True,
+        "vars": {
+            "--bg": "#002b36", "--surface-1": "#073642", "--surface-2": "#0a3f4d",
+            "--surface-3": "#124a58", "--surface-4": "#01222b", "--surface-5": "#073642",
+            "--surface-6": "#0a3d4a", "--surface-7": "#073642", "--header-bg": "#073642",
+            "--text": "#eee8d5", "--muted": "#93a1a1", "--muted-rgb": "147, 161, 161",
+            "--text-rgb": "238, 232, 213", "--bg-rgb": "0, 43, 54",
+            "--accent": "#2aa198", "--accent2": "#6c71c4",
+            "--accent-rgb": "42, 161, 152", "--accent2-rgb": "108, 113, 196",
+            "--green": "#859900", "--red": "#e35d5a", "--amber": "#b58900",
+            "--green-rgb": "133, 153, 0", "--red-rgb": "227, 93, 90", "--amber-rgb": "181, 137, 0",
+            "--pill-green-bg": "#0f1a00", "--pill-red-bg": "#170a09",
+            "--pill-amber-bg": "#241d00", "--pill-orange-bg": "#241a08",
+            "--hairline": "#1e5666", "--hairline-2": "#5b7a83",
+            "--sticky-bg": "rgba(7, 54, 66, 0.94)", "--corner-bg": "rgba(10, 63, 77, 0.97)",
+        },
+    },
+    "forest": {
+        "label": "Forest", "dark": True,
+        "vars": {
+            "--bg": "#0b1a12", "--surface-1": "#12271c", "--surface-2": "#173024",
+            "--surface-3": "#1f3d2d", "--surface-4": "#081410", "--surface-5": "#12271c",
+            "--surface-6": "#173023", "--surface-7": "#12271c", "--header-bg": "#12271c",
+            "--text": "#e6f2ea", "--muted": "#8fae9d", "--muted-rgb": "143, 174, 157",
+            "--text-rgb": "230, 242, 234", "--bg-rgb": "11, 26, 18",
+            "--accent": "#4ade80", "--accent2": "#a3e635",
+            "--accent-rgb": "74, 222, 128", "--accent2-rgb": "163, 230, 53",
+            "--green": "#4ade80", "--red": "#f87171", "--amber": "#fcd34d",
+            "--green-rgb": "74, 222, 128", "--red-rgb": "248, 113, 113", "--amber-rgb": "252, 211, 77",
+            "--pill-green-bg": "#14321f", "--pill-red-bg": "#3a1b1b",
+            "--pill-amber-bg": "#3a3212", "--pill-orange-bg": "#3a2712",
+            "--hairline": "#2f523c", "--hairline-2": "#6b8f78",
+            "--sticky-bg": "rgba(18, 39, 28, 0.94)", "--corner-bg": "rgba(23, 48, 36, 0.96)",
+        },
+    },
+    "sunset": {
+        "label": "Sunset", "dark": True,
+        "vars": {
+            "--bg": "#1a0f1e", "--surface-1": "#26162c", "--surface-2": "#311c39",
+            "--surface-3": "#3f2449", "--surface-4": "#150c19", "--surface-5": "#26162c",
+            "--surface-6": "#2d1a34", "--surface-7": "#26162c", "--header-bg": "#26162c",
+            "--text": "#f7e9f5", "--muted": "#b393ad", "--muted-rgb": "179, 147, 173",
+            "--text-rgb": "247, 233, 245", "--bg-rgb": "26, 15, 30",
+            "--accent": "#fb7185", "--accent2": "#fbbf24",
+            "--accent-rgb": "251, 113, 133", "--accent2-rgb": "251, 191, 36",
+            "--green": "#4ade80", "--red": "#fb7185", "--amber": "#fbbf24",
+            "--green-rgb": "74, 222, 128", "--red-rgb": "251, 113, 133", "--amber-rgb": "251, 191, 36",
+            "--pill-green-bg": "#14321f", "--pill-red-bg": "#3d1a22",
+            "--pill-amber-bg": "#3d3212", "--pill-orange-bg": "#3d2612",
+            "--hairline": "#5c3a52", "--hairline-2": "#94708c",
+            "--sticky-bg": "rgba(38, 22, 44, 0.94)", "--corner-bg": "rgba(49, 28, 57, 0.96)",
+        },
+    },
+    "contrast": {
+        "label": "High contrast", "dark": True,
+        "vars": {
+            "--bg": "#000000", "--surface-1": "#0d0d0d", "--surface-2": "#161616",
+            "--surface-3": "#242424", "--surface-4": "#000000", "--surface-5": "#101010",
+            "--surface-6": "#141414", "--surface-7": "#111111", "--header-bg": "#0d0d0d",
+            "--text": "#ffffff", "--muted": "#c8c8c8", "--muted-rgb": "200, 200, 200",
+            "--text-rgb": "255, 255, 255", "--bg-rgb": "0, 0, 0",
+            "--accent": "#00e5ff", "--accent2": "#ff5cf4",
+            "--accent-rgb": "0, 229, 255", "--accent2-rgb": "255, 92, 244",
+            "--green": "#00ff88", "--red": "#ff4d4d", "--amber": "#ffd400",
+            "--green-rgb": "0, 255, 136", "--red-rgb": "255, 77, 77", "--amber-rgb": "255, 212, 0",
+            "--pill-green-bg": "#052e18", "--pill-red-bg": "#3d0d0d",
+            "--pill-amber-bg": "#3d3300", "--pill-orange-bg": "#3d2400",
+            "--panel": "rgba(255, 255, 255, 0.09)", "--panel-strong": "rgba(255, 255, 255, 0.16)",
+            "--border": "rgba(255, 255, 255, 0.22)", "--border-strong": "rgba(255, 255, 255, 0.42)",
+            "--hairline": "#8a8a8a", "--hairline-2": "#b8b8b8",
+            "--sticky-bg": "rgba(13, 13, 13, 0.97)", "--corner-bg": "rgba(22, 22, 22, 0.98)",
+        },
+    },
+}
+DEFAULT_THEME = "midnight"
+
+
+def _theme_key(user) -> str:
+    """Resolve the theme key for a user, falling back to the default."""
+    try:
+        if _super_admin(user):
+            # Super-admin has no users row — stored in meta.
+            conn = get_db()
+            try:
+                row = conn.execute("SELECT value FROM meta WHERE key=?",
+                                   (f"theme:{user.get('u','')}",)).fetchone()
+                k = row["value"] if row else ""
+            finally:
+                conn.close()
+        else:
+            conn = get_db()
+            try:
+                row = conn.execute("SELECT theme FROM users WHERE username=?",
+                                   (user.get("u", ""),)).fetchone()
+                k = (row["theme"] if row else "") or ""
+            finally:
+                conn.close()
+    except Exception:  # noqa: BLE001
+        k = ""
+    return k if k in THEMES else DEFAULT_THEME
+
+
+def _theme_css_vars(key: str) -> str:
+    """Inline custom-property block for server-side injection on <html>.
+
+    Injected server-side so the correct theme is painted on the first byte —
+    a client-side apply would flash the default theme first.
+    """
+    t = THEMES.get(key) or THEMES[DEFAULT_THEME]
+    if not t["vars"]:
+        return ""
+    body = "".join(f"{k}:{v};" for k, v in t["vars"].items())
+    return f":root{{{body}}}"
+
+
+@app.get("/api/themes")
+def api_themes(request: Request):
+    """Available themes + this user's current choice."""
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(401, "Unauthorized")
+    cur = _theme_key(user)
+    return {
+        "themes": [{"key": k, "label": v["label"], "dark": v["dark"]}
+                   for k, v in THEMES.items()],
+        "current": cur,
+        # The super-admin can always switch; a regular admin needs the
+        # 'theming' permission; a PM is read-only (gets the default).
+        "can_change": _can_change_theme(user),
+    }
+
+
+def _can_change_theme(user) -> bool:
+    if not user:
+        return False
+    if _super_admin(user):
+        return True
+    if user.get("r") != "admin":
+        return False
+    conn = get_db()
+    try:
+        return "theming" in _user_permissions(user, conn)
+    finally:
+        conn.close()
+
+
+@app.post("/api/themes")
+def api_themes_set(request: Request, payload: dict):
+    """Persist the caller's theme choice. Body: {"theme": "<key>"}."""
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(401, "Unauthorized")
+    if not _can_change_theme(user):
+        raise HTTPException(403, "You do not have permission to change the theme")
+    key = str(payload.get("theme") or "").strip()
+    if key not in THEMES:
+        raise HTTPException(400, f"unknown theme {key!r}")
+    conn = get_db()
+    try:
+        if _super_admin(user):
+            conn.execute("INSERT INTO meta (key, value) VALUES (?, ?) "
+                         "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                         (f"theme:{user.get('u','')}", key))
+        else:
+            conn.execute("UPDATE users SET theme=? WHERE username=?", (key, user.get("u", "")))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True, "theme": key}
+
+
+
 def init_db() -> None:
     conn = get_db()
     conn.executescript(
@@ -491,6 +747,12 @@ def init_db() -> None:
     ucols = {r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
     if "permissions" not in ucols:
         conn.execute("ALTER TABLE users ADD COLUMN permissions TEXT NOT NULL DEFAULT '[]'")
+    # Migration: add theme column (per-user UI theme, feature #8).
+    # Stores a theme KEY from THEMES below; '' means "use the default".
+    # The super-admin (shared .password login) has no users row, so their
+    # choice lives in meta under 'theme:<username>' instead.
+    if "theme" not in ucols:
+        conn.execute("ALTER TABLE users ADD COLUMN theme TEXT NOT NULL DEFAULT ''")
     # Migration: add capacity column if the resources table predates it
     rcols = {r[1] for r in conn.execute("PRAGMA table_info(resources)").fetchall()}
     if "capacity" not in rcols:
@@ -1015,6 +1277,7 @@ def api_permissions(request: Request):
         "utilization": "View Utilization",
         "import_export": "Import / Export Excel",
         "db_security": "Manage database security",
+        "theming": "Change own UI theme",
     }
     return {"permissions": [
         {"key": k, "label": labels.get(k, k)} for k in ADMIN_PERMISSIONS
@@ -2019,6 +2282,60 @@ def _deployed_commit() -> str:
 def api_version():
     """Report the deployed commit so the frontend can detect pending updates."""
     return {"commit": _deployed_commit()}
+
+
+@app.get("/index.html", include_in_schema=False)
+@app.get("/", include_in_schema=False)
+def index_page(request: Request):
+    """Serve the SPA shell with the user's theme injected SERVER-SIDE.
+
+    Why not let the client apply it? A client-side apply always shows the
+    default theme for one paint, then swaps — a visible flash on every load.
+    Injecting the custom-property block into the document means the correct
+    theme is there in the first painted frame (feature #8, option C).
+
+    Falls through to the plain file when there is no valid session: the
+    frontend then renders its login screen, and the default theme is right.
+    """
+    html = (Path(STATIC_DIR) / "index.html").read_text()
+
+    user = _current_user(request)
+    if user:
+        key = _theme_key(user)
+        dark = THEMES[key]["dark"]
+
+        # The `data-theme` / `data-theme-dark` attributes drive the handful of
+        # rules a custom-property swap cannot express (light-theme status pills
+        # and the meta theme-color). They must be on <html> before first paint.
+        html = html.replace(
+            '<html lang="en">',
+            f'<html lang="en" data-theme="{key}" data-theme-dark="{"1" if dark else "0"}">',
+            1,
+        )
+        # Keep the mobile browser chrome in sync with a light theme.
+        if not dark:
+            html = html.replace(
+                '<meta name="theme-color" content="#0b1020">',
+                '<meta name="theme-color" content="#f4f5f7">',
+                1,
+            )
+
+        inject = ""
+        css = _theme_css_vars(key)
+        if css:
+            inject += f'<style id="theme-vars">{css}</style>\n'
+        inject += (
+            f"<script>window.__THEME__={json.dumps(key)};"
+            f"window.__THEME_DARK__={'true' if dark else 'false'};"
+            f"window.__THEME_CAN_CHANGE__={'true' if _can_change_theme(user) else 'false'};"
+            f"</script>\n"
+        )
+        # Must come AFTER the stylesheet link, which lives in <head>.
+        if "</head>" in html:
+            html = html.replace("</head>", inject + "</head>", 1)
+        else:
+            html = inject + html
+    return HTMLResponse(html)
 
 
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
