@@ -1939,6 +1939,63 @@ def _pricing_dict(row: sqlite3.Row, conn: sqlite3.Connection) -> dict:
     return dict(row) | {"used_by": used}
 
 
+@app.get("/api/pricing/{pid}/resources")
+def api_pricing_resources(pid: int, request: Request):
+    """Who uses this pricing title, at what rate, on which projects.
+
+    Feature #11.1: the 'Used by' count becomes a button that opens a popup with
+    exactly this. Same match the count itself uses (TRIM(role)=title), so the
+    popup can never disagree with the number the user clicked — a popup that
+    lists a different set than the count is worse than no popup at all.
+
+    NOTE: hours are NOT a column on `resources` — they live in `weekly_hours`.
+    Reading `hours` from the resources table 500s. Use _all_resources(), which
+    assembles the per-week hours the same way every other view does.
+    """
+    _require_admin(request)
+    conn = get_db()
+    try:
+        prow = conn.execute(
+            "SELECT id, title, rate, offshore_rate, currency FROM pricing WHERE id=?", (pid,)
+        ).fetchone()
+        if not prow:
+            raise HTTPException(404, "Pricing title not found")
+        title = (prow["title"] or "").strip()
+
+        weeks, _months = _load_layout()
+        allres = _all_resources(conn, weeks)
+        matches = [r for r in allres if (r.get("role") or "").strip() == title]
+
+        resources = []
+        for r in matches:
+            hrs = r.get("hours") or []
+            total_h = sum(h for h in hrs if h)
+            # The resource's OWN rates, not the pricing library's — the point is
+            # to see what each person is actually on.
+            rr = r.get("rate") or 0.0
+            ro = r.get("offshore_rate") or 0.0
+            resources.append({
+                "name": r.get("name") or "—",
+                "client": r.get("client") or "—",
+                "project": r.get("project") or "—",
+                "country": r.get("country") or "—",
+                "rate": round(rr, 2),
+                "offshore_rate": round(ro, 2),
+                "planned_hours": round(total_h, 1),
+                "planned_revenue": round(rr * total_h, 2),
+            })
+        resources.sort(key=lambda x: (-x["planned_revenue"], x["name"].lower()))
+        return {
+            "pricing": {"id": prow["id"], "title": title,
+                        "rate": prow["rate"], "offshore_rate": prow["offshore_rate"],
+                        "currency": prow["currency"]},
+            "resources": resources,
+            "count": len(resources),
+        }
+    finally:
+        conn.close()
+
+
 @app.get("/api/pricing")
 def api_pricing_list(request: Request):
     _require_admin(request)

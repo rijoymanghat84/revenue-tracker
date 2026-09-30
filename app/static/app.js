@@ -964,11 +964,20 @@ $("#gridBody").addEventListener("click", async (e) => {
 
 /* ---------------- pricing tab ---------------- */
 let editingPid = null;
+/* Feature #11.3: collapse/expand-all state + a title filter. */
+let pricingCollapsed = false;
+let pricingFilter = "";
 
 function curSym(code) { return CURR_SYM[code] || code || "$"; }
 
 function pricingRowHTML(p) {
   const isEdit = editingPid === p.id || (editingPid === -1 && p.id === -1);
+  /* Feature #11.1: "Used by" is a button that opens the popup. Kept as plain
+     text while editing, so it cannot be clicked mid-edit by accident. */
+  const usedCell = (isEdit || !p.used_by)
+    ? `<span class="dim">${p.used_by || 0} resource(s)</span>`
+    : `<button class="used-btn" title="Who uses this title? Click for names, rates and projects"
+         onclick="openPricingPopup(${p.id})">${p.used_by} resource(s)</button>`;
   if (isEdit) {
     const sel = ["USD", "GBP", "CAD"].map((c) =>
       `<option value="${c}"${(p.currency || "USD") === c ? " selected" : ""}>${curSym(c)}</option>`).join("");
@@ -977,7 +986,7 @@ function pricingRowHTML(p) {
       <td class="num"><input class="rate-inp" type="number" min="0" step="any" data-field="rate" value="${p.rate ?? ""}" placeholder="—"></td>
       <td class="num"><input class="rate-inp" type="number" min="0" step="any" data-field="offshore_rate" value="${p.offshore_rate ?? ""}" placeholder="—"></td>
       <td><select class="cur-sel" data-field="currency" title="Currency for this title">${sel}</select></td>
-      <td class="num dim">${p.used_by} resource(s)</td>
+      <td class="num">${usedCell}</td>
       <td><button class="btn mini save">Save</button> <button class="btn mini cancel">Cancel</button></td>
     </tr>`;
   }
@@ -986,10 +995,56 @@ function pricingRowHTML(p) {
     <td class="p-title-read">${esc(p.title)}</td>
     <td class="num"><span class="p-read">${sym}${p.rate !== null && p.rate !== undefined ? fmt(p.rate) : '<span class="p-empty">—</span>'}</span></td>
     <td class="num"><span class="p-read">${sym}${p.offshore_rate !== null && p.offshore_rate !== undefined ? fmt(p.offshore_rate) : '<span class="p-empty">—</span>'}</span></td>
-    <td><span class="cur-chip">${sym}</span></td>
-    <td class="num dim">${p.used_by} resource(s)</td>
+    <td class="p-cur"><span class="cur-chip">${sym}</span></td>
+    <td class="num">${usedCell}</td>
     <td><button class="btn mini edit">Edit</button> <button class="btn mini apply">Apply</button> <button class="del" title="Delete title">✕</button></td>
   </tr>`;
+}
+
+/* Feature #11.1: popup listing who uses a pricing title, with their rates and
+   projects. Same TRIM(role)=title match the count uses, so the two always agree. */
+async function openPricingPopup(pid) {
+  const box = $("#resModalBody"), title = $("#resModalTitle");
+  title.textContent = "Used by";
+  box.innerHTML = '<div class="res-empty">Loading…</div>';
+  $("#resModal").classList.remove("hidden");
+  let data;
+  try {
+    data = await api(`/api/pricing/${pid}/resources`);
+  } catch (e) {
+    box.innerHTML = `<div class="res-empty">Could not load: ${esc(e.message || "")}</div>`;
+    return;
+  }
+  const p = data.pricing || {}, list = data.resources || [];
+  const sym = curSym(p.currency);
+  title.textContent = `${p.title || "Title"} — used by ${data.count} resource(s)`;
+  if (!list.length) {
+    box.innerHTML = '<div class="res-empty">No resources use this title yet.</div>';
+    return;
+  }
+  const sum = (k) => list.reduce((a, r) => a + (r[k] || 0), 0);
+  let html = `<div class="res-summary">
+      Pricing library rate <b>${sym}${fmt(p.rate)}</b> · offshore <b>${sym}${fmt(p.offshore_rate)}</b>
+      &nbsp;|&nbsp; ${list.length} resource(s) · planned revenue <b>$${fmt(sum("planned_revenue"))}</b>
+    </div>`;
+  html += `<div class="res-scroll"><table class="res-table"><thead><tr>
+      <th>Resource</th><th>Client</th><th>Project</th>
+      <th class="num">Rate</th><th class="num">Offshore</th>
+      <th class="num">Hours</th><th class="num">Planned Rev</th>
+    </tr></thead><tbody>`;
+  for (const r of list) {
+    html += `<tr>
+      <td class="res-name">${esc(r.name)}</td>
+      <td>${esc(r.client)}</td>
+      <td>${esc(r.project)}</td>
+      <td class="num">$${fmt(r.rate)}</td>
+      <td class="num">$${fmt(r.offshore_rate)}</td>
+      <td class="num">${fmt(r.planned_hours)}</td>
+      <td class="num">$${fmt(r.planned_revenue)}</td>
+    </tr>`;
+  }
+  html += "</tbody></table></div>";
+  box.innerHTML = html;
 }
 
 function renderPricing() {
@@ -1000,17 +1055,36 @@ function renderPricing() {
     loadPMData().then(() => { if (state.view === "pricing") renderPMs(); });
   }
   const rows = state.pricing || [];
-  let html = `<thead><tr>
-    <th>Title</th><th class="num">Rate</th><th class="num">Offshore Rate</th><th>Currency</th>
+  /* Feature #11.3: collapse / expand all pricing titles. Collapsed by default
+     is NOT applied here — the stored preference decides on load. */
+  const collapsed = pricingCollapsed;
+  const shown = collapsed ? [] : rows;
+  let html = `<div class="p-tools glass">
+      <span class="sheet-note">${rows.length} title${rows.length === 1 ? "" : "s"}${collapsed ? " · collapsed" : ""}</span>
+      <span class="p-tools-right">
+        <input type="search" id="pricingFilter" class="search" placeholder="Filter titles…" value="${esc(pricingFilter)}">
+        <button class="btn mini" id="btnPricingExpand"${collapsed ? "" : " disabled"}>Expand all</button>
+        <button class="btn mini" id="btnPricingCollapse"${collapsed ? " disabled" : ""}>Collapse all</button>
+      </span>
+    </div>
+    <table class="p-table"><thead><tr>
+    <th>Title</th><th class="num">Rate</th><th class="num">Offshore Rate</th><th class="p-cur">Currency</th>
     <th class="num">Used By</th><th></th>
   </tr></thead><tbody>`;
-  if (!rows.length && editingPid !== -1) {
-    html += `<tr class="p-res"><td colspan="6" class="dim">No titles yet — click + Add Title or import an Excel file.</td></tr>`;
+  const filtered = rows.filter((p) =>
+    !pricingFilter || (p.title || "").toLowerCase().includes(pricingFilter.toLowerCase()));
+  if (!filtered.length && editingPid !== -1) {
+    html += `<tr class="p-res"><td colspan="6" class="dim">${rows.length ? "No titles match the filter." : "No titles yet — click + Add Title or import an Excel file."}</td></tr>`;
   }
-  for (const p of rows) html += pricingRowHTML(p);
+  for (const p of filtered) html += pricingRowHTML(p);
   if (editingPid === -1) html += pricingRowHTML({ id: -1, title: "", rate: null, offshore_rate: null, currency: "USD", used_by: 0 });
-  html += "</tbody>";
+  html += "</tbody></table>";
   $("#pricingBody").innerHTML = html;
+  const ex = $("#btnPricingExpand"), co = $("#btnPricingCollapse");
+  if (ex) ex.addEventListener("click", () => { pricingCollapsed = false; renderPricing(); });
+  if (co) co.addEventListener("click", () => { pricingCollapsed = true; renderPricing(); });
+  const pf = $("#pricingFilter");
+  if (pf) pf.addEventListener("input", () => { pricingFilter = pf.value; renderPricing(); pf.focus(); });
   renderPMs();
   renderAdmins();
   renderCapacity();
