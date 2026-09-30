@@ -1580,16 +1580,116 @@ def api_project_delete(pid: int, request: Request):
         conn.close()
 
 
+def _week_date(label: str):
+    """Parse a week label like 'Jan-05' (or 'Jan-05-26') into a date.
+
+    The week label is the MONDAY that starts the week. Returns None when the
+    label cannot be parsed, so callers degrade to "no cap" rather than guessing.
+    """
+    lab = (label or "").strip()
+    for fmt in ("%b-%d", "%b-%d-%y", "%b %d", "%Y-%m-%d"):
+        try:
+            d = dt.datetime.strptime(lab, fmt).date()
+            if fmt == "%b-%d":
+                d = d.replace(year=dt.date.today().year)
+            return d
+        except ValueError:
+            continue
+    return None
+
+
+def _till_date_cap(weeks: list[str]) -> int | None:
+    """Index of the LAST week that has already STARTED, or None if unknown.
+
+    Feature #10.3: 'revenue till date and expense should be total till today'.
+    Without this, the Dashboard's till-date columns summed the whole year (all
+    recorded actuals), which is not 'till today'. Returning None when the labels
+    are unparseable is deliberate — better to show everything than to silently
+    truncate on a guess.
+    """
+    today = dt.date.today()
+    last = None
+    for i, w in enumerate(weeks):
+        d = _week_date(w)
+        if d is not None and d <= today:
+            last = i
+    return last
+
+
 @app.get("/api/dashboard")
-def api_dashboard(request: Request, month: str = ""):
+def api_dashboard(request: Request, month: str = "", client: str = ""):
+    """Dashboard rows, optionally scoped to a month and/or a single client.
+
+    `client` (feature #10.1) filters the report to one client and re-totals it.
+    Matching is normalised, so 'acme' finds 'ACME Inc.' exactly as the grouping
+    logic already normalises country/client keys.
+    """
     _require_admin(request)
     conn = get_db()
     try:
         weeks, months = _load_layout()
         resources = _all_resources(conn, weeks)
+        if client.strip():
+            want = _norm(client)
+            resources = [r for r in resources if _norm(r.get("client")) == want]
         wr = _month_week_range(months, month)
-        return {"rows": build_dashboard_rows(resources, weeks, wr), "generated_at": None,
-                "month": month or "all"}
+        rows = build_dashboard_rows(resources, weeks, wr, _till_date_cap(weeks))
+        # Distinct clients for the filter dropdown — always from the FULL set,
+        # so choosing one client never shrinks the list of choosable clients.
+        conn2_clients = sorted({
+            (r.get("client") or "").strip()
+            for r in _all_resources(conn, weeks)
+            if (r.get("client") or "").strip()
+        }, key=lambda s: s.lower())
+        return {"rows": rows, "generated_at": None,
+                "month": month or "all", "client": client or "",
+                "clients": conn2_clients}
+    finally:
+        conn.close()
+
+
+@app.get("/api/dashboard/resources")
+def api_dashboard_resources(request: Request, client: str = "", project: str = ""):
+    """Who is on this client/project, at what rate, on which projects.
+
+    Feature #10.2: the Dashboard's Resource(s) count becomes a button that opens
+    a popup listing exactly this. Matching is normalised on both fields so it
+    lines up with the row the user clicked. `project` is optional: omitting it
+    returns everyone for the client.
+    """
+    _require_admin(request)
+    conn = get_db()
+    try:
+        weeks, _months = _load_layout()
+        resources = _all_resources(conn, weeks)
+        wc, wp = _norm(client), _norm(project)
+        out = []
+        for r in resources:
+            if wc and _norm(r.get("client")) != wc:
+                continue
+            if wp and _norm(r.get("project")) != wp:
+                continue
+            hrs = r.get("hours") or []
+            total_h = sum(h for h in hrs if h)
+            rate = r.get("rate") or 0.0
+            off = r.get("offshore_rate") or 0.0
+            out.append({
+                "name": r.get("name") or "—",
+                "title": r.get("title") or r.get("role") or "—",
+                "country": r.get("country") or "—",
+                "client": r.get("client") or "—",
+                "project": r.get("project") or "—",
+                "rate": round(rate, 2),
+                "offshore_rate": round(off, 2),
+                # what this one person contributes, so the popup explains the
+                # number the user clicked instead of just listing names
+                "planned_hours": round(total_h, 1),
+                "planned_revenue": round(rate * total_h, 2),
+                "planned_expense": round(off * total_h, 2),
+            })
+        out.sort(key=lambda x: (-x["planned_revenue"], x["name"].lower()))
+        return {"resources": out, "count": len(out),
+                "client": client or "", "project": project or ""}
     finally:
         conn.close()
 
@@ -1604,7 +1704,8 @@ def _month_week_range(months: list[dict], month: str) -> tuple[int, int] | None:
     return None
 
 
-def _actuals_financials(r: dict, week_range: tuple[int, int] | None = None) -> dict:
+def _actuals_financials(r: dict, week_range: tuple[int, int] | None = None,
+                        till_index: int | None = None) -> dict:
     """Actuals-based revenue/expense + reconciliation deltas.
     - actual_rev / actual_exp: computed ONLY from recorded actual hours.
       actual_rev counts what was actually billable (billed OT overage counts;
@@ -1613,7 +1714,11 @@ def _actuals_financials(r: dict, week_range: tuple[int, int] | None = None) -> d
     - add_rev / add_exp: overage deltas (billed overage × onsite; all overage
       × offshore).
     - adj_rev / adj_exp: under-delivery deltas (negative on both sides).
-    week_range (start, end) restricts to a single month; None = all weeks."""
+    week_range (start, end) restricts to a single month; None = all weeks.
+    till_index: feature #10.3 — the LAST week index that is "till date". The
+    actuals loop is clamped to it so the till-date columns really mean "till
+    today" instead of including weeks that have not happened yet. None = no cap.
+    """
     add_rev = add_exp = adj_rev = adj_exp = 0.0
     actual_rev = actual_exp = 0.0
     rate = r["rate"] or 0.0
@@ -1622,6 +1727,8 @@ def _actuals_financials(r: dict, week_range: tuple[int, int] | None = None) -> d
     actual = r.get("actual_hours") or []
     notes = r.get("actual_notes") or {}
     lo, hi = (week_range if week_range else (0, len(actual) - 1))
+    if till_index is not None:
+        hi = min(hi, till_index)
     for i in range(lo, hi + 1):
         a = actual[i] if i < len(actual) else 0.0
         if not a:
@@ -1652,7 +1759,8 @@ def _actuals_financials(r: dict, week_range: tuple[int, int] | None = None) -> d
 
 
 def build_dashboard_rows(resources: list[dict], weeks: list[str],
-                         week_range: tuple[int, int] | None = None) -> dict:
+                         week_range: tuple[int, int] | None = None,
+                         till_index: int | None = None) -> dict:
     """Grouped country|client report — mirrors the VBA SyncDashboard but
     dedupes by (normalized country, normalized client) so the Microsoft bug
     (a subtotal row leaking into the group list) cannot recur. Includes the
@@ -1689,7 +1797,7 @@ def build_dashboard_rows(resources: list[dict], weeks: list[str],
         sel_hrs = sum(hrs[i] for i in range(lo, min(hi, len(hrs) - 1) + 1) if i < len(hrs))
         g["revenue"] += (r["rate"] or 0.0) * sel_hrs
         g["expense"] += (r["offshore_rate"] or 0.0) * sel_hrs
-        fin = _actuals_financials(r, week_range)
+        fin = _actuals_financials(r, week_range, till_index)
         g["actual_rev"] += fin["actual_rev"]
         g["actual_exp"] += fin["actual_exp"]
         g["add_rev"] += fin["add_rev"]
