@@ -393,6 +393,65 @@ def api_logout():
     return resp
 
 
+class ChangePasswordBody(BaseModel):
+    current_password: str
+    new_password: str
+
+
+@app.post("/api/me/password")
+def api_change_password(request: Request, body: ChangePasswordBody):
+    """Change the CALLER'S OWN password (feature #9).
+
+    Two distinct cases, because the super-admin is not a DB row:
+      * super-admin (shared .password login) — verify the current password
+        against .password, then write the new one back to that file. The file
+        is the single source of truth for the shared login, so it stays in sync.
+      * everyone else — verify against users.password_hash and update the row.
+
+    A user can only ever change their OWN password here. Changing someone
+    else's is the /api/users/{uid} admin path, which sits behind the 'users'
+    permission.
+    """
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(401, "Unauthorized")
+
+    new = body.new_password or ""
+    if len(new) < 8:
+        raise HTTPException(400, "New password must be at least 8 characters")
+
+    uname = user.get("u", "")
+
+    if _super_admin(user):
+        auser, apw = _admin_creds()
+        if not apw or not hmac.compare_digest(body.current_password or "", apw):
+            raise HTTPException(403, "Current password is incorrect")
+        pw_file = BASE / ".password"
+        # Preserve the file's trailing newline convention, and write 0600.
+        old_mode = pw_file.stat().st_mode if pw_file.exists() else None
+        pw_file.write_text(new + "\n")
+        try:
+            os.chmod(pw_file, 0o600 if old_mode is None else old_mode & 0o777)
+        except Exception:  # noqa: BLE001
+            pass
+        return {"ok": True, "note": "shared admin password updated"}
+
+    conn = get_db()
+    try:
+        row = conn.execute("SELECT password_hash FROM users WHERE username=?",
+                           (uname,)).fetchone()
+        if not row:
+            raise HTTPException(404, "User not found")
+        if not _verify_password(body.current_password or "", row["password_hash"]):
+            raise HTTPException(403, "Current password is incorrect")
+        conn.execute("UPDATE users SET password_hash=? WHERE username=?",
+                     (_hash_password(new), uname))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
 @app.get("/api/me")
 def api_me(request: Request):
     user = getattr(request.state, "user", None)
