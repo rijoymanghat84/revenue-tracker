@@ -1462,9 +1462,12 @@ function alignUtilSticky() {
 }
 
 /* ---------------- dashboard ---------------- */
+/* Feature #10: selected client for the Dashboard filter ('' = all clients). */
+let dashClient = "";
+
 function renderDashboard() {
   const m = state.globalMonth === "all" ? "" : state.globalMonth;
-  api(`/api/dashboard?month=${encodeURIComponent(m)}`).then((data) => {
+  api(`/api/dashboard?month=${encodeURIComponent(m)}&client=${encodeURIComponent(dashClient)}`).then((data) => {
     const groups = data.rows.groups, totals = data.rows.totals;
     let totalRev = 0, totalExp = 0, totalActRev = 0, totalActExp = 0;
     totals.forEach((t) => {
@@ -1473,19 +1476,50 @@ function renderDashboard() {
     });
     const plannedSavings = totalRev - totalExp;
     const actualSavings = totalActRev - totalActExp;
-    $("#dashCards").innerHTML = `
+
+    /* ── Feature #10.1: client filter ──────────────────────────────
+       Re-totals the whole report for one client. The option list comes from
+       the server's full client set, so picking a client never shrinks the list
+       of clients you can pick next. */
+    const clients = data.clients || [];
+    const clientOpts = ['<option value="">All clients</option>']
+      .concat(clients.map((c) =>
+        `<option value="${esc(c)}"${c === dashClient ? " selected" : ""}>${esc(c)}</option>`))
+      .join("");
+    const filtering = !!dashClient;
+    const dashBar = `
+      <div class="dash-bar glass">
+        <label class="dash-bar-label" for="dashClientSel">Filter by client</label>
+        <select id="dashClientSel" class="cur-sel">${clientOpts}</select>
+        ${filtering ? `<span class="dash-chip">Showing only <b>${esc(dashClient)}</b><button class="dash-chip-x" id="dashClientClear" title="Clear filter">✕</button></span>` : ""}
+        <span class="dash-bar-note">All figures below are totals for ${filtering ? "this client" : "every client"}${data.month && data.month !== "all" ? ` · ${esc(data.month)}` : ""}</span>
+      </div>`;
+
+    $("#dashCards").innerHTML = dashBar + `
       <div class="card glass"><div class="k">Planned Revenue</div><div class="v cyan">$${fmt(totalRev)}</div></div>
       <div class="card glass"><div class="k">Planned Expense</div><div class="v">$${fmt(totalExp)}</div></div>
       <div class="card glass"><div class="k">Planned Savings</div><div class="v ${plannedSavings >= 0 ? "green" : "red"}">$${fmt(plannedSavings)}</div></div>
       <div class="card glass"><div class="k">Revenue till date</div><div class="v cyan">$${fmt(totalActRev)}</div></div>
       <div class="card glass"><div class="k">Expense till date</div><div class="v">$${fmt(totalActExp)}</div></div>
       <div class="card glass"><div class="k">Savings till date</div><div class="v ${actualSavings >= 0 ? "green" : "red"}">$${fmt(actualSavings)}</div></div>`;
+
+    const sel = $("#dashClientSel");
+    sel.addEventListener("change", () => { dashClient = sel.value; renderDashboard(); });
+    const clr = $("#dashClientClear");
+    if (clr) clr.addEventListener("click", () => { dashClient = ""; renderDashboard(); });
+
     let rows = `<thead><tr><th>Country</th><th>Client</th><th>Project</th><th>Resource(s)</th><th>Planned Revenue</th><th>Planned Expense</th><th>Planned Savings</th><th>Revenue till date</th><th>Expense till date</th><th>Savings till date</th></tr></thead><tbody>`;
     for (const g of groups) {
       const pSavings = g.revenue - g.expense;
       const aSavings = (g.actual_rev || 0) - (g.actual_exp || 0);
+      /* Feature #10.2: the resource count is a BUTTON that opens a popup
+         listing who they are, their rates, and their projects. */
+      const resCell = g.resources
+        ? `<button class="res-btn" title="Who are they? Click for names, rates and projects"
+             onclick="openResourcePopup('${esc(g.client)}','${esc(g.project === "—" ? "" : g.project)}')">${g.resources}</button>`
+        : "0";
       rows += `<tr>
-        <td>${esc(g.country)}</td><td>${esc(g.client)}</td><td>${esc(g.project)}</td><td>${g.resources}</td>
+        <td>${esc(g.country)}</td><td>${esc(g.client)}</td><td>${esc(g.project)}</td><td>${resCell}</td>
         <td>$${fmt(g.revenue)}</td><td>$${fmt(g.expense)}</td>
         <td style="color:${pSavings >= 0 ? "var(--green)" : "var(--red)"}">$${fmt(pSavings)}</td>
         <td>$${fmt(g.actual_rev || 0)}</td><td>$${fmt(g.actual_exp || 0)}</td>
@@ -1504,6 +1538,54 @@ function renderDashboard() {
     rows += "</tbody>";
     $("#dashTable").innerHTML = rows;
   }).catch((e) => toast(`Dashboard failed: ${e.message}`, true));
+}
+
+/* Feature #10.2: popup listing who is on a client/project, with rates and
+   projects. Explains the number the user clicked instead of just naming people.
+   The response is sorted by contribution server-side. */
+async function openResourcePopup(client, project) {
+  const box = $("#resModalBody");
+  const title = $("#resModalTitle");
+  title.textContent = project
+    ? `Resources on ${project} (${client})`
+    : `Resources for ${client}`;
+  box.innerHTML = '<div class="res-empty">Loading…</div>';
+  $("#resModal").classList.remove("hidden");
+  let data;
+  try {
+    data = await api(`/api/dashboard/resources?client=${encodeURIComponent(client)}&project=${encodeURIComponent(project || "")}`);
+  } catch (e) {
+    box.innerHTML = `<div class="res-empty">Could not load resources: ${esc(e.message || "")}</div>`;
+    return;
+  }
+  const list = data.resources || [];
+  if (!list.length) {
+    box.innerHTML = '<div class="res-empty">No resources found for this selection.</div>';
+    return;
+  }
+  const sum = (k) => list.reduce((a, r) => a + (r[k] || 0), 0);
+  let html = `<div class="res-summary">${list.length} resource${list.length === 1 ? "" : "s"}
+    · planned revenue <b>$${fmt(sum("planned_revenue"))}</b>
+    · planned expense <b>$${fmt(sum("planned_expense"))}</b></div>`;
+  html += `<div class="res-scroll"><table class="res-table"><thead><tr>
+      <th>Resource</th><th>Title</th><th>Country</th><th>Project</th>
+      <th class="num">Rate</th><th class="num">Offshore</th>
+      <th class="num">Hours</th><th class="num">Planned Rev</th>
+    </tr></thead><tbody>`;
+  for (const r of list) {
+    html += `<tr>
+      <td class="res-name">${esc(r.name)}</td>
+      <td>${esc(r.title)}</td>
+      <td>${esc(r.country)}</td>
+      <td>${esc(r.project)}</td>
+      <td class="num">$${fmt(r.rate)}</td>
+      <td class="num">$${fmt(r.offshore_rate)}</td>
+      <td class="num">${fmt(r.planned_hours)}</td>
+      <td class="num">$${fmt(r.planned_revenue)}</td>
+    </tr>`;
+  }
+  html += "</tbody></table></div>";
+  box.innerHTML = html;
 }
 
 /* ---------------- ACTUALS tab ---------------- */
@@ -2617,6 +2699,14 @@ function renderView() {
 
 $$(".tab").forEach((t) => t.addEventListener("click", () => switchView(t.dataset.tab)));
 bindPasswordModal();
+/* Feature #10.2: resource popup close (button + backdrop + Escape). */
+$("#resModalClose").addEventListener("click", () => $("#resModal").classList.add("hidden"));
+$("#resModal").addEventListener("click", (e) => {
+  if (e.target.id === "resModal") $("#resModal").classList.add("hidden");
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") $("#resModal").classList.add("hidden");
+});
 
 /* ---------------- boot ---------------- */
 window.addEventListener("error", (e) => {

@@ -10,7 +10,7 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icons/icon-192.png">
 <title>Revenue Recon</title>
-<link rel="stylesheet" href="/styles.css?v=51">
+<link rel="stylesheet" href="/styles.css?v=52">
 </head>
 <body>
 <div class="bg-glow"></div>
@@ -249,6 +249,17 @@
   </div>
 </div>
 
+<!-- ============ RESOURCE POPUP (feature #10.2) ============ -->
+<div id="resModal" class="modal hidden">
+  <div class="modal-box glass res-modal">
+    <h3 id="resModalTitle">Resources</h3>
+    <div id="resModalBody" class="modal-body"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="resModalClose">Close</button>
+    </div>
+  </div>
+</div>
+
 <!-- ============ CHANGE PASSWORD (feature #9) ============ -->
 <div id="pwModal" class="modal hidden">
   <div class="modal-box glass pw-modal">
@@ -332,7 +343,7 @@
   </div>
 </div>
 
-<script src="/app.js?v=74"></script>
+<script src="/app.js?v=75"></script>
 <script>
   // PWA: register the service worker (only after load; skip on failure)
   if ("serviceWorker" in navigator) {
