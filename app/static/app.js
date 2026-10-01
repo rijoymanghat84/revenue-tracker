@@ -1001,8 +1001,11 @@ function pricingRowHTML(p) {
   </tr>`;
 }
 
-/* Feature #11.1: popup listing who uses a pricing title, with their rates and
-   projects. Same TRIM(role)=title match the count uses, so the two always agree. */
+/* Feature #11.1 + follow-up: popup listing who uses a pricing title.
+   One row PER PERSON (they may hold the title on several projects), their
+   projects collapsed onto one line as "client/project", and an Allocation
+   column showing that person's share of this title's planned hours.
+   The header count is `data.count` = people, matching the button exactly. */
 async function openPricingPopup(pid) {
   const box = $("#resModalBody"), title = $("#resModalTitle");
   title.textContent = "Used by";
@@ -1017,33 +1020,48 @@ async function openPricingPopup(pid) {
   }
   const p = data.pricing || {}, list = data.resources || [];
   const sym = curSym(p.currency);
-  title.textContent = `${p.title || "Title"} — used by ${data.count} resource(s)`;
+  const n = data.count || 0;
+  title.textContent = `${p.title || "Title"} — used by ${n} resource${n === 1 ? "" : "s"}`;
   if (!list.length) {
     box.innerHTML = '<div class="res-empty">No resources use this title yet.</div>';
     return;
   }
   const sum = (k) => list.reduce((a, r) => a + (r[k] || 0), 0);
+  const totalH = data.total_hours || 0;
+  // Note the row-count behind the people count when they differ, so the number
+  // on the button is explainable rather than just smaller than it used to be.
+  const rowsNote = (data.rows && data.rows !== n)
+    ? ` &nbsp;|&nbsp; ${data.rows} project assignment${data.rows === 1 ? "" : "s"}`
+    : "";
   let html = `<div class="res-summary">
       Pricing library rate <b>${sym}${fmt(p.rate)}</b> · offshore <b>${sym}${fmt(p.offshore_rate)}</b>
-      &nbsp;|&nbsp; ${list.length} resource(s) · planned revenue <b>$${fmt(sum("planned_revenue"))}</b>
+      &nbsp;|&nbsp; ${n} resource${n === 1 ? "" : "s"}${rowsNote}
+      · planned revenue <b>$${fmt(sum("planned_revenue"))}</b>
     </div>`;
   html += `<div class="res-scroll"><table class="res-table"><thead><tr>
-      <th>Resource</th><th>Client</th><th>Project</th>
+      <th>Resource</th><th>Project(s)</th>
       <th class="num">Rate</th><th class="num">Offshore</th>
-      <th class="num">Hours</th><th class="num">Planned Rev</th>
+      <th class="num">Hours</th><th class="num">Allocation</th><th class="num">Planned Rev</th>
     </tr></thead><tbody>`;
   for (const r of list) {
+    const hrs = r.planned_hours || 0;
+    const pct = r.allocation_pct || 0;
     html += `<tr>
       <td class="res-name">${esc(r.name)}</td>
-      <td>${esc(r.client)}</td>
-      <td>${esc(r.project)}</td>
+      <td class="res-projs">${esc(r.projects || r.project || "—")}</td>
       <td class="num">$${fmt(r.rate)}</td>
       <td class="num">$${fmt(r.offshore_rate)}</td>
-      <td class="num">${fmt(r.planned_hours)}</td>
+      <td class="num">${fmt(hrs)}</td>
+      <td class="num alloc-cell"><b>${pct}%</b><span class="alloc-sub">${fmt(hrs)}/${fmt(totalH)}h</span></td>
       <td class="num">$${fmt(r.planned_revenue)}</td>
     </tr>`;
   }
-  html += "</tbody></table></div>";
+  html += `</tbody><tfoot><tr>
+      <td class="res-name">Total — ${n} resource${n === 1 ? "" : "s"}</td>
+      <td></td><td></td><td></td>
+      <td class="num">${fmt(totalH)}</td><td class="num">100%</td>
+      <td class="num">$${fmt(sum("planned_revenue"))}</td>
+    </tr></tfoot></table></div>`;
   box.innerHTML = html;
 }
 

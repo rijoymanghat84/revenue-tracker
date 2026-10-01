@@ -692,6 +692,17 @@ td.week .a-inp { text-align: center; }
 .res-table tbody tr:hover td { background: var(--surface-3); }
 .res-table th.num, .res-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .res-name { font-weight: 600; color: var(--text); }
+/* Feature #11 follow-up: one row per person, projects collapsed to one line,
+   plus an Allocation column showing their share of this title's hours. */
+.res-table td.res-projs { white-space: normal; max-width: 240px; color: var(--muted); }
+.alloc-cell { line-height: 1.25; }
+.alloc-cell b { color: var(--text); }
+.alloc-sub { display: block; font-size: 10.5px; color: var(--muted); }
+.res-table tfoot td {
+  border-top: 1px solid var(--border-strong); border-bottom: 0;
+  font-weight: 650; color: var(--text); padding-top: 9px;
+}
+.res-table tfoot td.res-name { color: var(--muted); font-weight: 600; }
 
 /* ============ PRICING (feature #11) ============ */
 /* 11.2 — Rate / Offshore Rate / Currency were left-aligned because the cell
