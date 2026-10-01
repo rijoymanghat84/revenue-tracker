@@ -14,10 +14,12 @@ import datetime as dt
 import hmac
 import io
 import json
+import hashlib
 import os
 import sqlite3
 import shutil
 from pathlib import Path
+import re
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
@@ -3271,7 +3273,43 @@ def index_page(request: Request):
             html = html.replace("</head>", inject + "</head>", 1)
         else:
             html = inject + html
-    return HTMLResponse(html)
+    # NEVER serve a stale shell. index.html is served by THIS route (not by the
+    # static mount), and a cached shell keeps pointing at asset URLs the service
+    # worker already holds — so a shipped fix looks undeployed however many times
+    # the user reloads. Measured 2026-10-01: the served HTML carried
+    # `app.js?v=110` while the SW had a PREVIOUS `v=110` cached, so the browser
+    # ran pre-edit code although the server was serving the new bytes.
+    # no-store forces every shell fetch through here; the asset URLs get a content
+    # hash so a changed file can never collide with an already-cached URL.
+    html = _stamp_asset_versions(html)
+    return HTMLResponse(html, headers={"Cache-Control": "no-store, must-revalidate"})
+
+
+def _asset_version(rel: str) -> str:
+    """Short content hash of a static asset — changes only when the file does."""
+    try:
+        data = (Path(STATIC_DIR) / rel).read_bytes()
+        return hashlib.sha1(data).hexdigest()[:10]
+    except OSError:
+        return ""
+
+
+def _stamp_asset_versions(html: str) -> str:
+    """Rewrite every `app.js?v=N` / `styles.css?v=N` to a content hash.
+
+    The hand-maintained `?v=` numbers are the deployment hazard behind a whole
+    class of "my fix did not ship" reports: reuse a number that has EVER been
+    served and the cache-first service worker answers with the old file. A
+    content hash cannot collide with a previous build, so the trap disappears and
+    nobody has to remember to bump anything.
+    """
+    for name in ("app.js", "styles.css", "workbench.js", "weeksheet.js"):
+        ver = _asset_version(name)
+        if not ver:
+            continue
+        html = re.sub(rf"/{re.escape(name)}\?v=[A-Za-z0-9._-]+",
+                      f"/{name}?v={ver}", html)
+    return html
 
 
 # ============================================================================
