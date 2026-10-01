@@ -1012,11 +1012,50 @@ def api_state(request: Request):
         conn.close()
 
 
+# A person may hold at most TWO titles (Rijoy, 2026-09-30): "a resource should
+# be allocated as one title or the max 2 title — like I could have a PM do BA
+# for another project." A title is a `resources.role`; each (person, client,
+# project) is its own row carrying that row's title and rates, which is how
+# Ringo Chan holds "Project manager" and "Solution Architect" at different
+# rates today. Three or more is refused.
+MAX_TITLES_PER_PERSON = 2
+
+
+def _titles_for(conn: sqlite3.Connection, name: str, exclude_id: int | None = None) -> set[str]:
+    """Distinct titles the named person already holds, optionally ignoring one row."""
+    sql = "SELECT DISTINCT TRIM(role) FROM resources WHERE TRIM(name)=? AND TRIM(COALESCE(role,''))<>''"
+    args: list = [(name or "").strip()]
+    if exclude_id is not None:
+        sql += " AND id<>?"
+        args.append(exclude_id)
+    return {r[0] for r in conn.execute(sql, args).fetchall()}
+
+
+def _check_title_limit(conn: sqlite3.Connection, name: str, new_role: str,
+                       exclude_id: int | None = None) -> None:
+    """Raise 400 if adding `new_role` would give this person a third title."""
+    role = (new_role or "").strip()
+    if not role:
+        return  # blanking a title is always allowed
+    existing = _titles_for(conn, name, exclude_id)
+    if role in existing:
+        return  # re-assigning a title they already hold is fine
+    if len(existing) >= MAX_TITLES_PER_PERSON:
+        raise HTTPException(
+            400,
+            f"{name} already holds {MAX_TITLES_PER_PERSON} titles "
+            f"({', '.join(sorted(existing))}). A resource can have at most "
+            f"{MAX_TITLES_PER_PERSON} titles — remove one first.",
+        )
+
+
 @app.post("/api/resources")
 def api_create_resource(body: ResourceUpdate | None = None, request: Request = None):
     _require_perm(request, "resources")
     conn = get_db()
     try:
+        if body:
+            _check_title_limit(conn, body.name or "New Resource", body.role or "")
         cur = conn.execute(
             "INSERT INTO resources (country, client, project, name, role, rate, offshore_rate, capacity, sort_order) "
             "VALUES (?,?,?,?,?,?,?,?, "
@@ -1049,6 +1088,10 @@ def api_update_resource(rid: int, body: ResourceUpdate, request: Request):
         row = conn.execute("SELECT * FROM resources WHERE id=?", (rid,)).fetchone()
         if not row:
             raise HTTPException(404, "resource not found")
+        # If this row's title is changing, apply the max-2-titles rule. A no-op
+        # when the title is unchanged, so ordinary rate/hour edits always pass.
+        _check_title_limit(conn, body.name or row["name"], body.role or "",
+                           exclude_id=rid)
         new_vals = {
             k: (getattr(body, k) if getattr(body, k) is not None else row[k])
             for k in ("country", "client", "project", "name", "role", "rate", "offshore_rate", "capacity")
