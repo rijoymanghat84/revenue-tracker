@@ -1154,6 +1154,8 @@ def api_state(request: Request):
             "months": months,
             "resources": resources,
             "pricing": [dict(r) for r in pricing],
+            # Which week/month "now" is, so the header can highlight it.
+            "current": _current_period(weeks, months),
         }
     finally:
         conn.close()
@@ -1896,6 +1898,36 @@ def _till_date_cap(weeks: list[str]) -> int | None:
         if d is not None and d <= today:
             last = i
     return last
+
+
+def _current_period(weeks: list[str], months: list[dict]) -> dict:
+    """Which week and month are we IN right now — one definition, used by both
+    the Planned header and the PM load rail so they cannot disagree.
+
+    A label is the MONDAY that starts the week, so the week containing today is
+    the LAST label <= today (the same rule `_till_date_cap` uses: that is why
+    the till-date columns and this highlight always agree).
+
+    Worth knowing, because it looks wrong until you see it: on Thu 2026-10-01 the
+    current week is labelled **Sep-28** (Mon Sep-28 → Sun Oct-4) and therefore
+    sits in the **SEP** month band, not OCT. That is correct — the week starts in
+    September — but it surprises people, so the tooltip says it outright.
+    """
+    cap = _till_date_cap(weeks)
+    if cap is None or cap < 0:
+        return {}
+    mon = next((m for m in months if m["start"] <= cap <= m["end"]), None)
+    d = _week_date(weeks[cap])
+    return {
+        "week_index": cap,
+        "week_label": weeks[cap],
+        "month": (mon["name"] if mon else ""),
+        "month_start": (mon["start"] if mon else None),
+        "month_end": (mon["end"] if mon else None),
+        "week_start": (d.isoformat() if d else ""),
+        "week_end": ((d + dt.timedelta(days=6)).isoformat() if d else ""),
+        "today": dt.date.today().isoformat(),
+    }
 
 
 def _split_csv(v: str) -> list[str]:
@@ -3994,7 +4026,8 @@ def api_pm_load(request: Request):
                 "detail": detail,
             })
         return {"people": out, "week_labels": weeks, "months": months,
-                "week_month": week_month}
+                "week_month": week_month,
+                "current": _current_period(weeks, months)}
     finally:
         conn.close()
 
