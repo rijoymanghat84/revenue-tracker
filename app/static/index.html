@@ -10,7 +10,7 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icons/icon-192.png">
 <title>Revenue Recon</title>
-<link rel="stylesheet" href="/styles.css?v=58">
+<link rel="stylesheet" href="/styles.css?v=61">
 </head>
 <body>
 <div class="bg-glow"></div>
@@ -53,23 +53,24 @@
        On desktop this is the fixed left rail. On mobile it collapses to a
        block above the dashboard. #subLine stays as a hidden hook for the
        permission summary the JS writes. -->
-  <aside class="rail glass">
+  <aside class="rail glass" id="rail">
     <div class="rail-brand">
       <span class="logo">₿</span>
-      <div>
+      <div class="rail-brand-txt">
         <h1>Revenue Recon</h1>
         <span class="year-badge">2026</span>
       </div>
+      <button class="rail-pin" id="btnRailPin" title="Pin sidebar open / unpin" aria-pressed="false">📌</button>
     </div>
 
     <div class="rail-sec">
       <div class="panel-label">Section Panel</div>
       <div class="tabs" id="tabs">
-        <button class="tab active" data-tab="dash">Dashboard</button>
-        <button class="tab" data-tab="planned">Planned</button>
-        <button class="tab" data-tab="actuals">Actuals</button>
-        <button class="tab" data-tab="pricing">Pricing</button>
-        <button class="tab" data-tab="util">Utilization</button>
+        <button class="tab active" data-tab="dash" title="Dashboard"><span class="tab-ico">▤</span><span class="tab-txt">Dashboard</span></button>
+        <button class="tab" data-tab="planned" title="Planned"><span class="tab-ico">✎</span><span class="tab-txt">Planned</span></button>
+        <button class="tab" data-tab="actuals" title="Actuals"><span class="tab-ico">✓</span><span class="tab-txt">Actuals</span></button>
+        <button class="tab" data-tab="pricing" title="Pricing"><span class="tab-ico">₿</span><span class="tab-txt">Pricing</span></button>
+        <button class="tab" data-tab="util" title="Utilization"><span class="tab-ico">◔</span><span class="tab-txt">Utilization</span></button>
       </div>
     </div>
 
@@ -298,6 +299,11 @@
   </div><!-- /.main -->
 </div><!-- /.shell -->
 
+<!-- Mobile: the rail is hidden by default and slides in from the menu button.
+     Both live OUTSIDE #appShell so they can show while the rail itself is off. -->
+<button class="rail-toggle" id="btnRailToggle" title="Show sections &amp; data menu" aria-label="Show menu">☰</button>
+<div class="rail-backdrop" id="railBackdrop"></div>
+
 <div id="toast" class="toast"></div>
 <div id="colPanel" class="col-panel hidden"></div>
 <div id="modal" class="modal hidden">
@@ -424,7 +430,7 @@
   </div>
 </div>
 
-<script src="/app.js?v=84"></script>
+<script src="/app.js?v=86"></script>
 <script>
   // PWA: register the service worker (only after load; skip on failure)
   if ("serviceWorker" in navigator) {
