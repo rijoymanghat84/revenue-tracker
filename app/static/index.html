@@ -10,7 +10,7 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icons/icon-192.png">
 <title>Revenue Recon</title>
-<link rel="stylesheet" href="/styles.css?v=80">
+<link rel="stylesheet" href="/styles.css?v=81">
 </head>
 <body>
 <div class="bg-glow"></div>
@@ -187,14 +187,36 @@
              with the numbers it drives instead of three clicks away. The badge
              shows how many resources deviate from the 40h default. -->
         <span class="hint" id="capBadge"></span>
+        <button class="btn mini" id="btnToggleAvail" title="Which people have headroom — who you can put on a project">☰ Available</button>
         <button class="btn mini" id="btnToggleCap" title="Show / hide the per-resource weekly capacity editor">⚙ Capacity</button>
         <span class="hint">Export includes a locked Utilization sheet; uploads ignore it.</span>
       </div>
     </div>
+
+    <!-- GH-29: filters. Same cascading multi-selects as the Dashboard, but here
+         they scope the HOURS (server-side, before aggregation), so picking a
+         project shows that project's utilization rather than a filtered roster. -->
+    <div class="util-filters glass" id="utilFilterRow"></div>
+
     <div class="table-wrap glass" id="utilWrap">
       <table id="utilTable">
         <thead id="utilHead"></thead>
         <tbody id="utilBody"></tbody>
+      </table>
+    </div>
+
+    <!-- GH-29: who has headroom for the selected month. Month capacity and
+         planned hours come straight off the payload, which was already summed
+         across a person's projects — so this needs no extra server field. -->
+    <div class="table-wrap glass narrow hidden" id="availWrap">
+      <div class="avail-head">
+        <span class="avail-title" id="availTitle">Availability</span>
+        <input type="search" id="availSearch" class="search" placeholder="Filter people…">
+        <span class="hint" id="availNote"></span>
+      </div>
+      <table id="availTable">
+        <thead id="availHead"></thead>
+        <tbody id="availBody"></tbody>
       </table>
     </div>
 
@@ -603,7 +625,7 @@
 <script src="/workbench.js?v=9"></script>
 <!-- weeksheet.js also loads BEFORE app.js, for the same reason as workbench.js. -->
 <script src="/weeksheet.js?v=7"></script>
-<script src="/app.js?v=106"></script>
+<script src="/app.js?v=108"></script>
 <script>
   // PWA: register the service worker (only after load; skip on failure)
   if ("serviceWorker" in navigator) {

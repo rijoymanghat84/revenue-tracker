@@ -617,6 +617,13 @@ html[data-theme-dark="0"] .cur-chip { color: #7a4d00; }
    background but below the text, so the percentage stays readable. */
 #utilTable th.u-month-head { cursor: pointer; user-select: none; }
 #utilTable th.u-month-head:hover { color: var(--text); background: var(--surface-3); }
+
+/* GH-29: the WEEK view's month band is CENTRED over the weeks it covers.
+   The band cell is much wider than its label and sits above a row of week
+   numbers, so the .num right-align pushed e.g. "JAN" hard against the last week
+   of its block — it read as if it labelled that week rather than the month.
+   Only the band row: the P/A and Overall cells keep their numeric alignment. */
+#utilTable th.u-month-head.u-band { text-align: center; }
 /* the header pair (month cell + its P/A sub-cells) gets a clear top marker */
 #utilTable th.u-month-head-on,
 #utilTable th.u-sub.u-month-head-on {
@@ -929,6 +936,48 @@ td.week .a-inp { text-align: center; }
 /* ---------- PM assignment + capacity ---------- */
 .pm-toolbar { margin-top: 18px; }
 #pmWrap, #capWrap { margin-top: 12px; }
+
+/* ---------- GH-29: Utilization filters + availability ---------- */
+.util-filters { margin: 10px 0; padding: 10px 12px; }
+.util-filters .filterbar { flex-wrap: wrap; overflow: visible; }
+.util-filters .fgroup { flex: 0 1 auto; }
+.util-filters .uf-clear { display: flex; align-items: flex-end; margin-left: auto; }
+.util-filters .uf-scope {
+  margin-top: 8px; font-size: 12px; color: var(--text-dim);
+  display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+}
+.util-filters .uf-scope .dot {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--accent);
+  flex: 0 0 auto;
+}
+
+#availWrap { margin-top: 12px; }
+.avail-head {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 12px; border-bottom: 1px solid var(--border);
+}
+.avail-head .avail-title { font-weight: 700; font-size: 13px; }
+.avail-head .search { max-width: 220px; }
+.avail-head .hint { margin-left: auto; }
+#availTable { width: 100%; }
+#availTable th, #availTable td {
+  padding: 6px 10px; border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+#availTable th {
+  text-align: left; font-size: 11px; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--text-dim); background: var(--header-bg);
+  position: sticky; top: 0; z-index: 2;
+}
+#availTable th.num { text-align: right; }
+#availTable td.u-proj { color: var(--text-dim); font-size: 12px; }
+#availTable tr:hover td { background: var(--surface-3); }
+
+@media (max-width: 900px) {
+  .util-filters .filterbar { flex-wrap: wrap; }
+  .util-filters .fgroup { flex: 1 1 100%; }
+  .util-filters .uf-clear { margin-left: 0; flex: 1 1 100%; }
+  .avail-head .hint { margin-left: 0; flex: 1 1 100%; }
+}
 #pmTable, #capTable { width: 100%; min-width: 0; }
 #pmTable th, #capTable th {
   position: sticky; top: 0; z-index: 20; background: var(--header-bg); text-align: left;
