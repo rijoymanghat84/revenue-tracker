@@ -35,7 +35,12 @@ EXEMPT_EXT = (".md",)
 # already mapped to issues in CHANGELOG.md, so rewriting their subjects would
 # mean rewriting published history. They are grandfathered: `--all` audits
 # everything AFTER this point, which is what makes it a real regression check.
-BASELINE = "e27695a"
+#
+# 961fbdf is the last pre-rule commit — it is documented as GH-24..GH-27 in
+# CHANGELOG.md. The baseline sits at it deliberately: a gate that is
+# permanently red gets ignored, so it starts green and any NEW untrailed commit
+# stands out. Bump this only for a commit that is already mapped in CHANGELOG.
+BASELINE = "961fbdf"
 
 
 def git(*args):
