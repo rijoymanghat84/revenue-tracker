@@ -2740,49 +2740,153 @@ async def api_import(file: UploadFile = File(...), mode: str = Form("merge"), re
             }
             added = 0
             problems = []
+            applied: list[tuple[dict, object, dict]] = []   # (parsed row, db row, note)
+            weeks_all, _months = _load_layout()
+
+            def _why(v: dict) -> tuple[str, str]:
+                """(short reason, what to do) for one rejected week."""
+                st = v.get("status")
+                if st == "no_planned":
+                    return ("no planned hours for this week — the person is not "
+                            "assigned to this project in that week",
+                            "clear the cell, or move the person onto the project first")
+                if st == "needs_comment":
+                    return ("under-delivered and no reason given",
+                            "put a reason in the Reason column")
+                if st == "needs_ot":
+                    return ("worked more than planned; OT not answered",
+                            "put Y or N in the OT? column")
+                if st == "needs_billing_reason":
+                    return ("OT recorded as NOT billed, but no reason given",
+                            "put a reason in the Reason column, or set Billed? to Y")
+                return (st or "rejected by the reconciliation rules", "check this row")
+
             for pa in parsed_actuals:
                 cur = res_by_key.get((_norm(pa["client"]), _norm(pa["name"])))
                 if not cur:
-                    continue
-                proj = (cur["project"] or "").strip()
-                client = (cur["client"] or "").strip()
-                if proj and not _pm_owns(projs, client, proj):
-                    continue  # not this PM's project — skip
-                rid = cur["id"]
-                # Enforce the same reconciliation rules as the UI: an import
-                # must not silently bypass the OT/approval/comment flow.
-                planned = _hours_map(rid, conn)
-                capacity = cur.get("capacity") or 40.0
-                for i, h in enumerate(pa["hours"]):
-                    if not h:
-                        continue
-                    v = _validate_actual_week(planned.get(i, 0.0), h, capacity, {})
-                    if v["status"] != "ok":
+                    # A row the PM cannot see (or a typo in Client/Name). Say so
+                    # rather than dropping it silently — a silent drop looks like
+                    # the upload worked.
+                    if (pa.get("name") or "").strip():
                         problems.append({
-                            "resource": cur["name"], "week": i,
-                            "status": v["status"], "overage": v["overage"],
+                            "person": pa["name"], "week": None, "week_label": None,
+                            "reason": f"no assignment found for this person on "
+                                      f"{pa.get('client') or '?'} — check the "
+                                      f"Client and Resource Name spelling",
+                            "fix": "match a row from the downloaded file",
                         })
-            if problems:
-                raise HTTPException(400, {
-                    "detail": "Import rejected — actuals violate reconciliation rules "
-                              "(OT approval / under-delivery comment required). "
-                              "Fix these rows or enter them via the Actuals tab.",
-                    "problems": problems[:20],
-                })
-            for pa in parsed_actuals:
-                cur = res_by_key.get((_norm(pa["client"]), _norm(pa["name"])))
-                if not cur:
                     continue
                 proj = (cur["project"] or "").strip()
                 client = (cur["client"] or "").strip()
                 if proj and not _pm_owns(projs, client, proj):
-                    continue  # not this PM's project — skip
+                    continue  # not this PM's project — skip silently (not their data)
                 rid = cur["id"]
-                conn.execute("DELETE FROM actual_hours WHERE resource_id=?", (rid,))
-                conn.executemany(
-                    "INSERT INTO actual_hours (resource_id, week, hours) VALUES (?,?,?)",
-                    [(rid, i, h) for i, h in enumerate(pa["hours"]) if h],
-                )
+                cap = cur["capacity"] if "capacity" in cur.keys() else None
+                planned = _hours_map(rid, conn)
+                # The hours ALREADY stored. An import validates the EDIT, not the
+                # whole year: re-listing a week that was entered (and reconciled)
+                # earlier is not a new decision, and re-checking it without its
+                # original note would reject a file the PM only came to change one
+                # row of. Without this a straight download->upload round-trip
+                # failed with scores of errors.
+                stored = {r["week"]: (r["hours"] or 0.0) for r in conn.execute(
+                    "SELECT week, hours FROM actual_hours WHERE resource_id=?", (rid,)).fetchall()}
+                # The answers the PM typed in the sheet. Empty cells are NOT
+                # defaults: they mean "I did not answer", so they must not wipe a
+                # decision already recorded for that week.
+                note = {}
+                if (pa.get("reason") or "").strip():
+                    note["comment"] = pa["reason"].strip()
+                    note["reason"] = pa["reason"].strip()
+                if pa.get("ot") is not None:
+                    note["is_ot"] = 1 if pa["ot"] else 0
+                if pa.get("billed") is not None:
+                    note["billed"] = 1 if pa["billed"] else 0
+                if pa.get("under_billed") is not None:
+                    # "Client still billed?" Y -> the client pays -> under_billed=0
+                    # (recovered). N -> the shortfall is lost revenue -> 1. Same
+                    # direction as the UI's question and _actuals_financials.
+                    note["under_billed"] = 0 if pa["under_billed"] else 1
+
+                changed_notes: dict[int, dict] = {}
+                for i, h in enumerate(pa["hours"]):
+                    h = h or 0.0
+                    was = stored.get(i, 0.0)
+                    if abs(h - was) < 1e-9:
+                        continue        # unchanged — leave the week exactly as it is
+                    if not h and not was:
+                        continue
+                    # For a changed week, fall back to whatever note already
+                    # exists so a pre-recorded reason is not lost by re-uploading.
+                    existing = _actual_notes_map(rid, conn).get(i) or {}
+                    merged = {k: existing.get(k) for k in
+                              ("comment", "reason", "is_ot", "approved", "billed", "under_billed")}
+                    merged.update({k: v for k, v in note.items()})
+                    v = _validate_actual_week(planned.get(i, 0.0), h, cap or 40.0, merged)
+                    if v["status"] != "ok":
+                        why, fix = _why(v)
+                        wk = weeks_all[i] if i < len(weeks_all) else f"week {i + 1}"
+                        problems.append({
+                            "person": cur["name"],
+                            "client": client,
+                            "project": proj,
+                            "week": i,
+                            "week_label": wk,
+                            "entered": h,
+                            "planned": planned.get(i, 0.0),
+                            "reason": why,
+                            "fix": fix,
+                        })
+                        continue
+                    # Keep the reconciliation outcome for this changed week (and
+                    # only this week) so it is written back with the hours.
+                    changed_notes[i] = {**merged, **{k: v[k] for k in v if k != "status"}}
+                if changed_notes:
+                    applied.append((pa, cur, changed_notes))
+
+            if problems:
+                # A precise, per-row report. `message` is the human sentence;
+                # `problems` is the machine-readable list (capped, with a count).
+                total = len(problems)
+                shown = problems[:60]
+                raise HTTPException(400, {
+                    "message": (
+                        f"Import rejected — {total} row(s) break the reconciliation "
+                        f"rules. Nothing was saved. Fix the rows listed below and "
+                        f"upload again."
+                    ),
+                    "problems": shown,
+                    "problem_count": total,
+                    "truncated": total > len(shown),
+                })
+
+            # Write only after the WHOLE file validates, so a bad row cannot
+            # leave the week half-recorded.
+            for pa, cur, notes_by_week in applied:
+                rid = cur["id"]
+                if pa.get("capacity"):
+                    conn.execute("UPDATE resources SET capacity=? WHERE id=?",
+                                 (float(pa["capacity"]), rid))
+                # Write ONLY the changed weeks. Replacing the whole row would drop
+                # the notes attached to weeks the PM never touched.
+                for i in list(notes_by_week.keys()):
+                    h = (pa["hours"][i] if i < len(pa["hours"]) else 0) or 0.0
+                    if h:
+                        conn.execute(
+                            "INSERT OR REPLACE INTO actual_hours (resource_id, week, hours) "
+                            "VALUES (?,?,?)", (rid, i, h))
+                    else:
+                        conn.execute("DELETE FROM actual_hours WHERE resource_id=? AND week=?",
+                                     (rid, i))
+                for i, n in notes_by_week.items():
+                    conn.execute(
+                        "INSERT OR REPLACE INTO actual_notes "
+                        "(resource_id, week, pm, overage, comment, reason, is_ot, approved, billed, under_billed) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                        (rid, i, user["u"], n.get("overage", 0.0),
+                         n.get("comment", ""), n.get("reason", ""),
+                         1 if n.get("is_ot") else 0, 1 if n.get("approved") else 0,
+                         1 if n.get("billed") else 0, n.get("under_billed")))
                 added += 1
             conn.commit()
             return {"added": 0, "updated": 0, "renamed": 0, "skipped": 0,

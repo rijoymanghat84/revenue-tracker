@@ -1511,3 +1511,17 @@ html[data-theme-dark="0"] .wk-now { color: #0a5f6d; border-color: rgba(13, 125, 
    codebase already uses for status text on pale surfaces. */
 html[data-theme-dark="0"] .wk-delta.over { color: #a3241a; }
 html[data-theme-dark="0"] .wk-delta.under { color: #7a4d00; }
+
+/* Excel upload rejection report (week sheet). Scrolls rather than stretching the
+   modal, per the owner's rule that a popup should stay readable without scrolling
+   the whole page. */
+.wk-imp-bad { color: var(--red); font-weight: 700; margin-bottom: 4px; }
+.wk-imp-scroll { max-height: 46vh; overflow: auto; border: 1px solid var(--border);
+  border-radius: 10px; margin-top: 6px; }
+.wk-imp-tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+.wk-imp-tbl th { position: sticky; top: 0; background: var(--header-bg); text-align: left;
+  font-size: 10px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted);
+  padding: 7px 9px; border-bottom: 1px solid var(--border); z-index: 2; }
+.wk-imp-tbl td { padding: 7px 9px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.wk-imp-tbl td.num { text-align: right; font-variant-numeric: tabular-nums; }
+html[data-theme-dark="0"] .wk-imp-bad { color: #a3241a; }

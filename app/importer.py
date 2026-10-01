@@ -63,13 +63,31 @@ KNOWN_COLS = {
     "project": "project",
     "name": "name", "resource": "name", "resource name": "name", "resoruce name": "name",
     "role": "role", "title": "role",
+    # Capacity: the person's weekly hours (40 = 100%). Editable in the PM
+    # workbook so a joined-with-reduced-availability person can be bulk-added.
+    "capacity": "capacity", "weekly capacity": "capacity", "capacity (hrs)": "capacity",
+    "capacity hrs": "capacity", "hours/week": "capacity", "weekly hrs": "capacity",
     "rate": "rate", "onsite rate": "rate", "on-site rate": "rate", "billing rate": "rate",
     "offshore rate": "offshore_rate", "off-shore rate": "offshore_rate", "offshore": "offshore_rate",
 }
 SKIP_COLS = {
     "", "utilization", "utlilization", "total hrs", "total hours", "total cost",
+    # The reconciliation answers a PM fills in on the exported sheet. Recognised
+    # so they are not mistaken for week columns, and carried so an upload keeps
+    # the reason / billing decision the PM just typed rather than dropping it.
+    "reason", "why", "why not billed", "note", "comment",
+    "under billed", "under-billed", "billed", "ot", "is ot", "is_ot",
+    # With the QUESTION MARK, which is what the export actually writes. Missing
+    # these three made _find_header_row treat "OT?", "Billed?" and "Under
+    # billed?" as WEEK columns, shifting every stored week 3 columns right on
+    # re-import (week 0 landed in week 3). Any new answer column added to the
+    # export MUST be registered here in its exact spelling.
+    "ot?", "is ot?", "overtime?", "billed?", "bill to client?", "billable?",
+    "under billed?", "under-billed?", "reason?", "why?", "why not billed?",
+    "client still billed?", "still billed?", "client pays?", "bill planned?",
+    "total", "total hours", "total hrs", "sum",
     "total revenue", "revenue", "subtotal", "difference", "expense", "profit",
-    "diff", "total", "currency", "cur", "action", "note", "remarks", "comments",
+    "diff", "total", "currency", "cur", "action", "remarks",
     "summary", "shift",
 }
 
@@ -442,8 +460,17 @@ def _build_actuals_sheet(wb, weeks, months, resources) -> None:
     Importable for bulk entry / crash-restore. Columns: Country, Client,
     Project, Resource Name, Title, Total Hours, then weeks."""
     ws = wb.create_sheet("Actuals")
-    headers = ["Country", "Client", "Project", "Resource Name", "Title", "Total Hours"]
-    WEEK0 = 7  # column G — weeks start here
+    # Capacity is included so a PM can bulk-add a person with reduced
+    # availability. The three answer columns are here so the PM can record the
+    # reconciliation decisions in the SAME sheet and upload them back, rather
+    # than being sent to the UI for each flagged week.
+    # "Client still billed?" uses the SAME wording and the SAME direction as the
+    # UI prompt ("Will the client still be billed the planned hours?"): Y means
+    # the client pays, so the shortfall is NOT lost revenue. The earlier header
+    # "Under billed? Y" was ambiguous and read the opposite way round.
+    headers = ["Country", "Client", "Project", "Resource Name", "Title",
+               "Capacity", "Total Hours", "OT?", "Billed?", "Client still billed?", "Reason"]
+    WEEK0 = 12  # column L — the answer columns sit before the weeks
     for m in months:
         ws.cell(1, WEEK0 + m["start"], m["name"])
     for c, h in enumerate(headers, start=1):
@@ -459,14 +486,19 @@ def _build_actuals_sheet(wb, weeks, months, resources) -> None:
         ws.cell(r, 3, res["project"] or "")
         ws.cell(r, 4, res["name"])
         ws.cell(r, 5, res["role"])
-        ws.cell(r, 6, f"=SUM(G{r}:{end_letter}{r})")
+        ws.cell(r, 6, res.get("capacity") or 40)
+        ws.cell(r, 7, f"=SUM(L{r}:{end_letter}{r})")
         actual = res.get("actual_hours") or []
         for i, h in enumerate(actual):
             if h:
                 ws.cell(r, WEEK0 + i, h)
         r += 1
-    for col, width in zip("ABCDEF", (12, 18, 16, 18, 22, 12)):
+    for col, width in zip("ABCDEFGHIJK", (12, 18, 16, 20, 22, 11, 12, 8, 10, 14, 34)):
         ws.column_dimensions[col].width = width
+    # A real Excel table: filter buttons on the header and the identity columns
+    # frozen, so a PM can sort/filter 53 weeks without losing the row labels.
+    ws.freeze_panes = ws.cell(3, WEEK0)
+    ws.auto_filter.ref = f"A2:{end_letter}{max(r - 1, 2)}"
 
 
 def parse_actuals_sheet(data: bytes) -> list[dict]:
@@ -489,18 +521,55 @@ def parse_actuals_sheet(data: bytes) -> list[dict]:
     project_col = colmap.get("project")
     role_col = colmap.get("role")
     country_col = colmap.get("country", 1)
+
+    # Answer columns are in SKIP_COLS so they are never read as week hours, but
+    # we still need their positions. Match on the header text.
+    def _find_col(*names):
+        want = {n.lower() for n in names}
+        for r in range(1, min(ws.max_row, 5) + 1):
+            for c in range(1, ws.max_column + 1):
+                if str(ws.cell(r, c).value or "").strip().lower() in want:
+                    return c
+        return None
+    reason_col = _find_col("reason", "why", "why not billed")
+    billed_col = _find_col("billed", "bill to client", "billable")
+    ot_col = _find_col("ot", "is ot", "overtime")
+    underb_col = _find_col("client still billed?", "still billed?", "under billed",
+                           "under-billed")
     out = []
     for r in range(header_row + 1, ws.max_row + 1):
         name = ws.cell(r, name_col).value
         if not name or not str(name).strip():
             continue
         hours = [_as_float(ws.cell(r, c).value) for c in week_cols]
+
+        def _txt(col):
+            return str(ws.cell(r, col).value or "").strip() if col else ""
+
+        def _yn(col):
+            """Read a yes/no-ish answer. Returns True/False/None (None = blank)."""
+            v = _txt(col).lower()
+            if not v:
+                return None
+            if v in ("y", "yes", "true", "1", "billed", "billable"):
+                return True
+            if v in ("n", "no", "false", "0", "not billed", "unbilled", "non-billable"):
+                return False
+            return None
+
         out.append({
             "country": str(ws.cell(r, country_col).value or "").strip(),
             "client": str(ws.cell(r, client_col).value or "").strip(),
             "project": str(ws.cell(r, project_col).value or "").strip() if project_col else "",
             "name": str(name).strip(),
             "role": str(ws.cell(r, role_col).value or "").strip() if role_col else "",
+            # Per-row capacity when the export carried one (people can have a
+            # different weekly capacity); blank means "leave it as it is".
+            "capacity": _as_float(ws.cell(r, colmap["capacity"]).value) if colmap.get("capacity") else 0.0,
+            "reason": _txt(reason_col),
+            "ot": _yn(ot_col),
+            "billed": _yn(billed_col),
+            "under_billed": _yn(underb_col),
             "hours": hours,
         })
     wb.close()
