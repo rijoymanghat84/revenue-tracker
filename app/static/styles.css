@@ -329,8 +329,16 @@ main { padding: 0 14px 40px; }
 .hint { font-size: 11.5px; color: var(--muted); }
 
 /* ---------- grid table ---------- */
-.table-wrap { overflow: auto; max-height: calc(100vh - 210px); position: relative; }
-.table-wrap.narrow { max-height: none; overflow-x: auto; }
+/* The grid fills the space from its own top to the bottom of the viewport, so
+   its horizontal scrollbar is always on screen. A fixed `calc(100vh - 210px)`
+   was WRONG: pinning the sidebar narrows the main column, which makes the top
+   strip and toolbar wrap onto more lines; the grid then started lower than the
+   magic number assumed and its bottom scrollbar was pushed below the fold.
+   Measured by JS instead (see syncGridHeights) — the number can't be guessed. */
+.table-wrap { overflow: auto; position: relative; }
+.table-wrap.narrow { overflow-x: auto; }
+/* JS sets --grid-h on these; the fallback only applies before first measure. */
+#gridWrap, #actualsWrap { max-height: var(--grid-h, 60vh); }
 
 table { border-collapse: separate; border-spacing: 0; font-size: 12.5px; width: max-content; min-width: 100%; }
 th, td { box-sizing: border-box; } /* borders stay inside the pinned header row heights — no 1px seams on scroll */
@@ -956,6 +964,22 @@ td.week .a-inp { text-align: center; }
 #pricingTable th.p-cur, #pricingTable td.p-cur { text-align: center; }
 .p-table .p-read { display: inline-block; text-align: center; }
 .p-table .rate-inp { text-align: center; }
+
+/* 2026-10-01 split: Margin column on the Rate Card. A title billed at cost
+   (rate == offshore rate) reads 0% and turns amber/red so it is impossible to
+   miss while scanning the column. */
+.p-margin { display: inline-block; font-weight: 700; font-variant-numeric: tabular-nums; }
+.p-margin.m-good { color: var(--green); }
+.p-margin.m-ok   { color: var(--accent); }
+.p-margin.m-bad  { color: var(--amber); }
+
+/* Toggle button in the "on" state (⚙ Capacity on Utilization). */
+.btn.active-toggle {
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  color: #08121c; border-color: transparent;
+}
+/* Capacity inputs for part-time resources get an amber edge. */
+.cap-inp { border-color: var(--border); }
 
 /* 11.1 — "Used by" becomes a button */
 .used-btn {

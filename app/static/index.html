@@ -10,7 +10,7 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icons/icon-192.png">
 <title>Revenue Recon</title>
-<link rel="stylesheet" href="/styles.css?v=65">
+<link rel="stylesheet" href="/styles.css?v=67">
 </head>
 <body>
 <div class="bg-glow"></div>
@@ -69,8 +69,17 @@
         <button class="tab active" data-tab="dash" title="Dashboard"><span class="tab-ico">▤</span><span class="tab-txt">Dashboard</span></button>
         <button class="tab" data-tab="planned" title="Planned"><span class="tab-ico">✎</span><span class="tab-txt">Planned</span></button>
         <button class="tab" data-tab="actuals" title="Actuals"><span class="tab-ico">✓</span><span class="tab-txt">Actuals</span></button>
-        <button class="tab" data-tab="pricing" title="Pricing"><span class="tab-ico">₿</span><span class="tab-txt">Pricing</span></button>
+        <!-- 2026-10-01: the old "Pricing" tab was doing six unrelated jobs in one
+             long scroll. It is now split by PURPOSE:
+               · Rate Card       — what you bill vs what you pay offshore (perm: pricing)
+               · Utilization     — over/under maths + the capacity editor that drives it
+               · Team & Access   — PMs, admins, permissions, DB security (perm: users /
+                                   db_security)
+             The `data-tab` values changed (pricing → rates + access) and so did the
+             view ids (#pricingView → #ratesView + #accessView). -->
+        <button class="tab" data-tab="rates" title="Rate Card"><span class="tab-ico">₿</span><span class="tab-txt">Rate Card</span></button>
         <button class="tab" data-tab="util" title="Utilization"><span class="tab-ico">◔</span><span class="tab-txt">Utilization</span></button>
+        <button class="tab" data-tab="access" title="Team &amp; Access"><span class="tab-ico">🔑</span><span class="tab-txt">Team &amp; Access</span></button>
       </div>
     </div>
 
@@ -108,7 +117,7 @@
     </div>
 
     <div class="rail-sec rail-hidden">
-      <p class="sub" id="subLine">Planned · Actuals · Dashboard · Pricing · Utilization</p>
+      <p class="sub" id="subLine">Dashboard · Planned · Actuals · Rate Card · Utilization · Team &amp; Access</p>
       <select id="themeSel" class="cur-sel" title="Choose a theme (saved to your account)"></select>
       <button class="btn ghost" id="btnLogout" title="Sign out">Sign out</button>
     </div>
@@ -164,6 +173,12 @@
     <div class="toolbar glass">
       <div class="sheet-note" id="utilNote"><span class="dot on"></span>Booked hours ÷ capacity (<b>40 hrs/week = 100%</b>) — 🔴 &gt;100% · 🟢 80–100% · 🟡 50–80% · 🟠 &lt;50%. Auto-calculated; never editable.</div>
       <div class="toolbar-right">
+        <!-- 2026-10-01: the capacity editor moved here from the old Pricing tab.
+             Capacity is the DENOMINATOR of every % on this page, so it now lives
+             with the numbers it drives instead of three clicks away. The badge
+             shows how many resources deviate from the 40h default. -->
+        <span class="hint" id="capBadge"></span>
+        <button class="btn mini" id="btnToggleCap" title="Show / hide the per-resource weekly capacity editor">⚙ Capacity</button>
         <span class="hint">Export includes a locked Utilization sheet; uploads ignore it.</span>
       </div>
     </div>
@@ -171,6 +186,14 @@
       <table id="utilTable">
         <thead id="utilHead"></thead>
         <tbody id="utilBody"></tbody>
+      </table>
+    </div>
+
+    <!-- Per-resource capacity editor (collapsed by default) -->
+    <div class="table-wrap glass narrow hidden" id="capWrap">
+      <table id="capTable">
+        <thead id="capHead"></thead>
+        <tbody id="capBody"></tbody>
       </table>
     </div>
   </section>
@@ -229,10 +252,13 @@
     </div>
   </section>
 
-  <!-- ============ PRICING (title library + PM assignment + capacity) ============ -->
-  <section id="pricingView" class="view hidden">
+  <!-- ============ RATE CARD (title library ONLY — 2026-10-01 split) ============
+       Was #pricingView. People/permissions moved to #accessView, capacity moved
+       to #utilView. This tab now does exactly one job: what you charge vs what
+       the title costs offshore. -->
+  <section id="ratesView" class="view hidden">
     <div class="toolbar glass">
-      <div class="sheet-note" id="pricingNote"><span class="dot off"></span>Title library — rows are locked until you click <b>Edit</b>; set Title, both rates &amp; currency ($/£/CA$) together, then Save. Apply pushes rates to every resource using the title.</div>
+      <div class="sheet-note" id="pricingNote"><span class="dot off"></span>Rate card — rows are locked until you click <b>Edit</b>; set Title, both rates &amp; currency ($/£/CA$) together, then Save. Apply pushes rates to every resource using the title.</div>
       <div class="toolbar-right">
         <button class="btn mini" id="btnApplyAll" title="Push every title's rates to all resources using them — totals update everywhere">Update All Pricing</button>
         <button class="btn mini" id="btnAddTitle">+ Add Title</button>
@@ -245,10 +271,19 @@
         <tbody id="pricingBody"></tbody>
       </table>
     </div>
+    <div class="toolbar glass">
+      <div class="sheet-note"><span class="dot on"></span>Who is on each title lives in the <b>Used By</b> column. To change <b>capacity</b> — the number that decides over/under-utilization — go to <b>Utilization</b>.</div>
+      <div class="toolbar-right">
+        <button class="btn mini" id="btnRatesToUtil">Open Utilization →</button>
+      </div>
+    </div>
+  </section>
 
-    <!-- PM assignment + capacity section -->
+  <!-- ============ TEAM & ACCESS (PMs + admins + DB security) ============ -->
+  <section id="accessView" class="view hidden">
+    <!-- PM assignment section -->
     <div class="toolbar glass pm-toolbar">
-      <div class="sheet-note"><span class="dot on"></span><b>Project → PM assignment</b> — controls which projects each PM sees on the Actuals tab. Also set per-resource <b>capacity</b> (default 40h/week).</div>
+      <div class="sheet-note"><span class="dot on"></span><b>Project managers</b> — create a PM and tick the clients/projects they may record actuals for. A PM only ever sees their own projects, and never sees rates.</div>
       <div class="toolbar-right">
         <button class="btn mini" id="btnAddUser">+ Add PM</button>
       </div>
@@ -271,13 +306,6 @@
       <table id="adminTable">
         <thead id="adminHead"></thead>
         <tbody id="adminBody"></tbody>
-      </table>
-    </div>
-
-    <div class="table-wrap glass narrow" id="capWrap">
-      <table id="capTable">
-        <thead id="capHead"></thead>
-        <tbody id="capBody"></tbody>
       </table>
     </div>
 
@@ -430,7 +458,7 @@
   </div>
 </div>
 
-<script src="/app.js?v=90"></script>
+<script src="/app.js?v=93"></script>
 <script>
   // PWA: register the service worker (only after load; skip on failure)
   if ("serviceWorker" in navigator) {

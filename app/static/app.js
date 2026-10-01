@@ -1,16 +1,19 @@
 /* ============ Revenue Tracker — frontend logic ============
-   Tabs:
-   - Onsite   : Country, Client, Project, Resource Name, Title (dropdown),
-                Rate, Total Hours, Total Revenue, then Month+Week columns.
-                Master sheet — hours entered here (PLANNED).
-   - Offshore : same columns, but the rate shown is your OFFSHORE (cost) rate.
-                Hours mirror Onsite; pick a Title to auto-fill the cost rate.
-   - Actuals  : PM reconciliation — record ACTUAL hours, validated against
-                planned. Overage → OT flow; under → comment required.
-   - Dashboard: Country, Client, Resource(s), Revenue, Expense, Difference,
-                plus Additional Revenue/Expense + Adjustment from Actuals.
-   - Pricing  : Title library + Project→PM assignment + per-resource capacity.
-   Roles: admin (everything) vs pm (Actuals only, scoped to their projects).
+   Tabs (left-rail nav, order matters to Rijoy):
+   - Dashboard: Planned vs actual money, by client/project.
+   - Planned   : master entry — hours, rates and the weekly grid. Pick a Title
+                 from the Rate Card to auto-fill both rates.
+   - Actuals   : PM reconciliation — record ACTUAL hours, validated against
+                 planned. Overage → OT flow; under → comment required.
+   - Rate Card : what you bill the client vs what the title costs offshore,
+                 per title (currency + margin). Was the top half of the old
+                 "Pricing" tab, which was split on 2026-10-01.
+   - Utilization: booked ÷ capacity per resource/month. Capacity (the
+                 denominator) is edited here too, behind the ⚙ Capacity toggle.
+   - Team & Access: PMs + project scope, admin accounts + granular permissions,
+                 and DB security. Was the bottom half of the old "Pricing" tab.
+   Roles: admin (permission-gated per tab) vs pm (Actuals only, scoped to their
+   projects, never sees rates).
 */
 "use strict";
 
@@ -22,7 +25,21 @@ const state = { resources: [], weeks: [], months: [], pricing: [], view: "dash",
 /* Full admin permission key set — mirrors ADMIN_PERMISSIONS in app/main.py.
    Used only as a defensive fallback when /api/login omits `permissions`. */
 const ADMIN_PERM_KEYS = ["pricing", "resources", "projects", "users", "dashboard",
-                         "actuals", "utilization", "import_export", "db_security"];
+                         "actuals", "utilization", "import_export", "db_security", "theming"];
+
+/* 2026-10-01: "Team & Access" is one tab holding three independently-gated
+   blocks (PMs, Admins, DB security). The nav only decides whether the TAB
+   shows; these helpers hide the blocks a given admin may not touch.
+   A PM (non-admin) is never granted any of them. */
+function isAdminUser() { return !!(state.me && state.me.role === "admin"); }
+function canPerm(p) {
+  if (!isAdminUser()) return false;
+  if (state.me.super_admin) return true;
+  return new Set(state.me.permissions || []).has(p);
+}
+/* The PM + Admin blocks are user management, which the API gates behind the
+   `users` permission (see _require_perm in app/main.py). */
+function showBlock(el, on) { if (el) el.style.display = on ? "" : "none"; }
 
 const dirty = new Map();   // resource rid -> {fields:{}, hours:bool}
 const pDirty = new Map();  // pricing pid -> {title?, rate?, offshore_rate?}
@@ -156,17 +173,30 @@ function showApp() {
   const perms = new Set(
     state.me.permissions || (state.me.super_admin ? ADMIN_PERM_KEYS : [])
   );
+  // A regular admin needs db_security (not `users`) to reach the DB-security panel.
+  const hasDbSec = !isAdmin || perms.has("db_security");
   const can = (p) => !isAdmin || perms.has(p);
   initUserMenu();
   initThemeSwitcher();
   initRail();
   // Map each tab to the permission that unlocks it. PMs (non-admin) always see
   // Actuals + Utilization; admins see only what their permissions allow.
-  const tabPerm = { dash: "dashboard", planned: "resources", actuals: "actuals", pricing: "pricing", util: "utilization" };
-  $$(".tab").forEach((t) => {
+  // 2026-10-01: `pricing` split into `rates` (rate card) and `access` (people).
+  // "Team & Access" is shown when EITHER `users` (manage PMs/admins) OR
+  // `db_security` is granted, then each block inside is hidden individually —
+  // otherwise a db_security-only admin would have no way to reach the panel.
+  const tabPerm = {
+    dash: "dashboard", planned: "resources", actuals: "actuals",
+    rates: "pricing", util: "utilization",
+    access: ["users", "db_security"],
+  };
+  const tabVisible = (t) => {
     const p = tabPerm[t.dataset.tab];
-    t.style.display = (isAdmin ? (p ? can(p) : true) : (p === "actuals" || p === "utilization")) ? "" : "none";
-  });
+    if (!isAdmin) return p === "actuals" || p === "utilization";
+    if (p == null) return true;
+    return Array.isArray(p) ? p.some(can) : can(p);
+  };
+  $$(".tab").forEach((t) => { t.style.display = tabVisible(t) ? "" : "none"; });
   // Admin write actions gated by permissions (super-admin has all).
   $("#btnImport").style.display = (isAdmin && can("import_export")) ? "" : "none";
   $("#btnExport").style.display = (isAdmin && can("import_export")) ? "" : "none";
@@ -183,15 +213,19 @@ function showApp() {
   if (!isAdmin) {
     state.view = "actuals";
     $$(".tab").forEach((x) => x.classList.toggle("active", x.dataset.tab === "actuals"));
-    $("#gridView").classList.add("hidden");
-    $("#dashView").classList.add("hidden");
-    $("#pricingView").classList.add("hidden");
-    $("#utilView").classList.add("hidden");
+    // Hide every view, then show Actuals — a blanket hide avoids having to list
+    // each view id here every time a tab is added.
+    $$(".view").forEach((v) => v.classList.add("hidden"));
     $("#actualsView").classList.remove("hidden");
     loadActuals();
   } else {
+    // Admins land on the first tab they actually have permission for. The
+    // markup's default active tab is Dashboard, which an admin with no
+    // `dashboard` permission cannot see — in that case fall through to the
+    // first visible tab so they never start on a blank/forbidden screen.
+    const dashVisible = $$(".tab").some((t) => t.dataset.tab === "dash" && t.style.display !== "none");
     const firstTab = visibleTabs[0];
-    if (firstTab) { switchView(firstTab.dataset.tab); return; }
+    if (!dashVisible && firstTab) { switchView(firstTab.dataset.tab); return; }
     loadState();
   }
 }
@@ -464,10 +498,18 @@ function barHTML(parts, scaleMax) {
   }).join("");
   return `<span class="bar-stack">${rows}</span>`;
 }
+/* Bump whenever COLUMNS or defaultPrefs change. Stored prefs from an older
+   registry are discarded (see viewPrefs) — otherwise a layout saved before a
+   column became default-hidden keeps overriding the new default forever, which
+   is exactly why the identity columns kept showing on the Planned grid. */
+const COLS_VERSION = 2;
+
 function viewPrefs(view) {
   let p = null;
   try { p = JSON.parse(localStorage.getItem("revCols_" + view) || "null"); } catch (_) { p = null; }
-  if (!p || typeof p !== "object") p = defaultPrefs(view);
+  // Discard pre-change prefs: they may name columns that no longer exist, or omit
+  // new ones, and either way they silently beat the new defaults.
+  if (!p || typeof p !== "object" || Number(p.v) !== COLS_VERSION) p = defaultPrefs(view);
   const allKeys = COLUMNS[view].map((c) => c.key);
   const hidden = Array.isArray(p.hidden) ? p.hidden.filter((k) => allKeys.includes(k)) : [];
   let freeze = Number(p.freeze);
@@ -476,7 +518,7 @@ function viewPrefs(view) {
   return { hidden, freeze };
 }
 function savePrefs(view, prefs) {
-  try { localStorage.setItem("revCols_" + view, JSON.stringify(prefs)); } catch (_) {}
+  try { localStorage.setItem("revCols_" + view, JSON.stringify({ ...prefs, v: COLS_VERSION })); } catch (_) {}
 }
 function visibleCols(view) {
   const p = viewPrefs(view);
@@ -625,11 +667,36 @@ function gridRowHTML(r) {
   </tr>`;
 }
 
+/* Feature #14b: size the scroll container so its BOTTOM (the horizontal
+   scrollbar) is always on screen. The old CSS used a fixed 100vh-210px, which
+   broke as soon as pinning the sidebar narrowed the main column enough to make
+   the top strip / toolbar wrap onto another line — the grid then began further
+   down and its scrollbar fell below the fold ("the scrollbar is gone").
+   Instead we measure where the wrap actually starts and take the rest of the
+   viewport, clamped so it always keeps a usable number of rows. */
+function syncGridHeight(wrap) {
+  if (!wrap) return;
+  if (wrap.classList.contains("hidden")) return;
+  const top = wrap.getBoundingClientRect().top;
+  const bottomPad = 18;                       // breathing room under the scrollbar
+  const avail = window.innerHeight - top - bottomPad;
+  if (avail < 140) return;                    // hidden/animating — leave it alone
+  wrap.style.setProperty("--grid-h", `${Math.round(avail)}px`);
+}
+/* Re-measure both grids: on resize, on the rail pin/hover toggle (the column
+   width change reflows the toolbar), and after a tab switch. */
+function syncAllGridHeights() {
+  syncGridHeight(document.getElementById("gridWrap"));
+  syncGridHeight(document.getElementById("actualsWrap"));
+}
+window.addEventListener("resize", syncAllGridHeights);
+
 function alignSticky() {
   const wrap = document.querySelector("#gridWrap");
   const table = document.querySelector("#gridTable");
   const probe = document.querySelector("#gridBody tr.resource-row");
   if (!wrap || !table || !probe) return;
+  syncGridHeight(wrap);
   const prev = wrap.scrollLeft;
   wrap.scrollLeft = 0;
   const els = document.querySelectorAll("#gridHead [class*=sc], #gridBody [class*=sc]");
@@ -1042,6 +1109,18 @@ let pricingFilter = "";
 
 function curSym(code) { return CURR_SYM[code] || code || "$"; }
 
+/* Margin = how much of the client rate you keep after the offshore cost.
+   (rate - offshore_rate) / rate. Shown as a colour-coded % so a title billed at
+   cost (e.g. Solution Architect: rate == offshore_rate) jumps out immediately.
+   Blank titles (no rate) and zero-rate titles render an em dash, never 0%. */
+function marginCell(p) {
+  const r = +p.rate, o = +p.offshore_rate;
+  if (!isFinite(r) || !isFinite(o) || r <= 0) return `<span class="p-empty">—</span>`;
+  const pct = ((r - o) / r) * 100;
+  const cls = pct >= 40 ? "m-good" : pct >= 10 ? "m-ok" : "m-bad";
+  return `<span class="p-margin ${cls}" title="client ${fmt(r)} − offshore ${fmt(o)}">${pct.toFixed(0)}%</span>`;
+}
+
 function pricingRowHTML(p) {
   const isEdit = editingPid === p.id || (editingPid === -1 && p.id === -1);
   /* Feature #11.1: "Used by" is a button that opens the popup. Kept as plain
@@ -1057,6 +1136,7 @@ function pricingRowHTML(p) {
       <td><input class="rate-inp txt" data-field="title" value="${esc(p.title)}" placeholder="Title (e.g. Sr. DevOps Engineer)"></td>
       <td class="num"><input class="rate-inp" type="number" min="0" step="any" data-field="rate" value="${p.rate ?? ""}" placeholder="—"></td>
       <td class="num"><input class="rate-inp" type="number" min="0" step="any" data-field="offshore_rate" value="${p.offshore_rate ?? ""}" placeholder="—"></td>
+      <td class="num"><span class="dim">—</span></td>
       <td><select class="cur-sel" data-field="currency" title="Currency for this title">${sel}</select></td>
       <td class="num">${usedCell}</td>
       <td><button class="btn mini save">Save</button> <button class="btn mini cancel">Cancel</button></td>
@@ -1067,6 +1147,7 @@ function pricingRowHTML(p) {
     <td class="p-title-read">${esc(p.title)}</td>
     <td class="num"><span class="p-read">${sym}${p.rate !== null && p.rate !== undefined ? fmt(p.rate) : '<span class="p-empty">—</span>'}</span></td>
     <td class="num"><span class="p-read">${sym}${p.offshore_rate !== null && p.offshore_rate !== undefined ? fmt(p.offshore_rate) : '<span class="p-empty">—</span>'}</span></td>
+    <td class="num">${marginCell(p)}</td>
     <td class="p-cur"><span class="cur-chip">${sym}</span></td>
     <td class="num">${usedCell}</td>
     <td><button class="btn mini edit">Edit</button> <button class="btn mini apply">Apply</button> <button class="del" title="Delete title">✕</button></td>
@@ -1138,12 +1219,6 @@ async function openPricingPopup(pid) {
 }
 
 function renderPricing() {
-  // Ensure PM/project data is loaded (it's fetched async; without this the
-  // Add-PM row shows zero project checkboxes on first tab visit).
-  if (!loadPMDataStarted) {
-    loadPMDataStarted = true;
-    loadPMData().then(() => { if (state.view === "pricing") renderPMs(); });
-  }
   const rows = state.pricing || [];
   /* Feature #11.3: collapse / expand all pricing titles. Collapsed by default
      is NOT applied here — the stored preference decides on load. */
@@ -1158,13 +1233,13 @@ function renderPricing() {
       </span>
     </div>
     <table class="p-table"><thead><tr>
-    <th>Title</th><th class="num">Rate</th><th class="num">Offshore Rate</th><th class="p-cur">Currency</th>
+    <th>Title</th><th class="num">Rate</th><th class="num">Offshore Rate</th><th class="num">Margin</th><th class="p-cur">Currency</th>
     <th class="num">Used By</th><th></th>
   </tr></thead><tbody>`;
   const filtered = rows.filter((p) =>
     !pricingFilter || (p.title || "").toLowerCase().includes(pricingFilter.toLowerCase()));
   if (!filtered.length && editingPid !== -1) {
-    html += `<tr class="p-res"><td colspan="6" class="dim">${rows.length ? "No titles match the filter." : "No titles yet — click + Add Title or import an Excel file."}</td></tr>`;
+    html += `<tr class="p-res"><td colspan="7" class="dim">${rows.length ? "No titles match the filter." : "No titles yet — click + Add Title or import an Excel file."}</td></tr>`;
   }
   for (const p of filtered) html += pricingRowHTML(p);
   if (editingPid === -1) html += pricingRowHTML({ id: -1, title: "", rate: null, offshore_rate: null, currency: "USD", used_by: 0 });
@@ -1175,9 +1250,23 @@ function renderPricing() {
   if (co) co.addEventListener("click", () => { pricingCollapsed = true; renderPricing(); });
   const pf = $("#pricingFilter");
   if (pf) pf.addEventListener("input", () => { pricingFilter = pf.value; renderPricing(); pf.focus(); });
+}
+
+/* ---------------- Team & Access (PMs + admins + DB security) ----------------
+   Was the bottom half of renderPricing(). Kept as its own entry point so the
+   access tab owns its own data loading instead of piggy-backing on a pricing
+   render. */
+function renderAccess() {
+  if (!loadPMDataStarted) loadPMDataStarted = true;
+  loadPMData().then(() => {
+    if (state.view !== "access") return;
+    renderPMs();
+    renderAdmins();
+  });
+  // Render immediately too (with whatever is cached) so the tab never flashes
+  // empty on a slow /api/users round-trip.
   renderPMs();
   renderAdmins();
-  renderCapacity();
   renderDbSec();
 }
 function readEditRow(tr) {
@@ -1304,6 +1393,12 @@ function projectCheckboxes(selected, selfUsername) {
 }
 
 function renderPMs() {
+  // PM block is user management → `users` permission.
+  const showUsers = canPerm("users");
+  showBlock($("#pmWrap"), showUsers);
+  const pmToolbar = $("#pmWrap").previousElementSibling;
+  showBlock(pmToolbar && pmToolbar.classList.contains("pm-toolbar") ? pmToolbar : null, showUsers);
+  if (!showUsers) { editingUser = null; return; }
   $("#pmHead").innerHTML = `<tr><th>PM</th><th>Assigned Client / Project</th><th></th></tr>`;
   const pms = users.filter((u) => u.role !== "admin");
   let html = "<tbody>";
@@ -1341,23 +1436,69 @@ function renderPMs() {
   $("#pmBody").innerHTML = html;
 }
 
+/* Capacity editor — lives on Utilization (2026-10-01). Capacity is the
+   denominator of every % on that page, so the editor sits right below the grid.
+   Collapsed by default so the tab still opens as a clean read-only report. */
+let capOpen = false;
+
 function renderCapacity() {
+  const resources = state.resources || [];
+  // Badge: how many resources differ from the 40h/week default — a quick signal
+  // that someone is part-time before you read a single percentage.
+  const nonStd = resources.filter((r) => (r.capacity ?? 40) !== 40).length;
+  const badge = $("#capBadge");
+  if (badge) {
+    badge.innerHTML = nonStd
+      ? `<b>${nonStd}</b> of ${resources.length} not at 40h/wk`
+      : `${resources.length} resources · all at 40h/wk`;
+  }
   $("#capHead").innerHTML = `<tr><th>Resource</th><th>Client · Project</th><th class="num">Capacity (hrs/wk)</th></tr>`;
   let html = "<tbody>";
-  for (const r of state.resources) {
+  if (!resources.length) {
+    html += `<tr><td colspan="3" class="dim">No resources yet — add them on the Planned tab or import a workbook.</td></tr>`;
+  }
+  for (const r of resources) {
     const cap = r.capacity ?? 40;
+    const off = cap !== 40 ? ' style="border-color:rgba(251,191,36,.45)"' : "";
     html += `<tr class="p-res" data-rid="${r.id}">
       <td>${esc(r.name)}</td>
       <td class="dim">${esc(r.client)}${r.project ? " · " + esc(r.project) : ""}</td>
-      <td class="num"><input class="rate-inp cap-inp" type="number" min="1" step="1" data-cap="${r.id}" value="${cap}"></td>
+      <td class="num"><input class="rate-inp cap-inp" type="number" min="1" step="1" data-cap="${r.id}" value="${cap}"${off}></td>
     </tr>`;
   }
   html += "</tbody>";
   $("#capBody").innerHTML = html;
+  const wrap = $("#capWrap");
+  if (wrap) wrap.classList.toggle("hidden", !capOpen);
+  const btn = $("#btnToggleCap");
+  if (btn) {
+    btn.classList.toggle("active-toggle", capOpen);
+    btn.textContent = capOpen ? "✓ Done" : "⚙ Capacity";
+  }
 }
+// Toggle the capacity editor; save any open capacity edit first.
+$("#btnToggleCap").addEventListener("click", async () => {
+  capOpen = !capOpen;
+  renderCapacity();
+  if (capOpen) {
+    const w = $("#capWrap");
+    if (w) w.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+});
+// "Open Utilization →" on the Rate Card tab.
+$("#btnRatesToUtil").addEventListener("click", () => switchView("util"));
 
 /* ---------------- DB security (encryption) ---------------- */
 function renderDbSec() {
+  // DB security block → its own `db_security` permission. This is why the
+  // Team & Access tab unlocks on users OR db_security: an admin trusted only
+  // with encryption still needs somewhere to land.
+  const showDbSec = canPerm("db_security");
+  const wrap = $("#dbSecWrap");
+  const tb = wrap && wrap.previousElementSibling;
+  showBlock(wrap, showDbSec);
+  showBlock(tb && tb.classList.contains("pm-toolbar") ? tb : null, showDbSec);
+  if (!showDbSec) return;
   api("/api/db-security").then((s) => {
     const status = s.encrypted
       ? `<span class="db-sec-ok">🔒 Encrypted</span>`
@@ -1437,11 +1578,15 @@ function permCheckboxes(selected) {
 
 function renderAdmins() {
   // Only Rijoy (super-admin) manages admin accounts. Regular admins and PMs
-  // never see this section at all.
+  // never see this section at all. (Managing admins needs the `users` perm AND
+  // super-admin — the server enforces both via _require_super_admin.)
   const isSuper = state.me && state.me.super_admin;
-  $("#adminToolbar").style.display = isSuper ? "" : "none";
-  $("#adminWrap").style.display = isSuper ? "" : "none";
-  if (!isSuper) { editingAdmin = null; return; }
+  // Managing admins requires the `users` permission as well as super-admin.
+  const showUsers = canPerm("users");
+  const superAndUsers = isSuper && showUsers;
+  $("#adminToolbar").style.display = superAndUsers ? "" : "none";
+  $("#adminWrap").style.display = superAndUsers ? "" : "none";
+  if (!superAndUsers) { editingAdmin = null; return; }
   const head = $("#adminHead");
   head.innerHTML = `<tr><th>Admin</th><th>Permissions</th><th></th></tr>`;
   let html = "<tbody>";
@@ -1605,6 +1750,9 @@ function renderUtilization() {
     // sticky alignment for the new 3-column frozen block (Resource + Projects + Cap/wk)
     alignUtilSticky();
   }).catch((e) => toast(`Utilization failed: ${e.message}`, true));
+  // The capacity editor lives on this tab (2026-10-01 split) — keep it in sync
+  // with whatever the grid just rendered.
+  renderCapacity();
 }
 
 /* Pin Resource + Projects + Cap/wk; the "Resource" header cell also pins to
@@ -1790,6 +1938,10 @@ function initRail() {
     // keep the grid column in step with the rail's real rendered width when pinned
     if (pinned) shell.style.setProperty("--rail-w", "246px");
     else shell.style.removeProperty("--rail-w");
+    // Feature #14b: pinning changes the main column's width, so the toolbar can
+    // reflow onto another line — re-measure the grid height AFTER the layout
+    // settles, otherwise the bottom scrollbar ends up off-screen.
+    requestAnimationFrame(syncAllGridHeights);
   };
   apply();
   if (pin && pin.dataset.bound !== "1") {
@@ -1807,6 +1959,7 @@ function initRail() {
   const setExpanded = (on) => {
     if (window.innerWidth <= 900) return;
     shell.classList.toggle("rail-expanded", on && !pinned);
+    requestAnimationFrame(syncAllGridHeights);   // width changed → re-measure
   };
   rail.addEventListener("mouseenter", () => setExpanded(true));
   rail.addEventListener("mouseleave", () => setExpanded(false));
@@ -2154,6 +2307,7 @@ function alignActualsSticky() {
   const table = document.querySelector("#actualsTable");
   const probe = document.querySelector("#actualsBody tr.resource-row");
   if (!wrap || !table || !probe) return;
+  syncGridHeight(wrap);
   const prev = wrap.scrollLeft;
   wrap.scrollLeft = 0;
   const els = document.querySelectorAll("#actualsHead [class*=sc], #actualsBody [class*=sc]");
@@ -3241,7 +3395,8 @@ function renderView() {
   const isGrid = state.view === "planned";
   $("#gridView").classList.toggle("hidden", !isGrid);
   $("#dashView").classList.toggle("hidden", state.view !== "dash");
-  $("#pricingView").classList.toggle("hidden", state.view !== "pricing");
+  $("#ratesView").classList.toggle("hidden", state.view !== "rates");
+  $("#accessView").classList.toggle("hidden", state.view !== "access");
   $("#utilView").classList.toggle("hidden", state.view !== "util");
   $("#actualsView").classList.toggle("hidden", state.view !== "actuals");
   // Feature #12: the top strip reports which section you're in, since the nav
@@ -3251,13 +3406,18 @@ function renderView() {
     dash: ["Dashboard", "Planned vs actual, by client and project"],
     planned: ["Planned", "Master entry — hours, rates and the weekly grid"],
     actuals: ["Actuals", "PM reconciliation — recorded hours vs plan"],
-    pricing: ["Pricing", "Title library, Project → PM assignment, capacity"],
+    rates: ["Rate Card", "Client rate vs offshore rate, per title"],
     util: ["Utilization", "Booked hours ÷ capacity (40 hrs/week = 100%)"],
+    access: ["Team & Access", "PMs, admins, permissions & database security"],
   };
   if (title && META[state.view]) {
     title.textContent = META[state.view][0];
     if (sub) sub.textContent = META[state.view][1];
   }
+  // Feature #14b: the toolbar/top-strip height differs per tab, so re-measure the
+  // grid height after the view is shown — otherwise a grid whose toolbar is taller
+  // than the last one's gets its bottom scrollbar pushed off-screen.
+  requestAnimationFrame(syncAllGridHeights);
   // "+ Add/Edit Resource" only applies to the Planned grid — but the button now
   // lives in the rail, so hide the whole cluster rather than a single button.
   $("#btnAdd").style.display = isGrid ? "initial" : "none";
@@ -3265,7 +3425,8 @@ function renderView() {
   else if (state.view === "dash") renderDashboard();
   else if (state.view === "util") renderUtilization();
   else if (state.view === "actuals") renderActuals();
-  else renderPricing();
+  else if (state.view === "rates") renderPricing();
+  else if (state.view === "access") renderAccess();
 }
 
 $$(".tab").forEach((t) => t.addEventListener("click", () => switchView(t.dataset.tab)));
