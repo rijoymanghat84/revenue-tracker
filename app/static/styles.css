@@ -84,6 +84,16 @@ body {
   display: flex; align-items: center; justify-content: space-between; gap: 16px;
   padding: 9px 14px; border-radius: 16px;
   margin-bottom: 12px;
+  /* Feature #13 bugfix: .glass applies `backdrop-filter`, which creates a
+     STACKING CONTEXT. With `position: static` and no z-index, the topbar's
+     context is painted in DOM order among its siblings — so the filter panel,
+     KPI bar and table (which are later siblings, each also a backdrop-filter
+     context) painted OVER it, and the account dropdown was dragged underneath
+     them (its own z-index:400 is trapped inside this context). A positive
+     z-index lifts the whole topbar context above that page content while
+     staying below the toast (100), update banner (150) and modals (200).
+     Do NOT remove this z-index, and do NOT make it sticky. */
+  position: relative; z-index: 60;
 }
 .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .logo {
