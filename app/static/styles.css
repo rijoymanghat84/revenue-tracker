@@ -643,6 +643,18 @@ html[data-theme-dark="0"] #utilTable td.u-cell.orange { color: #8a3d00; }
 .col-pin[aria-pressed=true] { filter: drop-shadow(0 0 4px rgba(var(--green-rgb), 0.6)); }
 .col-panel-actions { margin-top: 10px; display: flex; justify-content: flex-end; }
 
+/* ---------- inline bars (feature #14: Share + Plan vs actual) ----------
+   Fixed-height tracks so every row lines up; the fill width carries the value. */
+.bar-cell { width: 120px; }
+.bar-stack { display: flex; flex-direction: column; gap: 3px; justify-content: center; }
+.bar-track {
+  display: block; height: 5px; border-radius: 3px;
+  background: rgba(255, 255, 255, 0.12); overflow: hidden;
+}
+.bar-fill { display: block; height: 5px; border-radius: 3px; }
+.bar-num { display: block; font-size: 11px; color: var(--muted); margin-bottom: 3px; font-variant-numeric: tabular-nums; }
+.bar-empty { color: var(--muted); }
+
 
 @media (max-width: 900px) {
   /* Feature #13: on touch/mobile the rail is HIDDEN by default and slides in
