@@ -3321,16 +3321,63 @@ function syncExportLinks() {
   }
 }
 
+/* Export split menu — portalled out of the rail (see .exp-menu CSS note).
+   The rail is `overflow: hidden` and only ~64px wide when collapsed, so an
+   absolutely-positioned menu inside it was clipped away. We move it to <body>
+   and place it with fixed coordinates relative to the Export button. */
+function placeExportMenu() {
+  const menu = $("#exportMenu"), btn = $("#btnExportSplit");
+  if (!menu || !btn || menu.classList.contains("hidden")) return;
+  const r = btn.getBoundingClientRect();
+  menu.classList.add("body");
+  // Neutralise the CSS anchor before measuring.
+  menu.style.left = "0px"; menu.style.top = "0px";
+  const w = menu.offsetWidth || 250;
+  const h = menu.offsetHeight || 140;
+  // Prefer opening to the RIGHT of the collapsed rail; clamp to the viewport,
+  // then fall back to the button's left edge if that would overflow.
+  let left = r.right + 8;
+  if (left + w > window.innerWidth - 8) left = Math.max(8, Math.min(r.left, window.innerWidth - w - 8));
+  // Flip above the button when there isn't room below.
+  const below = window.innerHeight - r.bottom - 10;
+  const up = below < Math.min(h, 160) && r.top > below;
+  let top = up ? (r.top - h - 6) : (r.bottom + 6);
+  top = Math.max(8, Math.min(top, window.innerHeight - h - 8));
+  menu.style.left = left + "px";
+  menu.style.top = top + "px";
+}
+
 $("#btnExportSplit")?.addEventListener("click", (e) => {
   e.stopPropagation();
   const menu = $("#exportMenu");
-  if (menu) menu.classList.toggle("hidden");
+  if (!menu) return;
+  const opening = menu.classList.contains("hidden");
+  if (opening) {
+    document.body.appendChild(menu);   // portal out of the clipping rail
+    menu.classList.remove("hidden");
+    placeExportMenu();
+    $("#btnExportSplit").classList.add("open");
+  } else {
+    menu.classList.add("hidden");
+    $("#btnExportSplit").classList.remove("open");
+  }
 });
 document.addEventListener("click", (e) => {
   if (!e.target.closest("#exportMenu, #btnExportSplit")) {
     const menu = $("#exportMenu");
     if (menu) menu.classList.add("hidden");
+    const b = $("#btnExportSplit");
+    if (b) b.classList.remove("open");
   }
+});
+// A fixed-position menu would drift away from its button on scroll/resize.
+window.addEventListener("scroll", () => {
+  const menu = $("#exportMenu");
+  if (menu && !menu.classList.contains("hidden")) menu.classList.add("hidden");
+}, true);
+window.addEventListener("resize", () => {
+  const menu = $("#exportMenu");
+  if (menu && !menu.classList.contains("hidden")) placeExportMenu();
 });
 
 $("#btnImport").addEventListener("click", () => $("#fileInput").click());

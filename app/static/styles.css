@@ -185,12 +185,21 @@ body {
   .shell:not(.rail-pinned):not(.rail-expanded) .rail #btnExportSplit { font-size: 0; }
   .shell:not(.rail-pinned):not(.rail-expanded) .rail #btnExportSplit::before { content: "⬇"; font-size: 14px; }
 }
-/* Export split menu (full workbook vs filtered view) */
+/* Export split menu (full workbook vs filtered view).
+   BUG FIX 2026-10-01: this used to be absolutely positioned inside `.rail`,
+   which sets `overflow: hidden` (needed to clip the collapsed rail's labels).
+   The rail is only ~64px wide when collapsed, so the 250px menu was clipped to
+   an invisible sliver — opening Export looked like it did nothing. It is now
+   PORTALLED to <body> and positioned fixed from JS, exactly like the dashboard
+   filter popups (.ms-pop), which hit the same overflow problem. */
 .exp-menu {
   position: absolute; z-index: 46; top: calc(100% + 6px); right: 0; min-width: 250px;
   background: var(--surface-7); border: 1px solid var(--border-strong);
   border-radius: 13px; padding: 7px; box-shadow: 0 20px 44px rgba(0,0,0,0.55);
 }
+/* When portalled to <body>: fixed, with coordinates supplied by JS. `right`
+   must be neutralised or it fights the inline `left`. */
+.exp-menu.body { position: fixed; top: auto; right: auto; min-width: 250px; }
 .exp-menu.hidden { display: none; }
 .exp-item {
   display: block; padding: 9px 10px; border-radius: 9px; text-decoration: none;
