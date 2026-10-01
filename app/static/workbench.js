@@ -316,7 +316,10 @@ function openAssignModal(project, pid, rid) {
       <div>
         <label class="f">Allocation — % of their weekly capacity</label>
         <div class="wb-slide">
-          <input type="range" id="wbPct" min="0" max="100" step="5" value="${cur && cur.allocation_pct != null ? cur.allocation_pct : 50}">
+          <!-- 25% increments per Rijoy: 25 / 50 / 75 / 100. A finer step let the slider
+             rest on values nobody allocates at (35%, 45%) while the chips beside it
+             already offered only quarters. -->
+          <input type="range" id="wbPct" min="0" max="100" step="25" value="${cur && cur.allocation_pct != null ? cur.allocation_pct : 50}">
           <span class="wb-pctval" id="wbPctVal">50%</span>
         </div>
         <div class="wb-chips" id="wbChips">
@@ -523,7 +526,7 @@ function openAssignModal(project, pid, rid) {
       box.innerHTML = phaseRows.map((r, i) => `
         <div class="wb-phase" data-i="${i}">
           <span class="wb-phase-n">${i + 1}</span>
-          <input type="range" class="wb-ph-pct" min="0" max="100" step="5" value="${r.allocation_pct}">
+          <input type="range" class="wb-ph-pct" min="0" max="100" step="25" value="${r.allocation_pct}">
           <span class="wb-ph-val">${r.allocation_pct}%</span>
           <input type="date" class="wb-ph-start" value="${r.start_date || ""}">
           <span class="wb-ph-arrow">→</span>
@@ -580,6 +583,8 @@ function openAssignModal(project, pid, rid) {
       const e = new Date(last.end_date + "T00:00:00");
       if (!isNaN(e)) start = new Date(e.getTime() + 86400000).toISOString().slice(0, 10);
     }
+    // Pre-taper by one quarter, so the default taper reads 100 -> 75 -> 50 -> 25.
+    // The floor stays on the 25% grid (0 is a valid 'bench' leg).
     phaseRows.push({ allocation_pct: last ? Math.max(0, last.allocation_pct - 25) : 50,
                      start_date: start, end_date: "" });
     renderPhaseRows(); check();

@@ -3834,6 +3834,15 @@ def api_assignment_create(body: AssignmentBody, request: Request):
             alloc = float(body.allocation_pct or 0.0)
             if alloc < 0 or alloc > 100:
                 raise HTTPException(400, "Allocation must be between 0 and 100%")
+            # Enforce the quarter grid (25/50/75/100) SERVER-side, not just in the
+            # slider: "the iteration [should] be of 25". The UI steps by 25, but a
+            # direct API call or a stale form could still post 35%, so the rule
+            # has to live here to actually be true. Nothing else in the codebase
+            # writes allocation_pct (the importer and the admin resource editor do
+            # not touch it), so this cannot break a bulk load.
+            if abs(alloc % 25) > 1e-9:
+                raise HTTPException(400, f"Allocation must be a multiple of 25% "
+                                         f"(25, 50, 75 or 100) — got {alloc:g}%.")
             sd = (body.start_date or "").strip()
             ed = (body.end_date or "").strip()
             sd_d, ed_d = _iso_date(sd), _iso_date(ed)
@@ -3968,6 +3977,11 @@ def validate_phases(phases: list[dict]) -> str:
         pct = p["allocation_pct"]
         if pct < 0 or pct > 100:
             return f"Phase {i}: allocation must be between 0 and 100%."
+        # Every phase sits on the same 25% grid as a flat allocation, so a taper
+        # reads as 100 -> 75 -> 50 -> 25 and never as an arbitrary 33%.
+        if abs(pct % 25) > 1e-9:
+            return (f"Phase {i}: allocation must be a multiple of 25% "
+                    f"(25, 50, 75 or 100) — got {pct:g}%.")
         sd, ed = _iso_date(p["start_date"]), _iso_date(p["end_date"])
         if p["start_date"] and not sd:
             return f"Phase {i}: start date is not a valid date."
@@ -4119,6 +4133,12 @@ def api_assignment_update(rid: int, body: AssignmentBody, request: Request):
         else:
             alloc = float(body.allocation_pct if body.allocation_pct is not None
                           else (row["allocation_pct"] or 0.0))
+            # Same quarter grid as create. Note a LEGACY row with a non-quarter
+            # allocation keeps working: this only fires when the value is
+            # being (re)written, and no live row has one set.
+            if abs(alloc % 25) > 1e-9:
+                raise HTTPException(400, f"Allocation must be a multiple of 25% "
+                                         f"(25, 50, 75 or 100) — got {alloc:g}%.")
             sd = (body.start_date if body.start_date is not None else row["start_date"]) or ""
             ed = (body.end_date if body.end_date is not None else row["end_date"]) or ""
         if phases:
