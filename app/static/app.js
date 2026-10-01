@@ -242,7 +242,10 @@ function showApp() {
     const p = tabPerm[t.dataset.tab];
     // A PM gets their OWN two tabs: the workbench (their projects + team load)
     // and Actuals. They never see Dashboard/Planned/Rate Card/Team & Access.
-    if (!isAdmin) return t.dataset.tab === "workbench" || p === "actuals" || p === "utilization";
+    // A PM's tabs: the workbench (projects + load rail), the WEEK SHEET (the
+    // weekly entry job), and the read-only year grids.
+    if (!isAdmin) return t.dataset.tab === "workbench" || t.dataset.tab === "week"
+      || p === "actuals" || p === "utilization";
     return Array.isArray(p) ? p.some(can) : can(p);
   };
   // `.hidden` is the class-based hide; `style.display` is the permission gate.
@@ -263,17 +266,19 @@ function showApp() {
   const names = visibleTabs.map((t) => t.textContent.trim()).join(" · ");
   $("#subLine").textContent = isAdmin
     ? (names ? names : "No permissions assigned")
-    : `My Projects · Actuals — signed in as ${esc(state.me.username)}`;
+    : `Weekly entry · My Projects · Actuals — signed in as ${esc(state.me.username)}`;
   // PMs land on Actuals. Admins land on their first permitted tab so they
   // never see a view they lack permission for.
   if (!isAdmin) {
     // A PM lands on the WORKBENCH (their projects + the load rail), which is the
     // screen they live in. Actuals stays reachable from the nav.
-    state.view = "workbench";
-    $$(".tab").forEach((x) => x.classList.toggle("active", x.dataset.tab === "workbench"));
+    // A PM lands on the WEEK SHEET: entering the week's hours is the recurring
+    // job, and the workbench is one click away.
+    state.view = "week";
+    $$(".tab").forEach((x) => x.classList.toggle("active", x.dataset.tab === "week"));
     $$(".view").forEach((v) => v.classList.add("hidden"));
-    $("#workbenchView").classList.remove("hidden");
-    loadWorkbench();
+    $("#weekView").classList.remove("hidden");
+    loadWeekSheet();
   } else {
     // Admins land on the first tab they actually have permission for. The
     // markup's default active tab is Dashboard, which an admin with no
@@ -2679,8 +2684,15 @@ function askOt(question, opts = {}) {
     }
     html += `<div class="ot-btns">`;
     if (opts.buttons !== false) {
-      html += `<button class="btn primary ot-yes" data-v="yes">Yes</button>`;
-      html += `<button class="btn ghost ot-no" data-v="no">No</button>`;
+      // yesLabel/noLabel let a question state the CONSEQUENCE ("Yes - billed in
+      // full" / "No - revenue drops") instead of a bare Yes/No, which matters for
+      // the money decisions on the week sheet.
+      html += `<button class="btn primary ot-yes" data-v="yes">${esc(opts.yesLabel || "Yes")}</button>`;
+      html += `<button class="btn ghost ot-no" data-v="no">${esc(opts.noLabel || "No")}</button>`;
+    }
+    // An input question gets a real Submit button (Enter also submits).
+    if (opts.input) {
+      html += `<button class="btn primary ot-submit" data-v="submit">${esc(opts.submitLabel || "Save")}</button>`;
     }
     if (opts.allowCancel !== false) {
       html += `<button class="btn ghost ot-cancel" data-v="cancel">Cancel</button>`;
@@ -2696,6 +2708,13 @@ function askOt(question, opts = {}) {
     body.querySelector(".ot-yes")?.addEventListener("click", () => finish("yes"));
     body.querySelector(".ot-no")?.addEventListener("click", () => finish("no"));
     body.querySelector(".ot-cancel")?.addEventListener("click", () => finish("cancel"));
+    // Free-text questions need an explicit SUBMIT. They used to render only
+    // Cancel (buttons:false + Enter-to-submit), so a prompt that says "(required)"
+    // looked unanswerable — you had to guess that Enter submits. Enter still works.
+    body.querySelector(".ot-submit")?.addEventListener("click", () => {
+      const el = body.querySelector("#otInput");
+      finish(el ? el.value.trim() : "");
+    });
     const inp = body.querySelector("#otInput");
     if (inp) {
       inp.focus();
@@ -3732,6 +3751,7 @@ function renderView() {
   $("#utilView").classList.toggle("hidden", state.view !== "util");
   $("#actualsView").classList.toggle("hidden", state.view !== "actuals");
   $("#workbenchView").classList.toggle("hidden", state.view !== "workbench");
+  $("#weekView").classList.toggle("hidden", state.view !== "week");
   // Feature #12: the top strip reports which section you're in, since the nav
   // now lives in the rail and the title is no longer attached to the tabs.
   const title = $("#pageTitle"), sub = $("#pageSub");
@@ -3743,6 +3763,7 @@ function renderView() {
     util: ["Utilization", "Booked hours ÷ capacity (40 hrs/week = 100%)"],
     access: ["Team & Access", "People, PMs, admins, permissions & database security"],
     workbench: ["My Projects", "Your projects, your team, and their week-by-week load"],
+    week: ["Weekly entry", "Enter one week of actual hours for everyone on your projects"],
   };
   if (title && META[state.view]) {
     title.textContent = META[state.view][0];
@@ -3762,6 +3783,7 @@ function renderView() {
   else if (state.view === "rates") renderPricing();
   else if (state.view === "access") renderAccess();
   else if (state.view === "workbench") loadWorkbench();
+  else if (state.view === "week") loadWeekSheet();
 }
 
 $$(".tab").forEach((t) => t.addEventListener("click", () => switchView(t.dataset.tab)));
@@ -3773,6 +3795,8 @@ bindPasswordModal();
    brick the app. */
 if (typeof bindWorkbench === "function") bindWorkbench();
 else console.warn("workbench.js not loaded — My Projects will be unavailable");
+if (typeof bindWeekSheet === "function") bindWeekSheet();
+else console.warn("weeksheet.js not loaded — Weekly entry will be unavailable");
 if (typeof bindPeopleAndOt === "function") bindPeopleAndOt();
 else console.warn("workbench.js not loaded — People/OT controls unavailable");
 /* Feature #10.2: dashboard resource popup close (button + backdrop + Escape).

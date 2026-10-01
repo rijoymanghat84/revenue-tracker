@@ -10,7 +10,7 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icons/icon-192.png">
 <title>Revenue Recon</title>
-<link rel="stylesheet" href="/styles.css?v=77">
+<link rel="stylesheet" href="/styles.css?v=78">
 </head>
 <body>
 <div class="bg-glow"></div>
@@ -69,6 +69,7 @@
         <button class="tab active" data-tab="dash" title="Dashboard"><span class="tab-ico">▤</span><span class="tab-txt">Dashboard</span></button>
         <button class="tab" data-tab="planned" title="Planned"><span class="tab-ico">✎</span><span class="tab-txt">Planned</span></button>
         <button class="tab pm-only hidden" data-tab="workbench" title="My Projects"><span class="tab-ico">▦</span><span class="tab-txt">My Projects</span></button>
+        <button class="tab" data-tab="week" title="Weekly entry"><span class="tab-ico">✍</span><span class="tab-txt">Weekly entry</span></button>
         <button class="tab" data-tab="actuals" title="Actuals"><span class="tab-ico">✓</span><span class="tab-txt">Actuals</span></button>
         <!-- 2026-10-01: the old "Pricing" tab was doing six unrelated jobs in one
              long scroll. It is now split by PURPOSE:
@@ -265,6 +266,36 @@
           <span class="muted-note">· hover a block for its week &amp; month, click it for detail</span>
         </div>
       </div>
+    </div>
+  </section>
+
+  <!-- ============ WEEK SHEET (week-centric actuals entry, 2026-10-01) ========
+       Rijoy's ask: "on a weekly basis they should be able to update the hours
+       each employee has contributed". The 53-week grid is a REVIEW surface —
+       entering one week meant scrolling a year-wide table. This is the entry
+       surface: pick the week, see every person on the PM's projects in ONE list,
+       type the actuals down the column, one save for the whole week.
+       Under-delivery asks for a reason AND whether the client still pays;
+       overage runs the OT flow (is it OT / approved / billed to client). -->
+  <section id="weekView" class="view hidden">
+    <div class="toolbar glass">
+      <div class="sheet-note" id="wkNote"><span class="dot on"></span>Pick a week, then type each person's actual hours. One save records the whole week.</div>
+      <div class="toolbar-right">
+        <div class="wk-picker">
+          <button class="btn mini" id="wkPrev" title="Previous week">←</button>
+          <select id="wkSelect" title="Which week are you entering?"></select>
+          <button class="btn mini" id="wkNext" title="Next week">→</button>
+          <button class="btn mini" id="wkToday" title="Jump to the week containing today">This week</button>
+        </div>
+        <button class="btn primary" id="wkSave" disabled>Save week</button>
+      </div>
+    </div>
+    <div class="wk-summary glass" id="wkSummary"></div>
+    <div class="table-wrap glass" id="wkWrap">
+      <table id="wkTable">
+        <thead id="wkHead"></thead>
+        <tbody id="wkBody"></tbody>
+      </table>
     </div>
   </section>
 
@@ -563,7 +594,9 @@
      aborted the REST of app.js — including boot() — so the entire app failed to
      initialise. -->
 <script src="/workbench.js?v=9"></script>
-<script src="/app.js?v=101"></script>
+<!-- weeksheet.js also loads BEFORE app.js, for the same reason as workbench.js. -->
+<script src="/weeksheet.js?v=7"></script>
+<script src="/app.js?v=104"></script>
 <script>
   // PWA: register the service worker (only after load; skip on failure)
   if ("serviceWorker" in navigator) {
