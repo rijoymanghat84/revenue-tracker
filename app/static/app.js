@@ -159,6 +159,7 @@ function showApp() {
   const can = (p) => !isAdmin || perms.has(p);
   initUserMenu();
   initThemeSwitcher();
+  initRail();
   // Map each tab to the permission that unlocks it. PMs (non-admin) always see
   // Actuals + Utilization; admins see only what their permissions allow.
   const tabPerm = { dash: "dashboard", planned: "resources", actuals: "actuals", pricing: "pricing", util: "utilization" };
@@ -1607,17 +1608,45 @@ function msHtml(key, label, allLabel, opts, sel, note) {
   </div>`;
 }
 
-/* Wire the filter row's multi-selects, month and currency pickers. */
+/* Wire the filter row's multi-selects, month and currency pickers.
+   Feature #13: each popup is MOVED to <body> when it opens and positioned with
+   `position: fixed` under its button. It has to be a body child — the filter
+   panel is `overflow-x: auto` and glass has `backdrop-filter`, and either one
+   clips/filters an absolutely-positioned descendant, which is why the option
+   list used to get cut off inside the panel. */
 function bindDashFilters() {
-  const closeAll = () => $$(".ms-pop").forEach((p) => p.classList.add("hidden"));
+  const closeAll = () => {
+    $$(".ms-pop").forEach((p) => p.classList.add("hidden"));
+    $$("[data-msbtn]").forEach((b) => b.classList.remove("open"));
+  };
+  const place = (btn, pop) => {
+    const r = btn.getBoundingClientRect();
+    const mw = Math.min(320, Math.max(265, r.width));
+    pop.style.left = "0px"; pop.style.top = "0px";  // measure at origin first
+    const w = pop.offsetWidth || mw;
+    // keep it on-screen horizontally, preferring the button's left edge
+    let left = Math.min(r.left, window.innerWidth - w - 8);
+    left = Math.max(8, left);
+    // flip above the button when there isn't room below
+    const h = pop.offsetHeight || 300;
+    const below = window.innerHeight - r.bottom - 10;
+    const up = below < Math.min(h, 220) && r.top > below;
+    pop.classList.toggle("drop-up", up);
+    pop.style.left = left + "px";
+    pop.style.top = (up ? Math.max(8, r.top - pop.offsetHeight - 6) : r.bottom + 6) + "px";
+  };
   $$("[data-msbtn]").forEach((b) => {
     b.addEventListener("click", (e) => {
       e.stopPropagation();
       const pop = $(`#msPop-${b.dataset.msbtn}`);
+      if (!pop) return;
       const wasOpen = !pop.classList.contains("hidden");
       closeAll();
       if (!wasOpen) {
+        document.body.appendChild(pop);      // portal out of the filter panel
         pop.classList.remove("hidden");
+        b.classList.add("open");
+        place(b, pop);
         const s = pop.querySelector(".ms-search");
         if (s) s.focus();
       }
@@ -1643,7 +1672,7 @@ function bindDashFilters() {
   $$(".ms-pop .ms-search").forEach((s) => {
     s.addEventListener("input", () => {
       const q = s.value.trim().toLowerCase();
-      Array.from(s.parentElement.querySelectorAll('label:not(.allrow)')).forEach((l) => {
+      Array.from(s.parentElement.querySelectorAll("label:not(.allrow)")).forEach((l) => {
         l.style.display = !q || l.textContent.toLowerCase().includes(q) ? "" : "none";
       });
     });
@@ -1663,9 +1692,84 @@ function bindDashFilters() {
     dashCurrency = "all";
     renderDashboard();
   });
-  document.addEventListener("click", (e) => {
-    if (!e.target.closest(".ms")) closeAll();
+}
+/* Close popups on outside click, Escape, scroll, or resize. A portalled popup
+   is fixed-positioned, so any of those would leave it stranded otherwise. */
+function closeMsPopups() {
+  $$(".ms-pop").forEach((p) => p.classList.add("hidden"));
+  $$("[data-msbtn]").forEach((b) => b.classList.remove("open"));
+}
+document.addEventListener("click", (e) => {
+  if (!e.target.closest(".ms") && !e.target.closest(".ms-pop")) closeMsPopups();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeMsPopups();
+});
+window.addEventListener("scroll", closeMsPopups, true);
+window.addEventListener("resize", closeMsPopups);
+
+/* ---------------- collapsible rail (feature #13) ----------------
+   Desktop: icon-only by default; expands on hover (pure CSS) or when PINNED.
+   The pin state is remembered per browser. Mobile uses an explicit drawer. */
+function initRail() {
+  const shell = $("#appShell"), rail = $("#rail"), pin = $("#btnRailPin");
+  if (!shell || !rail) return;
+  let pinned = false;
+  try { pinned = localStorage.getItem("revenue.railPinned") === "1"; } catch (_) {}
+  const apply = () => {
+    shell.classList.toggle("rail-pinned", pinned);
+    if (pin) pin.setAttribute("aria-pressed", pinned ? "true" : "false");
+    // keep the grid column in step with the rail's real rendered width when pinned
+    if (pinned) shell.style.setProperty("--rail-w", "246px");
+    else shell.style.removeProperty("--rail-w");
+  };
+  apply();
+  if (pin && pin.dataset.bound !== "1") {
+    pin.dataset.bound = "1";
+    pin.addEventListener("click", (e) => {
+      e.stopPropagation();
+      pinned = !pinned;
+      try { localStorage.setItem("revenue.railPinned", pinned ? "1" : "0"); } catch (_) {}
+      apply();
+    });
+  }
+  // Hover expand: driven by a class (not CSS :hover) so the whole rail —
+  // labels, selects, buttons — expands as one unit, and so it works on devices
+  // where :hover is unreliable. Pinned wins over hover.
+  const setExpanded = (on) => {
+    if (window.innerWidth <= 900) return;
+    shell.classList.toggle("rail-expanded", on && !pinned);
+  };
+  rail.addEventListener("mouseenter", () => setExpanded(true));
+  rail.addEventListener("mouseleave", () => setExpanded(false));
+  // keyboard/touch affordance: focusing a control inside also expands
+  rail.addEventListener("focusin", () => setExpanded(true));
+  rail.addEventListener("focusout", () => { if (!pinned) setExpanded(false); });
+  // tapping the collapsed rail (touch, wide screen) expands it too
+  rail.addEventListener("click", (e) => {
+    if (window.innerWidth <= 900) return;
+    if (!pinned && !shell.classList.contains("rail-expanded") && e.target.closest(".rail-sec")) {
+      setExpanded(true);
+    }
   });
+
+  // mobile drawer
+  const toggle = $("#btnRailToggle"), backdrop = $("#railBackdrop");
+  const openDrawer = (on) => {
+    rail.classList.toggle("open", on);
+    if (backdrop) backdrop.classList.toggle("show", on);
+  };
+  if (toggle && toggle.dataset.bound !== "1") {
+    toggle.dataset.bound = "1";
+    toggle.addEventListener("click", (e) => { e.stopPropagation(); openDrawer(!rail.classList.contains("open")); });
+  }
+  if (backdrop && backdrop.dataset.bound !== "1") {
+    backdrop.dataset.bound = "1";
+    backdrop.addEventListener("click", () => openDrawer(false));
+  }
+  // picking a section closes the drawer so the content is visible
+  $$("#tabs .tab").forEach((t) => t.addEventListener("click", () => openDrawer(false)));
+  window.addEventListener("resize", () => { if (window.innerWidth > 900) openDrawer(false); });
 }
 
 function renderDashboard() {

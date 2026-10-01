@@ -100,36 +100,81 @@ body {
 .sub { margin: 2px 0 0; font-size: 12px; color: var(--muted); }
 .actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 
-/* ============ APP SHELL (feature #12 redesign) ============
+/* ============ APP SHELL (feature #12 redesign, #13 collapsible rail) ============
    Left rail = Section Panel + Month + Data Panel. Right = main column with a
-   slim top strip carrying the page title and the ACCOUNT cluster top-right. */
+   slim top strip carrying the page title and the ACCOUNT cluster top-right.
+   Desktop: rail is icon-only by default and expands on HOVER or when PINNED. */
 .shell {
-  display: grid; grid-template-columns: 246px minmax(0, 1fr);
+  display: grid; grid-template-columns: var(--rail-w, 64px) minmax(0, 1fr);
   gap: 14px; align-items: start; padding: 14px 14px 0;
+  transition: grid-template-columns 0.18s ease;
 }
+.shell.rail-pinned, .shell.rail-expanded { --rail-w: 246px; }
 .rail {
   position: sticky; top: 14px;
   display: flex; flex-direction: column; gap: 14px;
-  padding: 14px; border-radius: 16px;
+  padding: 12px; border-radius: 16px;
+  /* Clips the collapsed rail's labels, but ONLY while collapsed — a hovered or
+     pinned rail must not clip the filter popups' shadows. */
+  overflow: hidden;
+  transition: box-shadow 0.18s ease;
 }
 .rail-brand { display: flex; align-items: center; gap: 10px; }
-.rail-brand h1 { font-size: 15px; margin: 0; font-weight: 700; }
+.rail-brand h1 { font-size: 15px; margin: 0; font-weight: 700; white-space: nowrap; }
+.rail-brand .year-badge { margin-left: 6px; }
+/* Pin button — first item on the right so it doesn't shift position when the
+   rail expands (the icons stay left-aligned). */
+.rail-pin {
+  margin-left: auto; flex: 0 0 auto; background: transparent; border: 0; cursor: pointer;
+  font-size: 14px; padding: 4px 5px; border-radius: 8px; opacity: 0.55;
+}
+.rail-pin:hover { opacity: 1; background: rgba(255,255,255,0.08); }
+.rail-pin[aria-pressed="true"] { opacity: 1; filter: drop-shadow(0 0 5px rgba(var(--accent-rgb), 0.75)); }
 .rail-sec { min-width: 0; }
 /* Hooks that must exist for the JS but should never show in the rail. */
 .rail-hidden { display: none; }
 .panel-label {
   font-size: 9.5px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase;
-  color: var(--muted); margin-bottom: 7px;
+  color: var(--muted); margin-bottom: 7px; white-space: nowrap;
 }
 .rail .tabs { flex-direction: column; background: transparent; padding: 0; gap: 3px; }
-.rail .tab { text-align: left; padding: 9px 10px; border-radius: 9px; width: 100%; }
+.rail .tab {
+  text-align: left; padding: 9px 10px; border-radius: 9px; width: 100%;
+  display: flex; align-items: center; gap: 10px; white-space: nowrap;
+}
+.rail .tab .tab-ico { flex: 0 0 auto; width: 16px; text-align: center; }
 .rail .tab:not(.active):hover { background: rgba(255,255,255,0.06); }
 .rail .cur-sel { width: 100%; }
 .data-grid { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 7px 9px; align-items: center; }
-.mini-label { font-size: 10px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+.mini-label { font-size: 10px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap; }
 .data-grid .cur-sel { width: 100%; min-width: 0; }
 .data-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 9px; position: relative; }
 .data-actions .btn { width: 100%; min-width: 0; padding: 8px 6px; }
+
+/* ---- COLLAPSED rail: icons only (desktop, not hovered, not pinned) ---- */
+@media (min-width: 901px) {
+  .shell:not(.rail-pinned):not(.rail-expanded) .rail .rail-brand-txt,
+  .shell:not(.rail-pinned):not(.rail-expanded) .rail .tab-txt,
+  .shell:not(.rail-pinned):not(.rail-expanded) .rail .panel-label,
+  .shell:not(.rail-pinned):not(.rail-expanded) .rail .mini-label,
+  .shell:not(.rail-pinned):not(.rail-expanded) .rail .data-note,
+  .shell:not(.rail-pinned):not(.rail-expanded) .rail .exp-item small { display: none; }
+  /* Selects shrink to icon-ish chips: hide the native arrow and the long text
+     overflow, keep them tappable. */
+  .shell:not(.rail-pinned):not(.rail-expanded) .rail .cur-sel { width: 100%; font-size: 11px; padding: 7px 6px; }
+  .shell:not(.rail-pinned):not(.rail-expanded) .rail .data-grid { grid-template-columns: minmax(0, 1fr); }
+  .shell:not(.rail-pinned):not(.rail-expanded) .rail .data-actions { grid-template-columns: minmax(0, 1fr); }
+  .shell:not(.rail-pinned):not(.rail-expanded) .rail .rail-brand { justify-content: center; }
+  .shell:not(.rail-pinned):not(.rail-expanded) .rail .rail-pin { margin-left: 0; }
+  .shell:not(.rail-pinned):not(.rail-expanded) .rail .rail-sec:not(.rail-hidden) { display: flex; flex-direction: column; align-items: center; }
+  .shell:not(.rail-pinned):not(.rail-expanded) .rail .tab { justify-content: center; padding: 10px 6px; }
+  .shell:not(.rail-pinned):not(.rail-expanded) .rail .data-actions .btn { padding: 9px 4px; font-size: 12px; }
+  /* Hide the expanded-only bits of Import/Export when collapsed. */
+  .shell:not(.rail-pinned):not(.rail-expanded) .rail #btnImport { font-size: 0; }
+  .shell:not(.rail-pinned):not(.rail-expanded) .rail #btnImport::before { content: "⬆"; font-size: 14px; }
+  .shell:not(.rail-pinned):not(.rail-expanded) .rail #btnExportSplit { font-size: 0; }
+  .shell:not(.rail-pinned):not(.rail-expanded) .rail #btnExportSplit::before { content: "⬇"; font-size: 14px; }
+}
 /* Export split menu (full workbook vs filtered view) */
 .exp-menu {
   position: absolute; z-index: 46; top: calc(100% + 6px); right: 0; min-width: 250px;
@@ -146,7 +191,10 @@ body {
 .exp-item small { display: block; font-size: 10.5px; font-weight: 500; color: var(--muted); margin-top: 1px; margin-left: 23px; }
 .data-note { font-size: 10.5px; color: var(--muted); line-height: 1.4; margin-top: 8px; }
 
-/* dashboard filter row */
+/* ---------- dashboard filter row ----------
+   NOTE: the popups are PORTALED to <body> and positioned fixed (see .ms-pop.body).
+   The panel is `overflow-x:auto`, which would clip an absolutely-positioned child,
+   so the popup can never be rendered inside the panel. */
 .filterbar {
   display: flex; align-items: center; gap: 9px; flex-wrap: nowrap; overflow-x: auto;
   padding: 11px 14px; border-radius: var(--radius); margin-bottom: 12px;
@@ -174,12 +222,17 @@ body {
   font-size: 10.5px; font-weight: 800; background: rgba(var(--accent-rgb), 0.24);
   border-radius: 999px; padding: 1px 7px;
 }
+/* The popup, rendered on <body>. Fixed positioning keeps it OUTSIDE every
+   overflow/backdrop-filter ancestor, so nothing can clip it. z-index sits above
+   the rail, top strip and table headers but below modals. */
 .ms-pop {
-  position: absolute; z-index: 45; top: calc(100% + 5px); left: 0; min-width: 265px; max-height: 300px;
-  overflow: auto; background: var(--surface-7); border: 1px solid var(--border-strong);
-  border-radius: 13px; padding: 9px; box-shadow: 0 20px 44px rgba(0,0,0,0.55);
+  position: fixed; z-index: 3000;
+  min-width: 265px; max-height: 300px; overflow: auto;
+  background: var(--surface-7); border: 1px solid var(--border-strong);
+  border-radius: 13px; padding: 9px; box-shadow: 0 20px 44px rgba(0,0,0,0.6);
 }
 .ms-pop.hidden { display: none; }
+.ms-pop.drop-up { max-height: 260px; }
 .ms-pop .ms-search {
   width: 100%; font: inherit; font-size: 12.5px; color: var(--text);
   background: rgba(255,255,255,0.07); border: 1px solid var(--border);
@@ -582,13 +635,37 @@ html[data-theme-dark="0"] #utilTable td.u-cell.orange { color: #8a3d00; }
 
 
 @media (max-width: 900px) {
-  /* Feature #12: the rail collapses to a block above the dashboard. */
+  /* Feature #13: on touch/mobile the rail is HIDDEN by default and slides in
+     from the menu button. Hover doesn't exist on touch, so we use an explicit
+     toggle + backdrop instead of the desktop hover behaviour. */
   html, body { overflow-x: hidden; }
   .shell { grid-template-columns: minmax(0, 1fr); gap: 12px; padding: 10px; }
-  .rail { position: static; padding: 12px; }
-  .rail .tabs { flex-direction: row; overflow-x: auto; padding-bottom: 2px; }
-  .rail .tab { width: auto; white-space: nowrap; flex: 0 0 auto; }
+  .rail {
+    position: fixed; top: 0; left: 0; bottom: 0; z-index: 2500;
+    width: min(280px, 86vw); border-radius: 0 16px 16px 0;
+    overflow-y: auto; overflow-x: hidden;
+    transform: translateX(-102%);
+    transition: transform 0.22s ease;
+  }
+  .rail.open { transform: translateX(0); }
+  .rail .tabs { flex-direction: column; overflow-x: visible; }
+  .rail .tab { width: 100%; white-space: nowrap; flex: 0 0 auto; }
+  .rail-pin { display: none; }          /* pinning is a desktop affordance */
   .main { min-width: 0; }
+  .rail-toggle {
+    display: flex; position: fixed; left: 12px; bottom: 12px; z-index: 2400;
+    align-items: center; justify-content: center;
+    width: 48px; height: 48px; border-radius: 50%;
+    background: linear-gradient(135deg, rgba(var(--accent-rgb),0.92), rgba(var(--accent2-rgb),0.92));
+    color: #06101d; font-size: 20px; font-weight: 800;
+    border: 0; cursor: pointer; box-shadow: 0 10px 26px rgba(0,0,0,0.5);
+  }
+  .rail-backdrop {
+    display: block; position: fixed; inset: 0; z-index: 2450;
+    background: rgba(0,0,0,0.5); opacity: 0; pointer-events: none;
+    transition: opacity 0.22s ease;
+  }
+  .rail-backdrop.show { opacity: 1; pointer-events: auto; }
   /* filter controls stack with a fixed label column so they align cleanly */
   .filterbar { flex-wrap: wrap; overflow: visible; }
   .fgroup {
@@ -598,13 +675,18 @@ html[data-theme-dark="0"] #utilTable td.u-cell.orange { color: #8a3d00; }
   .fgroup .fg-label { width: auto; }
   .fgroup .cur-sel, .ms-btn { max-width: none; width: 100%; }
   .fgroup .ms { min-width: 0; }
-  .ms-pop { left: 0; right: 0; min-width: 0; }
   .fclear { margin-left: 0; justify-self: start; }
+  /* Portaled popups: near-full width so long option labels are readable. */
+  .ms-pop { min-width: 0; max-width: calc(100vw - 24px); }
   /* KPI bar keeps one row and scrolls sideways rather than stacking */
   .kpis { -webkit-overflow-scrolling: touch; }
   .kpi { min-width: 132px; padding: 11px 13px; }
   .kpi .v { font-size: 16.5px; }
   .table-wrap { max-width: 100%; }
+}
+/* Desktop: the mobile drawer chrome is never shown. */
+@media (min-width: 901px) {
+  .rail-toggle, .rail-backdrop { display: none !important; }
 }
 
 @media (max-width: 640px) {
