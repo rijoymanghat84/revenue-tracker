@@ -3632,6 +3632,15 @@ def validate_assignment(conn: sqlite3.Connection, person_id: int, alloc_pct: flo
     }
 
 
+class JoinBody(BaseModel):
+    """A PM adding a new joiner. Deliberately narrower than PersonBody: a PM
+    supplies who the person is and what they can work as, nothing else."""
+    name: str
+    country: str | None = ""
+    home_title: str | None = ""
+    capacity: float | None = None
+
+
 class PersonBody(BaseModel):
     name: str
     country: str | None = ""
@@ -3691,6 +3700,183 @@ def api_people(request: Request):
     conn = get_db()
     try:
         return {"people": _people_rows(conn)}
+    finally:
+        conn.close()
+
+
+class BenchBody(BaseModel):
+    person_id: int
+    # Blank = auto: bench whatever share of the week is unbooked, floored onto the
+    # 25% allocation grid. 100% = fully unallocated.
+    allocation_pct: float | None = None
+    start_date: str | None = ""
+    end_date: str | None = ""
+
+
+@app.post("/api/bench")
+def api_bench(body: BenchBody, request: Request):
+    """Park a person on the Bench project for the share of their week that is free.
+
+    Goes through the SAME assignment rules as any project — the 100% hard block,
+    the 25% grid, one row per (person, project) — so benching can never become a
+    back door to an over-allocation.
+    """
+    user = _require_pm(request)
+    conn = get_db()
+    try:
+        pid = body.person_id
+        p = conn.execute("SELECT * FROM people WHERE id=?", (pid,)).fetchone()
+        if not p:
+            raise HTTPException(404, "Person not found")
+        if user.get("r") == "pm":
+            # A PM may bench their own team: the person must already be on one of
+            # their projects, otherwise they are not this PM's to move.
+            owned = _pm_projects(user["u"], conn)
+            rows = conn.execute("SELECT client, project FROM resources WHERE person_id=?",
+                                (pid,)).fetchall()
+            if rows and not any(_pm_owns(owned, (r["client"] or ""), (r["project"] or ""))
+                                for r in rows):
+                raise HTTPException(403, "That person is not on any of your projects")
+
+        bench_id = ensure_bench(conn)
+        if not bench_id:
+            raise HTTPException(500, "Could not create the Bench project")
+
+        alloc = body.allocation_pct
+        if alloc is None:
+            # Auto: the free share of their busiest week, floored onto the grid.
+            load = person_week_load(conn, pid)
+            free = max(0.0, 100.0 - float(load.get("peak_pct") or 0.0))
+            alloc = float(int(free / 25.0) * 25)
+            if alloc <= 0:
+                raise HTTPException(400, {
+                    "message": (f"{p['name']} is already fully booked "
+                                f"({load.get('peak_pct')}% at their peak), so there is "
+                                f"nothing to bench."),
+                    "code": "fully_booked", "peak_pct": load.get("peak_pct"),
+                })
+        if abs(float(alloc) % 25) > 1e-9:
+            raise HTTPException(400, "Bench allocation must be a multiple of 25% "
+                                     "(25, 50, 75 or 100)")
+
+        existing = conn.execute(
+            "SELECT id FROM resources WHERE person_id=? AND TRIM(UPPER(client))=? "
+            "AND TRIM(UPPER(project))=?",
+            (pid, BENCH_CLIENT.upper(), BENCH_PROJECT.upper())).fetchone()
+
+        sd = (body.start_date or "").strip()
+        ed = (body.end_date or "").strip()
+        v = validate_assignment(conn, pid, float(alloc), sd, ed,
+                                exclude_resource_id=(existing["id"] if existing else None))
+        if not v["ok"]:
+            c0 = (v["conflicts"] or [{}])[0]
+            raise HTTPException(409, {
+                "message": (f"Bench at {alloc:g}% would push {p['name']} over 100% in "
+                            f"{v['conflict_count']} week(s). First clash: "
+                            f"{c0.get('label')} would reach {c0.get('total_pct')}%."),
+                "conflicts": v["conflicts"], "conflict_count": v["conflict_count"],
+            })
+
+        cap = float(p["capacity"] or CAP_WEEK_HOURS)
+        if existing:
+            rid = existing["id"]
+            conn.execute(
+                "UPDATE resources SET allocation_pct=?, start_date=?, end_date=?, "
+                "capacity=?, phases='' WHERE id=?",
+                (float(alloc), sd, ed, cap, rid))
+            action = "bench_update"
+        else:
+            # Bench holds NO rate, so bench time can never add cost or revenue.
+            sort = conn.execute(
+                "SELECT COALESCE(MAX(sort_order),0)+1 s FROM resources").fetchone()["s"]
+            rid = conn.execute(
+                "INSERT INTO resources (country, client, project, name, role, rate, "
+                "offshore_rate, sort_order, capacity, person_id, allocation_pct, "
+                "start_date, end_date, phases) VALUES (?,?,?,?,?,0,0,?,?,?,?,?,?, '')",
+                ((p["country"] or ""), BENCH_CLIENT, BENCH_PROJECT, p["name"],
+                 (p["home_title"] or ""), sort, cap, pid, float(alloc), sd, ed)).lastrowid
+            action = "bench_add"
+        _write_allocation_hours(conn, rid, float(alloc), cap, sd, ed)
+        _log_activity(conn, request, action, p["name"],
+                      f"bench at {alloc:g}% (zero-rate)")
+        conn.commit()
+        return {"ok": True, "resource_id": rid, "allocation_pct": float(alloc),
+                "project": BENCH_PROJECT, "auto": body.allocation_pct is None}
+    finally:
+        conn.close()
+
+
+@app.post("/api/joiners")
+def api_joiner_create(body: JoinBody, request: Request):
+    """Add a new joiner to the company roster.
+
+    Who may: a PM (any PM — a new hire is company news, not project data) or an
+    admin. The title MUST exist on the rate card: rates are keyed by title, so an
+    invented title would create a person nobody can price. Returns a clear,
+    actionable error naming the Rate Card when it doesn't match.
+    """
+    user = _require_pm(request)
+    conn = get_db()
+    try:
+        name = " ".join((body.name or "").split())
+        if not name:
+            raise HTTPException(400, "Name is required")
+
+        # `body.capacity or CAP_WEEK_HOURS` would turn an explicit 0 into 40 and
+        # silently accept nonsense. Only a MISSING value defaults.
+        cap = CAP_WEEK_HOURS if body.capacity is None else float(body.capacity)
+        if cap <= 0 or cap > 168:
+            raise HTTPException(400, {
+                "message": "Weekly availability must be between 1 and 168 hours.",
+                "code": "bad_capacity",
+            })
+
+        title = " ".join((body.home_title or "").split())
+        canonical = None
+        if title:
+            # Match the rate card case/space-insensitively, and store the CARD's
+            # spelling so the vocabulary stays stable (the same rule the importer
+            # applies to roles).
+            for r in conn.execute("SELECT title FROM pricing").fetchall():
+                if (r["title"] or "").strip().lower() == title.lower():
+                    canonical = r["title"].strip()
+                    break
+            if canonical is None:
+                known = [r["title"] for r in conn.execute(
+                    "SELECT title FROM pricing ORDER BY sort_order, title").fetchall()]
+                raise HTTPException(400, {
+                    "message": (f"“{title}” is not on the rate card, so nobody can be "
+                                f"priced at that title. Ask an admin to add it on the "
+                                f"Rate Card ( + Add Title ), then add the person."),
+                    "code": "unknown_title",
+                    "title": title,
+                    "known_titles": known[:60],
+                })
+
+        # Duplicate guard: the whole 100% rule depends on one row per human.
+        dup = conn.execute(
+            "SELECT id FROM people WHERE TRIM(LOWER(name))=?",
+            (name.lower(),)).fetchone()
+        if dup:
+            raise HTTPException(400, {
+                "message": f"“{name}” is already on the roster. Pick them from the list instead of adding a second record.",
+                "code": "duplicate_person", "person_id": dup["id"],
+            })
+
+        pid = conn.execute(
+            "INSERT INTO people (name, country, home_title, capacity, active, notes) "
+            "VALUES (?,?,?,?,1,'')",
+            (name, (body.country or "").strip(), canonical or "", cap)).lastrowid
+        if canonical:
+            conn.execute(
+                "INSERT OR IGNORE INTO person_titles (person_id, title) VALUES (?,?)",
+                (pid, canonical))
+        _log_activity(conn, request, "person_add", name,
+                      f"added a joiner: {cap:g}h/wk"
+                      + (f", title {canonical}" if canonical else ", no title"))
+        conn.commit()
+        return {"ok": True, "person_id": pid, "name": name,
+                "home_title": canonical or "", "capacity": cap}
     finally:
         conn.close()
 
@@ -4583,3 +4769,49 @@ app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
 # Schema init runs LAST so every table-creation helper and the People seeding
 # functions are already defined. Keep this at the bottom of the file.
 init_db()
+
+
+# ---------------- Bench ----------------
+# the owner: "we can also create a project called bench where the resources will be
+# added if they are not allocated to a project fully or partially." Bench is a
+# REAL project (client "Internal") with ZERO rates, so bench time adds no cost
+# and no revenue and no money total moves. Utilization still reads real bookings.
+BENCH_CLIENT = "Internal"
+BENCH_PROJECT = "Bench"
+
+
+def ensure_bench(conn: sqlite3.Connection):
+    """Make sure the Bench project exists; return its id. Idempotent.
+
+    Bench is where an unallocated person is parked so a partial or zero booking
+    is visible instead of the person vanishing from the grids.
+    """
+    try:
+        row = conn.execute("SELECT id FROM projects WHERE client=? AND project=?",
+                           (BENCH_CLIENT, BENCH_PROJECT)).fetchone()
+        if row:
+            return row["id"]
+        cur = conn.execute(
+            "INSERT INTO projects (client, project, start_date, end_date) VALUES (?,?,?,?)",
+            (BENCH_CLIENT, BENCH_PROJECT, "", ""))
+        conn.commit()
+        return cur.lastrowid
+    except Exception:  # noqa: BLE001 - a helper must never break startup
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return None
+
+
+def ensure_bench_on_start() -> None:
+    """Bench must exist on every start, not only after a manual create."""
+    try:
+        c = get_db()
+        ensure_bench(c)
+        c.close()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+ensure_bench_on_start()
