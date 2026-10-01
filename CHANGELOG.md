@@ -9,6 +9,41 @@ wasn't one) and the commit.
 
 ---
 
+## 2026-10-01 — Trail convention made enforceable
+
+the owner's instruction: _"if there is anything we are fixing and it's already a bug
+or a fix or feature to an already done thing, make the changes in git also, so
+that the tracking is there."_
+
+Codified in **`CONTRIBUTING.md`** (the rules) and
+**`scripts/check_commit_trail.py`** (the gate):
+
+```bash
+python3 scripts/check_commit_trail.py          # commits not yet on origin/main
+python3 scripts/check_commit_trail.py --all    # audit since the baseline
+python3 scripts/check_commit_trail.py <sha>    # one commit
+```
+
+Every behaviour-changing commit must cite `(GH-N)` in its subject, or carry
+`no issue: <reason>` in its body. Docs/test-only commits are exempt. Commits at
+or before `e27695a` are grandfathered.
+
+## 2026-10-01 — Theme, popup and PM-usability pass (GH-24 … GH-27)
+
+Commit `961fbdf`.
+
+| GH | What |
+|---|---|
+| [#24](../../issues/24) | Popups unreadable on light themes — a bare `<select>` inherited light text on the UA's light-grey background, measured contrast **1.0 (invisible)**. Fixed across every popup, plus removed hardcoded colours that ignored the theme. |
+| [#25](../../issues/25) | PMs could not change their own theme — `_can_change_theme` required an admin permission, leaving a locked (sometimes blank) picker. Now open to every signed-in user. |
+| [#26](../../issues/26) | Removing a PM now surfaces the projects left without an owner (banner + 'Show them' highlight). |
+| [#27](../../issues/27) | `_dedupe_person_titles` stops the People list showing the same title twice via whitespace variants. |
+
+Verified in a real browser on Paper (light) and Midnight (dark): 9 popups,
+worst contrast **4.58 light / 6.76 dark**.
+
+---
+
 ## ⚠️ Read this before citing an issue number
 
 The app has **two different numbering systems** and they collide:
