@@ -13,7 +13,16 @@ Open on a phone → "Add to Home Screen" → installs standalone with notch-safe
 padding and bigger touch targets.
 
 ## Tabs (in order)
-**Dashboard · Planned · Actuals · Pricing · Utilization**
+**Dashboard · Planned · Actuals · Rate Card · Utilization · Team & Access**
+(PMs also see a **Workbench** tab)
+
+> **Changed 2026-10-01.** The old **Pricing** tab was doing six unrelated jobs
+> in one long scroll, so it was split by purpose:
+> rate library → **Rate Card**; people, permissions and DB security →
+> **Team & Access**; per-resource capacity → **Utilization** (behind
+> `⚙ Capacity`). `#pricingView` / `data-tab="pricing"` no longer exist —
+> `pricing` survives only as a permission key.
+> See `CHANGELOG.md` for the full trail and the issue-numbering caveat.
 
 - **Dashboard** — Country · Client · Project · Resource(s) · **Planned
   Revenue · Planned Expense · Planned Savings · Actual Revenue · Actual
