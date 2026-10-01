@@ -247,8 +247,15 @@ function showApp() {
     dash: "dashboard", planned: "resources", actuals: "actuals",
     rates: "pricing", util: "utilization",
     access: ["users", "db_security"],
+    // Logs is admin-only and needs no specific permission: the API already gates
+    // it to admins, and "what just happened?" is a question any admin may ask.
+    logs: null,
   };
   const tabVisible = (t) => {
+    // Logs: admins only, and no specific permission needed (the API gates it).
+    // Must be an explicit early return — can() only grants admin-held
+    // permissions, so a `null` permission would hide the tab from admins too.
+    if (t.dataset.tab === "logs") return isAdmin;
     const p = tabPerm[t.dataset.tab];
     // A PM gets their OWN two tabs: the workbench (their projects + team load)
     // and Actuals. They never see Dashboard/Planned/Rate Card/Team & Access.
@@ -264,6 +271,7 @@ function showApp() {
   $$(".tab").forEach((t) => {
     const on = tabVisible(t);
     if (on && t.classList.contains("pm-only") && !isAdmin) t.classList.remove("hidden");
+    if (on && t.classList.contains("admin-only") && isAdmin) t.classList.remove("hidden");
     t.style.display = on ? "" : "none";
   });
   // Admin write actions gated by permissions (super-admin has all).
@@ -1364,12 +1372,8 @@ function renderAccess() {
   if (showOt) loadOt();
   // Recent activity (2026-10-01). Admin-only: the API gates it, and it names
   // who changed what, so any admin who can reach this tab may see it.
-  const isAdmin = !!(state.me && state.me.role === "admin");
-  showBlock($("#activityToolbar"), isAdmin);
-  showBlock($("#activityWrap"), isAdmin);
-  if (isAdmin) loadActivity();
-  // Render immediately too (with whatever is cached) so the tab never flashes
-  // empty on a slow /api/users round-trip.
+  // The activity log moved to its own #logsView section in the rail (2026-10-01);
+  // its old home at the bottom of this tab was removed with it.
   renderPMs();
   renderAdmins();
   renderDbSec();
@@ -1429,15 +1433,39 @@ function renderActivity(rows) {
 }
 
 function loadActivity() {
-  api("/api/activity?limit=60")
-    .then((d) => renderActivity(d.activity || []))
+  const lim = ($("#logLimit") && $("#logLimit").value) || 60;
+  api(`/api/activity?limit=${encodeURIComponent(lim)}`)
+    .then((d) => { renderActivity(d.activity || []); filterActivity(); })
     .catch((e) => {
       $("#activityHead").innerHTML = "";
       $("#activityBody").innerHTML =
         `<tbody><tr><td class="dim">Activity log unavailable: ${esc(e.message || "")}</td></tr></tbody>`;
     });
 }
+
+/* Free-text filter over the rendered log — who, action or person, no refetch. */
+function filterActivity() {
+  const s = $("#logSearch");
+  if (!s) return;
+  const q = (s.value || "").trim().toLowerCase();
+  $$("#activityBody tr").forEach((tr) => {
+    tr.style.display = !q || tr.textContent.toLowerCase().includes(q) ? "" : "none";
+  });
+  const shown = $$("#activityBody tr").filter((tr) => tr.style.display !== "none").length;
+  const note = $("#logsCount");
+  if (note) note.textContent = q ? `${shown} match${shown === 1 ? "" : "es"}` : "";
+}
+
+function initLogsView() {
+  const s = $("#logSearch");
+  if (s && s.dataset.bound !== "1") { s.dataset.bound = "1"; s.addEventListener("input", filterActivity); }
+  const lim = $("#logLimit");
+  if (lim && lim.dataset.bound !== "1") { lim.dataset.bound = "1"; lim.addEventListener("change", loadActivity); }
+  const r = $("#btnLogRefresh");
+  if (r && r.dataset.bound !== "1") { r.dataset.bound = "1"; r.addEventListener("click", loadActivity); }
+}
 $("#btnActivityRefresh")?.addEventListener("click", loadActivity);
+initLogsView();
 
 function readEditRow(tr) {
   const g = (f) => tr.querySelector(`[data-field="${f}"]`);
@@ -4253,6 +4281,7 @@ async function switchView(view) {
   // showing the PREVIOUS section. Route everything through renderView instead.
   if (view === "actuals") { renderView(); loadActuals(); return; }
   if (view === "util") { renderView(); renderUtilization(); return; }
+  if (view === "logs") { renderView(); initLogsView(); loadActivity(); return; }
   await loadState();   // loadState ends by calling renderView()
 }
 
@@ -4267,6 +4296,7 @@ function renderView() {
   $("#actualsView").classList.toggle("hidden", state.view !== "actuals");
   $("#workbenchView").classList.toggle("hidden", state.view !== "workbench");
   $("#weekView").classList.toggle("hidden", state.view !== "week");
+  $("#logsView").classList.toggle("hidden", state.view !== "logs");
   // Feature #12: the top strip reports which section you're in, since the nav
   // now lives in the rail and the title is no longer attached to the tabs.
   const title = $("#pageTitle"), sub = $("#pageSub");
@@ -4279,6 +4309,7 @@ function renderView() {
     access: ["Team & Access", "People, PMs, admins, permissions & database security"],
     workbench: ["My Projects", "Your projects, your team, and their week-by-week load"],
     week: ["Weekly entry", "Enter one week of actual hours for everyone on your projects"],
+    logs: ["Activity log", "Every change that touched people, money or access — newest first"],
   };
   if (title && META[state.view]) {
     title.textContent = META[state.view][0];
