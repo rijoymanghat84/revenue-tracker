@@ -81,17 +81,17 @@ body {
 
 /* ---------- top bar ---------- */
 .topbar {
-  position: sticky; top: 0; z-index: 50;
   display: flex; align-items: center; justify-content: space-between; gap: 16px;
-  margin: 12px 14px; padding: 10px 18px; border-radius: 16px;
+  padding: 9px 14px; border-radius: 16px;
+  margin-bottom: 12px;
 }
-.brand { display: flex; align-items: center; gap: 12px; }
+.brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .logo {
   font-size: 22px; font-weight: 700;
   background: linear-gradient(135deg, var(--accent), var(--accent2));
   -webkit-background-clip: text; background-clip: text; color: transparent;
 }
-.brand h1 { font-size: 18px; margin: 0; letter-spacing: 0.2px; }
+.brand h1 { font-size: 17px; margin: 0; letter-spacing: 0.2px; white-space: nowrap; }
 .year-badge {
   font-size: 11px; font-weight: 600; color: var(--surface-4);
   background: linear-gradient(135deg, var(--accent), var(--accent2));
@@ -99,6 +99,108 @@ body {
 }
 .sub { margin: 2px 0 0; font-size: 12px; color: var(--muted); }
 .actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+/* ============ APP SHELL (feature #12 redesign) ============
+   Left rail = Section Panel + Month + Data Panel. Right = main column with a
+   slim top strip carrying the page title and the ACCOUNT cluster top-right. */
+.shell {
+  display: grid; grid-template-columns: 246px minmax(0, 1fr);
+  gap: 14px; align-items: start; padding: 14px 14px 0;
+}
+.rail {
+  position: sticky; top: 14px;
+  display: flex; flex-direction: column; gap: 14px;
+  padding: 14px; border-radius: 16px;
+}
+.rail-brand { display: flex; align-items: center; gap: 10px; }
+.rail-brand h1 { font-size: 15px; margin: 0; font-weight: 700; }
+.rail-sec { min-width: 0; }
+/* Hooks that must exist for the JS but should never show in the rail. */
+.rail-hidden { display: none; }
+.panel-label {
+  font-size: 9.5px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase;
+  color: var(--muted); margin-bottom: 7px;
+}
+.rail .tabs { flex-direction: column; background: transparent; padding: 0; gap: 3px; }
+.rail .tab { text-align: left; padding: 9px 10px; border-radius: 9px; width: 100%; }
+.rail .tab:not(.active):hover { background: rgba(255,255,255,0.06); }
+.rail .cur-sel { width: 100%; }
+.data-grid { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 7px 9px; align-items: center; }
+.mini-label { font-size: 10px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+.data-grid .cur-sel { width: 100%; min-width: 0; }
+.data-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 9px; position: relative; }
+.data-actions .btn { width: 100%; min-width: 0; padding: 8px 6px; }
+/* Export split menu (full workbook vs filtered view) */
+.exp-menu {
+  position: absolute; z-index: 46; top: calc(100% + 6px); right: 0; min-width: 250px;
+  background: var(--surface-7); border: 1px solid var(--border-strong);
+  border-radius: 13px; padding: 7px; box-shadow: 0 20px 44px rgba(0,0,0,0.55);
+}
+.exp-menu.hidden { display: none; }
+.exp-item {
+  display: block; padding: 9px 10px; border-radius: 9px; text-decoration: none;
+  color: var(--text); font-size: 12.5px; font-weight: 600;
+}
+.exp-item:hover { background: rgba(255,255,255,0.07); }
+.exp-item span { margin-right: 7px; }
+.exp-item small { display: block; font-size: 10.5px; font-weight: 500; color: var(--muted); margin-top: 1px; margin-left: 23px; }
+.data-note { font-size: 10.5px; color: var(--muted); line-height: 1.4; margin-top: 8px; }
+
+/* dashboard filter row */
+.filterbar {
+  display: flex; align-items: center; gap: 9px; flex-wrap: nowrap; overflow-x: auto;
+  padding: 11px 14px; border-radius: var(--radius); margin-bottom: 12px;
+}
+.fgroup { display: flex; align-items: center; gap: 7px; min-width: 0; flex: 0 0 auto; }
+.fgroup .fg-label {
+  font-size: 10px; font-weight: 800; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.6px; white-space: nowrap;
+}
+.fclear {
+  font: inherit; font-size: 11.5px; font-weight: 700; color: var(--accent);
+  background: none; border: 0; cursor: pointer; white-space: nowrap; margin-left: auto;
+}
+/* multi-select */
+.ms { position: relative; }
+.ms-btn {
+  display: flex; align-items: center; gap: 7px; font: inherit; font-size: 12.5px; font-weight: 600;
+  color: var(--text); background: var(--panel-strong); border: 1px solid var(--border-strong);
+  border-radius: 10px; padding: 8px 11px; cursor: pointer; min-height: 38px; max-width: 240px;
+}
+.ms-btn:hover { border-color: var(--accent); }
+.ms-btn .val { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ms-btn .caret { color: var(--muted); font-size: 10px; }
+.ms-count {
+  font-size: 10.5px; font-weight: 800; background: rgba(var(--accent-rgb), 0.24);
+  border-radius: 999px; padding: 1px 7px;
+}
+.ms-pop {
+  position: absolute; z-index: 45; top: calc(100% + 5px); left: 0; min-width: 265px; max-height: 300px;
+  overflow: auto; background: var(--surface-7); border: 1px solid var(--border-strong);
+  border-radius: 13px; padding: 9px; box-shadow: 0 20px 44px rgba(0,0,0,0.55);
+}
+.ms-pop.hidden { display: none; }
+.ms-pop .ms-search {
+  width: 100%; font: inherit; font-size: 12.5px; color: var(--text);
+  background: rgba(255,255,255,0.07); border: 1px solid var(--border);
+  border-radius: 9px; padding: 7px 9px; margin-bottom: 7px;
+}
+.ms-pop label {
+  display: flex; align-items: center; gap: 9px; font-size: 12.5px;
+  padding: 7px 8px; border-radius: 9px; cursor: pointer;
+}
+.ms-pop label:hover { background: rgba(255,255,255,0.07); }
+.ms-pop .allrow { border-bottom: 1px solid var(--border); margin-bottom: 6px; padding-bottom: 6px; font-weight: 600; }
+.ms-pop .casc { font-size: 10.5px; color: var(--muted); padding: 2px 8px 7px; line-height: 1.35; }
+.ms-pop .empty { font-size: 12px; color: var(--muted); padding: 8px; }
+
+/* KPI bar — single horizontal row of metrics */
+.kpis { display: flex; gap: 0; padding: 0; overflow-x: auto; border-radius: var(--radius); margin-bottom: 12px; }
+.kpi { flex: 1 1 0; min-width: 126px; padding: 12px 15px; border-right: 1px solid var(--border); }
+.kpi:last-child { border-right: 0; }
+.kpi .k { font-size: 10px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.65px; white-space: nowrap; }
+.kpi .v { font-size: 18px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.kpi .sub2 { font-size: 10.5px; color: var(--muted); margin-top: 1px; white-space: nowrap; }
 
 .tabs { display: flex; background: var(--panel-strong); border-radius: 10px; padding: 3px; }
 .tab {
@@ -479,8 +581,34 @@ html[data-theme-dark="0"] #utilTable td.u-cell.orange { color: #8a3d00; }
 .col-panel-actions { margin-top: 10px; display: flex; justify-content: flex-end; }
 
 
+@media (max-width: 900px) {
+  /* Feature #12: the rail collapses to a block above the dashboard. */
+  html, body { overflow-x: hidden; }
+  .shell { grid-template-columns: minmax(0, 1fr); gap: 12px; padding: 10px; }
+  .rail { position: static; padding: 12px; }
+  .rail .tabs { flex-direction: row; overflow-x: auto; padding-bottom: 2px; }
+  .rail .tab { width: auto; white-space: nowrap; flex: 0 0 auto; }
+  .main { min-width: 0; }
+  /* filter controls stack with a fixed label column so they align cleanly */
+  .filterbar { flex-wrap: wrap; overflow: visible; }
+  .fgroup {
+    display: grid; grid-template-columns: 86px minmax(0, 1fr);
+    align-items: center; gap: 10px; width: 100%;
+  }
+  .fgroup .fg-label { width: auto; }
+  .fgroup .cur-sel, .ms-btn { max-width: none; width: 100%; }
+  .fgroup .ms { min-width: 0; }
+  .ms-pop { left: 0; right: 0; min-width: 0; }
+  .fclear { margin-left: 0; justify-self: start; }
+  /* KPI bar keeps one row and scrolls sideways rather than stacking */
+  .kpis { -webkit-overflow-scrolling: touch; }
+  .kpi { min-width: 132px; padding: 11px 13px; }
+  .kpi .v { font-size: 16.5px; }
+  .table-wrap { max-width: 100%; }
+}
+
 @media (max-width: 640px) {
-  .topbar { flex-direction: column; align-items: stretch; }
+  .topbar { flex-direction: column; align-items: stretch; gap: 10px; }
   .actions { justify-content: space-between; }
   .search { width: 100%; }
   .hint { display: none; }
