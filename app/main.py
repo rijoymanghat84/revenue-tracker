@@ -4669,8 +4669,14 @@ def api_pm_load(request: Request):
                 "weeks": [round(v, 1) for v in pct],
                 "detail": detail,
             })
+        # Titles ONLY — no rates. A PM needs the rate-card vocabulary to add a
+        # joiner (the title decides pricing and must already exist on the card),
+        # and `/api/pricing` is admin-gated. Sending the string alone gives away
+        # nothing about money.
+        titles = [r["title"] for r in conn.execute(
+            "SELECT title FROM pricing ORDER BY sort_order, title").fetchall() if r["title"]]
         return {"people": out, "week_labels": weeks, "months": months,
-                "week_month": week_month,
+                "week_month": week_month, "titles": titles,
                 "current": _current_period(weeks, months)}
     finally:
         conn.close()

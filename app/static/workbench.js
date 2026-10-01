@@ -45,6 +45,9 @@ async function loadWorkbench() {
   WB.load = load.people || [];
   WB.weekLabels = load.week_labels || [];
   WB.months = load.months || [];
+  // Rate-card titles (strings only) so the "New joiner" dialog can offer them.
+  // state.pricing is admin-only, so a PM had an empty list.
+  WB.titles = load.titles || WB.titles || [];
   WB.weekMonth = load.week_month || [];
   WB.current = load.current || {};
   if (!WB.selKey && WB.projects.length) {
@@ -816,6 +819,7 @@ async function refreshLoadOnly() {
     WB.load = d.people || [];
     WB.weekLabels = d.week_labels || WB.weekLabels;
     WB.months = d.months || WB.months;
+    WB.titles = d.titles || WB.titles;
     WB.weekMonth = d.week_month || WB.weekMonth;
     WB.current = d.current || WB.current;
     renderWbLoad();
@@ -973,14 +977,26 @@ async function loadOt() {
   }));
 }
 
-async /* ---------------- "Add new joiner" (PM) ----------------
+/* ---------------- "Add new joiner" (PM) ----------------
    Rijoy: a PM should be able to add a new hire "along with their availability
    and that title. the title should match the title we have where we align the
    pricing." So the title is a HARD-validated pick from the rate card: the server
    rejects an off-card title and tells them to ask an admin to add it on Rate
    Card. Availability here is the weekly capacity (40 = 100%). */
-function openJoinerModal() {
-  const titles = (state.pricing || []).map((t) => t.title).filter(Boolean);
+async function openJoinerModal() {
+  // A PM has no state.pricing (admin-only), and WB.titles is filled by
+  // loadWorkbench() — which a PM may never run, because they land on the week
+  // sheet. Fetch the titles directly if we do not have them yet: the server sends
+  // the title STRINGS only, never rates.
+  let titles = (state.pricing || []).map((t) => t.title).filter(Boolean);
+  if (!titles.length) titles = WB.titles || [];
+  if (!titles.length) {
+    try {
+      const d = await api("/api/pm/load");
+      titles = d.titles || [];
+      WB.titles = titles;
+    } catch (_) { titles = []; }
+  }
   const body = `
     <div class="assign-grid">
       <div><label class="f">Name</label>
@@ -1015,7 +1031,9 @@ function openJoinerModal() {
   capEl.addEventListener("input", syncCap);
   syncCap();
 
-  setModalOk("Add joiner", async () => {
+  // NOTE: setModalOk takes ONE argument — the handler. Passing a label first
+  // made the handler a string, so the OK button silently did nothing.
+  setModalOk(async () => {
     const payload = {
       name: $("#jnName").value.trim(),
       country: $("#jnCountry").value.trim(),
@@ -1027,9 +1045,10 @@ function openJoinerModal() {
       await api("/api/joiners", { method: "POST", body: JSON.stringify(payload) });
     } catch (e) {
       // The server sends an OBJECT for the actionable cases (unknown title,
-      // duplicate person). Show it usefully rather than "[object Object]".
-      let d = null;
-      try { d = JSON.parse(e.message); } catch (_) {}
+      // duplicate person). api() now attaches it as e.detail, so read that
+      // rather than trying to JSON.parse a human sentence.
+      let d = e.detail || null;
+      if (!d) { try { d = JSON.parse(e.message); } catch (_) {} }
       if (d && d.code === "unknown_title") {
         showModalHTML("That title is not on the rate card",
           `<div class="wb-verdict bad">${esc(d.message)}</div>

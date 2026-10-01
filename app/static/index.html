@@ -10,7 +10,7 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icons/icon-192.png">
 <title>Revenue Recon</title>
-<link rel="stylesheet" href="/styles.css?v=80">
+<link rel="stylesheet" href="/styles.css?v=81">
 </head>
 <body>
 <div class="bg-glow"></div>
@@ -642,10 +642,10 @@
      not executed yet. Getting this order wrong threw a ReferenceError that
      aborted the REST of app.js — including boot() — so the entire app failed to
      initialise. -->
-<script src="/workbench.js?v=10"></script>
+<script src="/workbench.js?v=12"></script>
 <!-- weeksheet.js also loads BEFORE app.js, for the same reason as workbench.js. -->
-<script src="/weeksheet.js?v=9"></script>
-<script src="/app.js?v=109"></script>
+<script src="/weeksheet.js?v=11"></script>
+<script src="/app.js?v=110"></script>
 <script>
   // PWA: register the service worker (only after load; skip on failure)
   if ("serviceWorker" in navigator) {
