@@ -146,7 +146,10 @@ function renderWbTeam() {
     return `<tr data-rid="${t.id}" data-pid="${t.person_id}">
       <td><b>${esc(t.name)}</b>${exc ? `<div class="muted-note">⚑ ${esc(exc)}</div>` : ""}</td>
       <td>${esc(t.role || "—")}</td>
-      <td class="num">${pct == null ? "—" : esc(pct) + "%"}</td>
+      <td class="num">${pct == null ? "—" : esc(pct) + "%"}${
+        (t.phases && t.phases.length > 1)
+          ? `<div class="muted-note" title="${esc((t.phases || []).map((x) => x.allocation_pct + "% from " + (x.start_date || "start")).join(" · "))}">${t.phases.length} phases</div>`
+          : ""}</td>
       <td>${esc(t.start_date || "—")}</td>
       <td>${esc(t.end_date || "—")}</td>
       <td class="num">${weekly}</td>
@@ -299,22 +302,49 @@ function openAssignModal(project, pid, rid) {
       <textarea id="wbExc" placeholder="e.g. covering BA work on this engagement while the home title is Developer"></textarea>
       <div class="muted-note" style="margin-top:5px">Rijoy is flagged whenever the booked title differs from the home title.</div>
     </div>
-    <div>
-      <label class="f">Allocation — % of their weekly capacity</label>
-      <div class="wb-slide">
-        <input type="range" id="wbPct" min="0" max="100" step="5" value="${cur && cur.allocation_pct != null ? cur.allocation_pct : 50}">
-        <span class="wb-pctval" id="wbPctVal">50%</span>
+    <div class="wb-modetabs" role="tablist">
+      <button type="button" class="wb-modetab" data-mode="flat">Single allocation</button>
+      <button type="button" class="wb-modetab" data-mode="phased">Phased (changes over time)</button>
+    </div>
+    <div class="muted-note" style="margin:-6px 0 12px">
+      Phased is for an engagement that tapers — e.g. 100% for the first 3 months,
+      then 50%, then 25%. One row per person per project either way.
+    </div>
+
+    <!-- FLAT: one % across one window (unchanged behaviour) -->
+    <div id="wbFlat">
+      <div>
+        <label class="f">Allocation — % of their weekly capacity</label>
+        <div class="wb-slide">
+          <input type="range" id="wbPct" min="0" max="100" step="5" value="${cur && cur.allocation_pct != null ? cur.allocation_pct : 50}">
+          <span class="wb-pctval" id="wbPctVal">50%</span>
+        </div>
+        <div class="wb-chips" id="wbChips">
+          ${[25, 50, 75, 100].map((v) => `<div class="wb-chip" data-v="${v}">${v}%</div>`).join("")}
+        </div>
       </div>
-      <div class="wb-chips" id="wbChips">
-        ${[25, 50, 75, 100].map((v) => `<div class="wb-chip" data-v="${v}">${v}%</div>`).join("")}
+      <div class="assign-grid" style="margin-top:14px">
+        <div><label class="f">Start date</label><input type="date" id="wbStart" value="${cur ? esc(cur.start_date || "") : ""}"></div>
+        <div><label class="f">End date</label><input type="date" id="wbEnd" value="${cur ? esc(cur.end_date || "") : ""}"></div>
       </div>
     </div>
-    <div class="assign-grid">
-      <div><label class="f">Start date</label><input type="date" id="wbStart" value="${cur ? esc(cur.start_date || "") : ""}"></div>
-      <div><label class="f">End date</label><input type="date" id="wbEnd" value="${cur ? esc(cur.end_date || "") : ""}"></div>
+
+    <!-- PHASED: an ordered list of (% , start, end) legs -->
+    <div id="wbPhased" class="hidden">
+      <label class="f">Phases <span class="muted-note">— dates snap to whole weeks (Mon–Sun)</span></label>
+      <div id="wbPhaseRows"></div>
+      <div class="wb-phase-actions">
+        <button type="button" class="btn mini" id="wbAddPhase">+ Add phase</button>
+        <button type="button" class="btn mini" id="wbSplitPhase" title="Split the last phase in half so you can taper it">Split last phase</button>
+      </div>
+      <div class="muted-note" style="margin-top:8px">
+        Phases must not overlap. Each owns whole weeks, and the last one runs to
+        its end date — leave an end date blank to run to the year end.
+      </div>
     </div>
-    <div class="wb-verdict ok" id="wbVerdict">Checking…</div>
-    <div class="muted-note">Leave the dates blank to spread the allocation across the whole year. The app fills the weekly grid; you can fine-tune individual weeks afterwards on Planned.</div>
+
+    <div class="wb-verdict ok" id="wbVerdict" style="margin-top:14px">Checking…</div>
+    <div class="muted-note" id="wbFillNote">Leave the dates blank to spread the allocation across the whole year. The app fills the weekly grid; you can fine-tune individual weeks afterwards on Planned.</div>
   `;
   showModalHTML(editing ? "Edit assignment" : `Add team member — ${project.client} · ${project.project}`, body);
 
@@ -344,13 +374,26 @@ function openAssignModal(project, pid, rid) {
     clearTimeout(wbCheckTimer);
     wbCheckTimer = setTimeout(async () => {
       const pidv = +$p.value;
-      const q = new URLSearchParams({
-        person_id: pidv, allocation_pct: $("#wbPct").value,
-        start_date: $("#wbStart").value || "", end_date: $("#wbEnd").value || "",
-      });
-      if (editing) q.set("exclude_resource_id", rid);
       try {
-        const v = await api(`/api/assignment/check?${q.toString()}`);
+        let v;
+        if (mode === "phased") {
+          // A phase list is a structure, so this is a POST. The server applies
+          // the SAME 100% rule per phase and returns a week-aligned schedule.
+          v = await api("/api/assignment/check-phases", {
+            method: "POST",
+            body: JSON.stringify({
+              person_id: pidv, phases: phaseRows,
+              exclude_resource_id: editing ? rid : null,
+            }),
+          });
+        } else {
+          const q = new URLSearchParams({
+            person_id: pidv, allocation_pct: $("#wbPct").value,
+            start_date: $("#wbStart").value || "", end_date: $("#wbEnd").value || "",
+          });
+          if (editing) q.set("exclude_resource_id", rid);
+          v = await api(`/api/assignment/check?${q.toString()}`);
+        }
         renderVerdict(v, $("#wbTitle").value);
       } catch (e) {
         $("#wbVerdict").className = "wb-verdict bad";
@@ -366,7 +409,28 @@ function openAssignModal(project, pid, rid) {
     const name = (v.person && v.person.name) || "This person";
     const titleNote = ttl && v.person && ttl !== (WB.people.find((x) => x.id === v.person.id) || {}).home_title
       ? `<br>Booking as <b>${esc(ttl)}</b>.` : "";
-    if (v.ok) {
+    // Invalid phase list (overlap / out of range) short-circuits before the
+    // 100% test — show that reason rather than a misleading "no conflict".
+    if (v.invalid) {
+      el.className = "wb-verdict bad";
+      el.innerHTML = `<b>⛔ Fix the phases.</b><br>${esc(v.invalid)}${titleNote}`;
+      $("#modalOk").disabled = true; $("#modalOk").style.opacity = ".45";
+      return;
+    }
+    if (v.ok && v.schedule && v.schedule.length) {
+      // Phased: spell out each leg and the total, so the taper is verifiable
+      // before committing rather than discovered in the weekly grid later.
+      el.className = "wb-verdict ok";
+      const rows = v.schedule.map((x) => {
+        const span = x.first_week && x.last_week
+          ? `${esc(x.first_week)} → ${esc(x.last_week)}` : "—";
+        return `<li><b>${x.allocation_pct}%</b> · ${span} · ${x.weeks} week(s)`
+             + ` · ${fmtH(x.hours_per_week)} h/week</li>`;
+      }).join("");
+      el.innerHTML = `<b>OK — no conflict.</b> ${esc(name)} gets a ${v.schedule.length}-phase plan
+        totalling <b>${fmtH(v.total_hours)} h</b> across ${v.weeks_in_window} week(s).
+        <ul>${rows}</ul>${titleNote}`;
+    } else if (v.ok) {
       el.className = "wb-verdict ok";
       el.innerHTML = `<b>OK — no conflict.</b> ${esc(name)} would be at
         <b>${wk} h/week (${pct}%)</b> across ${v.weeks_in_window} week(s).${titleNote}`;
@@ -376,7 +440,8 @@ function openAssignModal(project, pid, rid) {
       const others = (c.existing || []).slice(0, 3).map(esc).join(", ") || "existing assignments";
       const more = v.conflict_count > (v.conflicts || []).length
         ? `<br>…and ${v.conflict_count - v.conflicts.length} more week(s).` : "";
-      el.innerHTML = `<b>⛔ Cannot assign ${esc(name)} at ${pct}%.</b><br>
+      const atPct = c.phase_pct != null ? c.phase_pct : pct;
+      el.innerHTML = `<b>⛔ Cannot assign ${esc(name)} at ${atPct}%.</b><br>
         This exceeds 100% of capacity in <b>${v.conflict_count} week(s)</b>.<br>
         First clash: <b>${esc(c.label || "?")}</b> would reach <b>${c.total_pct}%</b>
         (${c.existing_pct}% already booked on ${others}).${more}
@@ -399,15 +464,166 @@ function openAssignModal(project, pid, rid) {
     $("#wbPct").value = c.dataset.v; syncChips(); check();
   }));
 
+  /* ---------------- time-phased allocation editor ----------------
+   * A taper is modelled as an ordered list of phases on ONE assignment row, so
+   * the person stays a single entry on the project (counts, utilization and the
+   * Excel round-trip all stay clean). Dates are snapped to the week containing
+   * them, because allocation is written per week (Mon-Sun) — letting a user pick
+   * a Tuesday would make the phase boundary ambiguous.
+   */
+  let mode = (cur && cur.phases && cur.phases.length) ? "phased" : "flat";
+  let phaseRows = (cur && cur.phases && cur.phases.length)
+    ? cur.phases.map((x) => ({ allocation_pct: x.allocation_pct, start_date: x.start_date || "", end_date: x.end_date || "" }))
+    : [];
+
+  // Snap an ISO date to the Monday of the week that contains it. The server sends
+  // the week labels, so we snap against the same calendar the app writes with.
+  function snapToWeek(iso, which) {
+    if (!iso || !(WB.weekLabels || []).length) return iso;
+    const d = new Date(iso + "T00:00:00");
+    if (isNaN(d)) return iso;
+    // If the date is ALREADY a valid week boundary (Monday for a start, Sunday
+    // for an end) leave it exactly as typed. Snapping a correct boundary used to
+    // push an end date forward a full week (typing Sun Mar-29 became Sun Apr-05),
+    // silently stretching the phase.
+    const dow = d.getDay();                      // 0=Sun, 1=Mon
+    if (which === "end" && dow === 0) return iso;
+    if (which === "start" && dow === 1) return iso;
+
+    let best = "", bestDiff = Infinity;
+    for (const lbl of WB.weekLabels) {
+      const mon = weekLabelToDate(lbl);
+      if (!mon) continue;
+      const diff = which === "end" ? (mon.getTime() - d.getTime()) : (d.getTime() - mon.getTime());
+      // For a start we want the latest Monday <= d; for an end the earliest
+      // Monday >= d. Falling back to nearest keeps a mid-year date usable.
+      if (diff >= 0 && diff < bestDiff) { bestDiff = diff; best = lbl; }
+    }
+    if (!best) {   // outside the year — fall back to nearest either side
+      for (const lbl of WB.weekLabels) {
+        const mon = weekLabelToDate(lbl); if (!mon) continue;
+        const diff = Math.abs(mon.getTime() - d.getTime());
+        if (diff < bestDiff) { bestDiff = diff; best = lbl; }
+      }
+    }
+    const mon = weekLabelToDate(best);
+    if (!mon) return iso;
+    // The week runs Mon..Sun; its END is the Sunday, which is what an inclusive
+    // end_date should carry so the whole week is owned.
+    const out = which === "end" ? new Date(mon.getTime() + 6 * 86400000) : mon;
+    return out.toISOString().slice(0, 10);
+  }
+
+  function renderPhaseRows() {
+    const box = $("#wbPhaseRows");
+    if (!box) return;
+    if (!phaseRows.length) {
+      box.innerHTML = `<div class="muted-note" style="padding:8px 0">No phases yet — add one, or use <b>Split last phase</b> after the first.</div>`;
+    } else {
+      box.innerHTML = phaseRows.map((r, i) => `
+        <div class="wb-phase" data-i="${i}">
+          <span class="wb-phase-n">${i + 1}</span>
+          <input type="range" class="wb-ph-pct" min="0" max="100" step="5" value="${r.allocation_pct}">
+          <span class="wb-ph-val">${r.allocation_pct}%</span>
+          <input type="date" class="wb-ph-start" value="${r.start_date || ""}">
+          <span class="wb-ph-arrow">→</span>
+          <input type="date" class="wb-ph-end" value="${r.end_date || ""}">
+          <button type="button" class="btn mini wb-ph-del" title="Remove this phase">✕</button>
+        </div>`).join("");
+    }
+    $$("#wbPhaseRows .wb-phase").forEach((el) => {
+      const i = +el.dataset.i;
+      el.querySelector(".wb-ph-pct").addEventListener("input", (e) => {
+        phaseRows[i].allocation_pct = +e.target.value;
+        el.querySelector(".wb-ph-val").textContent = e.target.value + "%";
+        check();
+      });
+      el.querySelector(".wb-ph-start").addEventListener("change", (e) => {
+        phaseRows[i].start_date = snapToWeek(e.target.value, "start");
+        renderPhaseRows(); check();
+      });
+      el.querySelector(".wb-ph-end").addEventListener("change", (e) => {
+        phaseRows[i].end_date = snapToWeek(e.target.value, "end");
+        renderPhaseRows(); check();
+      });
+      el.querySelector(".wb-ph-del").addEventListener("click", () => {
+        phaseRows.splice(i, 1); renderPhaseRows(); check();
+      });
+    });
+  }
+
+  function setMode(m) {
+    mode = m;
+    $$(".wb-modetab").forEach((t) => t.classList.toggle("on", t.dataset.mode === m));
+    $("#wbFlat").classList.toggle("hidden", m !== "flat");
+    $("#wbPhased").classList.toggle("hidden", m !== "phased");
+    $("#wbFillNote").classList.toggle("hidden", m !== "flat");
+    if (m === "phased" && !phaseRows.length) {
+      // Seed from whatever the flat form currently says, so switching modes
+      // never loses the % / dates the user already typed.
+      phaseRows = [{
+        allocation_pct: +$("#wbPct").value || 0,
+        start_date: snapToWeek($("#wbStart").value || "", "start"),
+        end_date: snapToWeek($("#wbEnd").value || "", "end"),
+      }];
+      renderPhaseRows();
+    }
+    check();
+  }
+  $$(".wb-modetab").forEach((t) => t.addEventListener("click", () => setMode(t.dataset.mode)));
+  $("#wbAddPhase").addEventListener("click", () => {
+    // A new phase starts the week after the last one ends, so the common case
+    // (append a leg) needs no date typing at all.
+    const last = phaseRows[phaseRows.length - 1];
+    let start = "";
+    if (last && last.end_date) {
+      const e = new Date(last.end_date + "T00:00:00");
+      if (!isNaN(e)) start = new Date(e.getTime() + 86400000).toISOString().slice(0, 10);
+    }
+    phaseRows.push({ allocation_pct: last ? Math.max(0, last.allocation_pct - 25) : 50,
+                     start_date: start, end_date: "" });
+    renderPhaseRows(); check();
+  });
+  $("#wbSplitPhase").addEventListener("click", () => {
+    const last = phaseRows[phaseRows.length - 1];
+    if (!last) {
+      phaseRows = [{ allocation_pct: +$("#wbPct").value || 50,
+                     start_date: snapToWeek($("#wbStart").value || "", "start"),
+                     end_date: snapToWeek($("#wbEnd").value || "", "end") }];
+    } else {
+      // Split the last phase at its midpoint: same span, halved % on each side.
+      const sd = new Date((last.start_date || "") + "T00:00:00");
+      const ed = new Date((last.end_date || "") + "T00:00:00");
+      if (isNaN(sd) || isNaN(ed) || ed <= sd) { toast("Give the last phase both dates before splitting it", true); return; }
+      const mid = new Date(sd.getTime() + Math.floor((ed - sd) / 2 / 86400000) * 86400000);
+      last.end_date = mid.toISOString().slice(0, 10);
+      phaseRows.push({ allocation_pct: last.allocation_pct,
+                       start_date: new Date(mid.getTime() + 86400000).toISOString().slice(0, 10),
+                       end_date: ed.toISOString().slice(0, 10) });
+    }
+    renderPhaseRows(); check();
+  });
+  setMode(mode);
+
   // The modal's OK button performs the save; closeModal() clears the handler.
   const okBtn = $("#modalOk");
   setModalOk(async () => {
     const pidv = +$p.value;
     const payload = {
       person_id: pidv, client: project.client, project: project.project,
-      title: $("#wbTitle").value, allocation_pct: +$("#wbPct").value,
-      start_date: $("#wbStart").value || "", end_date: $("#wbEnd").value || "",
+      title: $("#wbTitle").value,
       title_exception: ($("#wbExc") && $("#wbExc").value) || "",
+      // Flat fields stay populated even in phased mode so the headline % and
+      // overall span are meaningful on the team table; the server prefers
+      // `phases` when it is non-empty.
+      allocation_pct: mode === "phased"
+        ? (phaseRows[0] ? phaseRows[0].allocation_pct : 0)
+        : +$("#wbPct").value,
+      start_date: mode === "phased" ? (phaseRows[0] ? phaseRows[0].start_date : "") : ($("#wbStart").value || ""),
+      end_date: mode === "phased"
+        ? (phaseRows.reduce((a, r) => (r.end_date && r.end_date > a ? r.end_date : a), ""))
+        : ($("#wbEnd").value || ""),
+      phases: mode === "phased" ? phaseRows : null,
     };
     okBtn.disabled = true;
     try {

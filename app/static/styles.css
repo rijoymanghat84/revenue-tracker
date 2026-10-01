@@ -1300,3 +1300,51 @@ html[data-theme-dark="0"] .wb-wk.now { outline-color: var(--text); box-shadow: i
 /* The current-week / current-month badge: --accent on its own pale tint measured
    3.89. #0a5f6d is the same hue darkened for a pale background -> 5.89. */
 html[data-theme-dark="0"] .wk-now { color: #0a5f6d; border-color: rgba(13, 125, 143, 0.5); background: rgba(13, 125, 143, 0.12); }
+
+/* ============================================================================
+   TIME-PHASED ALLOCATION editor (2026-10-01)
+   A person can be on one project at 100% for the first 3 months, 50% for the
+   next, 25% for the last — one assignment ROW carrying a list of phases, so the
+   person stays a single entry on the project. The mode tabs switch between the
+   original single-allocation form and this phase list.
+   ========================================================================== */
+.wb-modetabs {
+  display: inline-flex; gap: 4px; background: var(--surface-4); padding: 3px;
+  border-radius: 10px; border: 1px solid var(--border); margin-bottom: 10px;
+}
+.wb-modetab {
+  background: transparent; border: 0; color: var(--muted); font: inherit;
+  font-size: 12px; font-weight: 600; padding: 6px 14px; border-radius: 7px; cursor: pointer;
+}
+.wb-modetab:hover { color: var(--text); }
+.wb-modetab.on { background: var(--accent); color: #04202a; }
+
+.wb-phase {
+  display: grid; align-items: center; gap: 8px; margin-bottom: 7px;
+  /* number | slider | % | start | arrow | end | remove */
+  grid-template-columns: 20px minmax(80px, 1fr) 44px auto 12px auto 30px;
+  padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface-1);
+}
+.wb-phase-n {
+  display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%;
+  background: rgba(var(--accent-rgb), 0.16); color: var(--accent);
+  font-size: 10.5px; font-weight: 800;
+}
+.wb-ph-pct { -webkit-appearance: none; appearance: none; background: transparent; padding: 0; height: 18px; }
+.wb-ph-pct::-webkit-slider-runnable-track { height: 5px; border-radius: 99px; background: var(--surface-3); border: 1px solid var(--border); }
+.wb-ph-pct::-webkit-slider-thumb { -webkit-appearance: none; width: 15px; height: 15px; border-radius: 50%; background: var(--accent); margin-top: -6px; cursor: pointer; }
+.wb-ph-val { font-size: 12.5px; font-weight: 800; color: var(--accent); font-variant-numeric: tabular-nums; text-align: right; }
+.wb-ph-start, .wb-ph-end { font-size: 12px; padding: 5px 7px; min-width: 128px; }
+.wb-ph-arrow { color: var(--muted); text-align: center; font-size: 12px; }
+.wb-ph-del { padding: 3px 7px; }
+.wb-phase-actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+/* Narrow screens: stack the phase row so the dates stay usable. */
+@media (max-width: 700px) {
+  .wb-phase { grid-template-columns: 20px 1fr 44px 30px; grid-auto-rows: auto; row-gap: 6px; }
+  .wb-ph-start, .wb-ph-end { grid-column: 2 / span 2; min-width: 0; }
+  .wb-ph-arrow { display: none; }
+}
+/* The schedule list inside the verdict reuses list styling. */
+.wb-verdict ul { margin: 7px 0 0; padding-left: 18px; }
+.wb-verdict li { margin: 3px 0; font-variant-numeric: tabular-nums; }
