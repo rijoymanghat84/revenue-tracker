@@ -205,7 +205,7 @@ body {
   display: block; padding: 9px 10px; border-radius: 9px; text-decoration: none;
   color: var(--text); font-size: 12.5px; font-weight: 600;
 }
-.exp-item:hover { background: rgba(255,255,255,0.07); }
+.exp-item:hover { background: var(--surface-3); }   /* themed: white wash was invisible on light */
 .exp-item span { margin-right: 7px; }
 .exp-item small { display: block; font-size: 10.5px; font-weight: 500; color: var(--muted); margin-top: 1px; margin-left: 23px; }
 .data-note { font-size: 10.5px; color: var(--muted); line-height: 1.4; margin-top: 8px; }
@@ -254,14 +254,17 @@ body {
 .ms-pop.drop-up { max-height: 260px; }
 .ms-pop .ms-search {
   width: 100%; font: inherit; font-size: 12.5px; color: var(--text);
-  background: rgba(255,255,255,0.07); border: 1px solid var(--border);
+  /* Was a white wash that vanishes on the light theme, hiding the search box. */
+  background: var(--surface-4); border: 1px solid var(--border);
   border-radius: 9px; padding: 7px 9px; margin-bottom: 7px;
 }
 .ms-pop label {
   display: flex; align-items: center; gap: 9px; font-size: 12.5px;
   padding: 7px 8px; border-radius: 9px; cursor: pointer;
 }
-.ms-pop label:hover { background: rgba(255,255,255,0.07); }
+/* Was rgba(255,255,255,.07) — a white wash invisible on the light Paper theme.
+   var(--surface-3) is the themed "hover / active row" surface. */
+.ms-pop label:hover { background: var(--surface-3); }
 .ms-pop .allrow { border-bottom: 1px solid var(--border); margin-bottom: 6px; padding-bottom: 6px; font-weight: 600; }
 .ms-pop .casc { font-size: 10.5px; color: var(--muted); padding: 2px 8px 7px; line-height: 1.35; }
 .ms-pop .empty { font-size: 12px; color: var(--muted); padding: 8px; }
@@ -587,6 +590,11 @@ html[data-theme-dark="0"] #utilTable td.u-cell.red { color: #a3241a; }
 html[data-theme-dark="0"] #utilTable td.u-cell.green { color: #0b6b3a; }
 html[data-theme-dark="0"] #utilTable td.u-cell.yellow { color: #7a4d00; }
 html[data-theme-dark="0"] #utilTable td.u-cell.orange { color: #8a3d00; }
+/* The currency markers sit amber-on-amber-tint. On a light surface the default
+   amber measured 3.94:1 — under the 4.5 bar. Darken for light themes, exactly
+   like the status hues above. */
+html[data-theme-dark="0"] .cur-tag,
+html[data-theme-dark="0"] .cur-chip { color: #7a4d00; }
 #utilTable th.u-sub { font-size: 10px; color: var(--muted); background: var(--surface-5); }
 #utilTable th[colspan="2"] { text-align: center; }
 #utilTable tr:first-child th { border-bottom: 1px solid var(--border-strong); }
@@ -595,7 +603,10 @@ html[data-theme-dark="0"] #utilTable td.u-cell.orange { color: #8a3d00; }
 /* ---------- toast / modal ---------- */
 .toast {
   position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%) translateY(80px);
-  background: rgba(16,22,42,0.92); border: 1px solid var(--border-strong);
+  /* Was a hardcoded dark navy: on the light theme a near-black toast floated
+     over a white app. Theme it so the toast matches the active theme. */
+  background: var(--surface-7); color: var(--text);
+  border: 1px solid var(--border-strong);
   border-radius: 12px; padding: 10px 18px; font-size: 13px; opacity: 0;
   transition: all 0.25s ease; z-index: 100; pointer-events: none;
   box-shadow: 0 10px 30px rgba(0,0,0,0.5); max-width: 80vw;
@@ -607,7 +618,9 @@ html[data-theme-dark="0"] #utilTable td.u-cell.orange { color: #8a3d00; }
 .update-banner {
   position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
   z-index: 150; display: flex; align-items: center; gap: 10px;
-  background: rgba(16,22,42,0.94); border: 1px solid var(--border-strong);
+  /* Same fix as .toast: theme it rather than hardcoding a dark surface. */
+  background: var(--surface-7); color: var(--text);
+  border: 1px solid var(--border-strong);
   border-radius: 12px; padding: 9px 16px; font-size: 13px;
   box-shadow: 0 10px 30px rgba(0,0,0,0.5); max-width: 90vw;
   animation: updateFlash 2.4s ease-in-out infinite;
@@ -629,11 +642,64 @@ html[data-theme-dark="0"] #utilTable td.u-cell.orange { color: #8a3d00; }
   50% { opacity: 0.55; }
 }
 
-.modal { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.55); }
+/* ---------- modal / popup (theme-aware, 2026-10-01) ----------
+ * the owner's requirement: whatever theme is active, the CONTENT in a popup must be
+ * readable, and the popup must be laid out so you rarely scroll — with a real
+ * scrollbar when you do.
+ *   1. NEVER hardcode an ink colour. `--text`/`--muted` are theme variables, so
+ *      one rule is correct on Paper and on Midnight. The old .modal-body forced
+ *      var(--muted), flattening every form control to grey.
+ *   2. Cap the height on the BOX with overflow-y:auto so the actions stay
+ *      reachable and only the middle scrolls.
+ */
+.modal { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.55); padding: 16px; }
 .modal.hidden { display: none; }
-.modal-box { width: min(560px, 92vw); padding: 18px 22px; }
-.modal-box h3 { margin: 0 0 10px; font-size: 16px; }
-.modal-body { max-height: 50vh; overflow: auto; font-size: 13px; color: var(--muted); white-space: pre-wrap; }
+.modal-box {
+  width: min(760px, 94vw); padding: 18px 22px;
+  max-height: 92vh; overflow-y: auto; overscroll-behavior: contain;
+  background: var(--surface-7); color: var(--text);
+  border: 1px solid var(--border-strong);
+}
+.modal-box h3 { margin: 0 0 10px; font-size: 16px; color: var(--text); }
+.modal-body { font-size: 13px; color: var(--text); white-space: normal; }
+.modal-body label.f { color: var(--muted); }
+/* Form rows inside a popup: two-up on desktop, stacked on a phone. */
+.assign-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+.wb-field { margin-bottom: 14px; }
+@media (max-width: 620px) { .assign-grid { grid-template-columns: 1fr; } }
+/* ---------- themed form controls ----------
+ * A bare <select> renders with the user-agent's LIGHT GREY background while
+ * inheriting the page's text colour. On a dark theme that painted light text on
+ * light grey — measured contrast 1.0, i.e. invisible. This affected every popup
+ * dropdown AND the account menu's own theme picker. Every control needs its own
+ * themed background, not just a text colour. `select option` is set explicitly:
+ * Chrome on Linux does not inherit it into the popup list.
+ */
+select, .modal-body input, .modal-body select, .modal-body textarea {
+  background: var(--surface-4); color: var(--text);
+  border: 1px solid var(--border); border-radius: 9px;
+}
+select:focus, .modal-body input:focus, .modal-body select:focus, .modal-body textarea:focus {
+  outline: none; border-color: var(--accent);
+}
+select option { background: var(--surface-4); color: var(--text); }
+.cur-sel, .user-menu-sel { background: var(--surface-4); color: var(--text); border: 1px solid var(--border); }
+/* A visible, themed scrollbar wherever a popup or panel can overflow. */
+.modal-box, .modal-body, .ms-pop, .col-panel, .wb-plist, .wb-loadlist {
+  scrollbar-width: thin; scrollbar-color: var(--hairline) transparent;
+}
+.modal-box::-webkit-scrollbar, .modal-body::-webkit-scrollbar,
+.ms-pop::-webkit-scrollbar, .col-panel::-webkit-scrollbar,
+.wb-plist::-webkit-scrollbar, .wb-loadlist::-webkit-scrollbar { width: 10px; height: 10px; }
+.modal-box::-webkit-scrollbar-track, .modal-body::-webkit-scrollbar-track,
+.ms-pop::-webkit-scrollbar-track, .col-panel::-webkit-scrollbar-track,
+.wb-plist::-webkit-scrollbar-track, .wb-loadlist::-webkit-scrollbar-track { background: transparent; }
+.modal-box::-webkit-scrollbar-thumb, .modal-body::-webkit-scrollbar-thumb,
+.ms-pop::-webkit-scrollbar-thumb, .col-panel::-webkit-scrollbar-thumb,
+.wb-plist::-webkit-scrollbar-thumb, .wb-loadlist::-webkit-scrollbar-thumb {
+  background: var(--hairline); border-radius: 99px; border: 2px solid transparent; background-clip: content-box;
+}
+.modal-box::-webkit-scrollbar-thumb:hover, .ms-pop::-webkit-scrollbar-thumb:hover { background: var(--hairline-2); background-clip: content-box; }
 .modal-actions { text-align: right; margin-top: 14px; display: flex; gap: 8px; justify-content: flex-end; }
 /* Merge dialog: spell out the concrete damage before it is committed. */
 .merge-warn {
@@ -669,7 +735,7 @@ html[data-theme-dark="0"] #utilTable td.u-cell.orange { color: #8a3d00; }
 .col-panel-sub { font-size: 11.5px; color: var(--muted); margin-bottom: 10px; }
 .col-list { display: flex; flex-direction: column; gap: 2px; }
 .col-row { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 6px; cursor: pointer; }
-.col-row:hover { background: rgba(255,255,255,0.05); }
+.col-row:hover { background: var(--surface-3); }   /* themed: white wash was invisible on light */
 .col-row input[type=checkbox] { width: 14px; height: 14px; accent-color: var(--green); cursor: pointer; }
 .col-name { flex: 1; font-size: 12.5px; color: var(--text); }
 .col-name.pinned { color: var(--green); font-weight: 600; }
@@ -1072,7 +1138,9 @@ td.week .a-inp { text-align: center; }
 .wb-verdict { border-radius: 11px; padding: 11px 13px; font-size: 12.5px; line-height: 1.55; }
 .wb-verdict.ok { background: rgba(var(--green-rgb), 0.10); border: 1px solid rgba(var(--green-rgb), 0.42); color: var(--text); }
 .wb-verdict.bad { background: var(--pill-red-bg); border: 1px solid rgba(var(--red-rgb), 0.46); color: var(--text); }
-.wb-verdict b { color: #fff; }
+/* Was hardcoded #fff: on the light Paper theme that painted white-on-light and
+   the refusal text became invisible. Inherit the theme's text colour. */
+.wb-verdict b { color: var(--text); font-weight: 800; }
 .wb-verdict ul { margin: 6px 0 0; padding-left: 18px; }
 .wb-verdict li { margin: 2px 0; }
 .wb-chips { display: flex; gap: 7px; flex-wrap: wrap; }
@@ -1090,3 +1158,32 @@ td.week .a-inp { text-align: center; }
   .wb-grid { grid-template-columns: 1fr; }
   .wb-master { max-height: 320px; }
 }
+
+/* ---------- "project has no PM" warning (the owner's req #2) ----------
+ * Removing a PM silently orphans their projects: nobody reconciles actuals and
+ * nothing flags drift. Surfaced wherever PMs are managed, and on the People rows
+ * sitting on an unowned project. Uses the amber tokens so it stays legible on
+ * both a light and a dark theme. */
+.noowner-row td { padding: 0 !important; border-bottom: 1px solid var(--hairline); }
+.noowner {
+  display: flex; gap: 11px; align-items: flex-start;
+  padding: 11px 13px; margin: 0;
+  background: var(--pill-amber-bg); border-left: 3px solid var(--amber);
+  font-size: 12.5px; line-height: 1.55; color: var(--text);
+}
+.noowner-ico { font-size: 15px; line-height: 1.2; color: var(--amber); }
+.noowner b { color: var(--text); font-weight: 750; }
+.noowner .btn.mini { margin-left: 6px; }
+.noowner-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.noowner-chip {
+  display: inline-block; font-size: 11px; font-weight: 600;
+  padding: 3px 9px; border-radius: 999px;
+  background: var(--pill-red-bg); color: var(--red);
+  border: 1px solid rgba(var(--red-rgb), 0.42);
+}
+td .noowner-chip { margin-top: 4px; white-space: normal; }
+/* Rows highlighted on the Planned grid by the banner's "Show them" action. */
+tr.noowner-hl > td { box-shadow: inset 3px 0 0 var(--amber); background: var(--pill-amber-bg) !important; }
+/* On a light theme the red chip needs the darker red the codebase already uses
+   for status text on pale pills. */
+html[data-theme-dark="0"] .noowner-chip { color: #a3241a; }

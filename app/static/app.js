@@ -418,13 +418,11 @@ async function initThemeSwitcher() {
     return;
   }
   THEME_LIST = data.themes || [];
-  if (!data.can_change) {
-    // No permission — remove the Theme row entirely rather than showing a
-    // dropdown that cannot work.
-    const row = $("#umTheme");
-    if (row) row.style.display = "none";
-    return;
-  }
+  const row = $("#umTheme");
+  if (row) row.style.display = data.can_change ? "" : "none";
+  if (!data.can_change) return;
+  // Rebuild EVERY call (not just once): the previous early-return left a stale
+  // empty list after a re-login, which is how a PM could see a blank dropdown.
   sel.innerHTML = THEME_LIST
     .map((t) => `<option value="${esc(t.key)}"${t.key === data.current ? " selected" : ""}>${esc(t.label)}</option>`)
     .join("");
@@ -1530,6 +1528,39 @@ function projectCheckboxes(selected, selfUsername) {
   }).join("");
 }
 
+/* (client, project) pairs with NO PM. A project without an owner is invisible
+   work — nobody reconciles its actuals and nothing flags drift — so both the PM
+   table and the People table flag it. Computed on the client from `users` +
+   their scope, so it updates the instant a PM is removed with no extra
+   round-trip to go stale. */
+function ownerMap() {
+  const m = new Map();
+  for (const u of (users || [])) {
+    for (const p of (u.projects || [])) {
+      const k = `${(p.client || "").trim().toUpperCase()}|${(p.project || "").trim().toUpperCase()}`;
+      if (!m.has(k)) m.set(k, []);
+      m.get(k).push(u.username);
+    }
+  }
+  return m;
+}
+function allProjectPairs() {
+  const seen = new Set(), out = [];
+  for (const r of (state.resources || [])) {
+    const c = (r.client || "").trim(), p = (r.project || "").trim();
+    if (!p) continue;
+    const k = `${c.toUpperCase()}|${p.toUpperCase()}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push({ client: c, project: p, key: k });
+  }
+  return out.sort((a, b) => (a.client + a.project).localeCompare(b.client + b.project));
+}
+function unassignedProjects() {
+  const owners = ownerMap();
+  return allProjectPairs().filter((p) => !owners.has(p.key));
+}
+
 function renderPMs() {
   // PM block is user management → `users` permission.
   const showUsers = canPerm("users");
@@ -1543,6 +1574,19 @@ function renderPMs() {
   const pms = users.filter((u) => u.role !== "admin");
   let html = "<tbody>";
   if (!pms.length) html += `<tr><td colspan="3" class="dim">No PMs yet — click + Add PM.</td></tr>`;
+  const unassigned = unassignedProjects();
+  if (unassigned.length) {
+    // Removing a PM silently orphans their projects. Say so loudly, right where
+    // the PMs live, so it cannot go unnoticed (the owner's requirement).
+    html += `<tr class="noowner-row"><td colspan="3">
+      <div class="noowner">
+        <span class="noowner-ico">⚠</span>
+        <div><b>${unassigned.length} project${unassigned.length === 1 ? "" : "s"} without a PM.</b>
+        Nobody is reconciling actuals for these, and nothing will flag drift.
+        <button class="btn mini" id="filterUnassigned">Show them</button>
+        <div class="noowner-list">${unassigned.map((p) => `<span class="noowner-chip">${esc(p.client ? p.client + " · " : "")}${esc(p.project)}</span>`).join("")}</div></div>
+      </div></td></tr>`;
+  }
   for (const u of pms) {
     if (editingUser === u.id) {
       html += `<tr class="p-res p-edit" data-uid="${u.id}">
@@ -1696,13 +1740,42 @@ $("#pmBody").addEventListener("click", async (e) => {
   }
   if (e.target.closest(".del")) {
     if (!confirm(`Delete PM "${unameOf(uid)}"?`)) return;
-    try { await api(`/api/users/${uid}`, { method: "DELETE" }); await loadPMData(); renderPMs(); }
+    try {
+      await api(`/api/users/${uid}`, { method: "DELETE" });
+      await loadPMData();
+      renderPMs();
+      // Removing a PM can orphan projects — refresh the People table too so its
+      // "no PM owns this project" flags appear immediately, not on next visit.
+      if (typeof renderPeople === "function" && state.view === "access") renderPeople();
+    }
     catch (err) { toast(`Delete failed: ${err.message}`, true); }
   }
 });
 function unameOf(uid) { const u = users.find((x) => x.id === uid); return u ? u.username : "this PM"; }
 
 $("#btnAddUser").addEventListener("click", () => { editingUser = -1; renderPMs(); });
+/* Delegated: the warning banner is re-rendered constantly, so a direct binding
+   would be lost on the next render (and would stack up duplicates). */
+document.addEventListener("click", async (e) => {
+  if (!e.target.closest("#filterUnassigned")) return;
+  const un = new Set(unassignedProjects().map((p) => p.key));
+  // switchView() is async — it awaits flush() and loadState(), and loadState is
+  // what RENDERS the grid. A fixed setTimeout raced it and highlighted nothing.
+  await switchView("planned");
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  {
+    let first = null;
+    $$("#gridBody tr[data-rid]").forEach((tr) => {
+      const r = (state.resources || []).find((x) => String(x.id) === tr.dataset.rid);
+      if (!r) return;
+      const k = `${(r.client || "").trim().toUpperCase()}|${(r.project || "").trim().toUpperCase()}`;
+      if (un.has(k)) { tr.classList.add("noowner-hl"); if (!first) first = tr; }
+    });
+    if (first) first.scrollIntoView({ block: "center", behavior: "smooth" });
+    const n = $$("#gridBody tr.noowner-hl").length;
+    toast(n ? `${n} row(s) on projects with no PM are highlighted` : "No unowned rows visible");
+  }
+});
 
 /* ---------------- Admin management (mirrors PMs + granular permissions) ---------------- */
 function permCheckboxes(selected) {
