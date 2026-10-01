@@ -114,6 +114,24 @@ function showModal(title, body) {
 let modalOkHandler = null;
 function setModalOk(fn) { modalOkHandler = fn; }
 function closeModal() { modalOkHandler = null; $("#modal").classList.add("hidden"); }
+
+/* CANCEL — a guaranteed escape hatch from EVERY modal.
+   Added 2026-10-01 after the owner accidentally clicked "Merge" in Team & Access and
+   found the dialog offered only OK, so he had to confirm an irreversible merge
+   (it folded Maya Foster into Ryan Doyle) just to close the box. Merge,
+   delete and edit all share this one modal, so the missing Cancel affected all
+   of them.
+
+   SAFETY: this must NEVER run the OK handler. It deliberately does NOT call
+   closeModal() — that clears modalOkHandler, and every caller closes the modal
+   itself on success. Cancel only hides the box, so the pending handler stays
+   set for the next open (which always calls setModalOk). If you "tidy" this
+   into closeModal(), an in-flight save action can fire on a later unrelated
+   dialog. */
+$("#modalCancel").addEventListener("click", () => {
+  $("#modal").classList.add("hidden");
+});
+
 $("#modalOk").addEventListener("click", async () => {
   if (modalOkHandler) {
     const fn = modalOkHandler;
@@ -121,6 +139,17 @@ $("#modalOk").addEventListener("click", async () => {
     return;   // the handler decides whether to close
   }
   $("#modal").classList.add("hidden");
+});
+
+/* Escape closes any modal WITHOUT performing its action. Clicking the backdrop
+   does the same. Neither runs the OK handler (see the Cancel note above). */
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("#modal").classList.contains("hidden")) {
+    $("#modal").classList.add("hidden");
+  }
+});
+$("#modal").addEventListener("click", (e) => {
+  if (e.target.id === "modal") $("#modal").classList.add("hidden");
 });
 
 /* ---------------- auth / boot ---------------- */
@@ -1301,12 +1330,83 @@ function renderAccess() {
   showBlock($("#otToolbar"), showOt);
   showBlock($("#otWrap"), showOt);
   if (showOt) loadOt();
+  // Recent activity (2026-10-01). Admin-only: the API gates it, and it names
+  // who changed what, so any admin who can reach this tab may see it.
+  const isAdmin = !!(state.me && state.me.role === "admin");
+  showBlock($("#activityToolbar"), isAdmin);
+  showBlock($("#activityWrap"), isAdmin);
+  if (isAdmin) loadActivity();
   // Render immediately too (with whatever is cached) so the tab never flashes
   // empty on a slow /api/users round-trip.
   renderPMs();
   renderAdmins();
   renderDbSec();
 }
+/* ---------------- Recent activity (2026-10-01) ----------------
+   Server-side log of destructive / money-affecting actions. Built because the owner
+   confirmed an accidental person merge and could not find out what it had done.
+   Labels are friendly (a raw "person.merge" string would be useless to him). */
+const ACTIVITY_LABELS = {
+  "person.merge":      ["🔀", "Person merged"],
+  "person.create":     ["➕", "Person added"],
+  "person.delete":     ["🗑", "Person deleted"],
+  "person.update":     ["✎", "Person edited"],
+  "user.delete":       ["🗑", "Account deleted"],
+  "user.create":       ["➕", "Account created"],
+  "pricing.delete":    ["🗑", "Rate card row deleted"],
+  "pricing.create":    ["➕", "Rate card row added"],
+  "pricing.apply_all": ["💱", "All rates pushed"],
+  "assignment.delete": ["🗑", "Removed from project"],
+};
+/* Destructive actions render hot so they are easy to spot while scanning. */
+const ACTIVITY_HOT = new Set(["person.merge", "person.delete", "user.delete",
+                              "pricing.delete", "assignment.delete"]);
+
+function activityWhen(ts) {
+  // SQLite stores UTC ("YYYY-MM-DD HH:MM:SS"); render it as a relative age so
+  // "recently" is obvious at a glance.
+  if (!ts) return "—";
+  const d = new Date(String(ts).replace(" ", "T") + "Z");
+  if (isNaN(d)) return esc(String(ts));
+  const secs = (Date.now() - d.getTime()) / 1000;
+  if (secs < 60) return "just now";
+  if (secs < 3600) return `${Math.floor(secs / 60)} min ago`;
+  if (secs < 86400) return `${Math.floor(secs / 3600)} hr ago`;
+  if (secs < 7 * 86400) return `${Math.floor(secs / 86400)} d ago`;
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function renderActivity(rows) {
+  $("#activityHead").innerHTML = `<tr><th>When</th><th>Action</th><th>Who</th><th>What changed</th></tr>`;
+  let html = "<tbody>";
+  if (!rows || !rows.length) {
+    html += `<tr><td colspan="4" class="dim">Nothing recorded yet. Merges, deletes and rate pushes will appear here as they happen.</td></tr>`;
+  }
+  for (const a of rows || []) {
+    const [ico, label] = ACTIVITY_LABELS[a.action] || ["•", a.action];
+    const hot = ACTIVITY_HOT.has(a.action) ? " act-hot" : "";
+    html += `<tr class="act-row${hot}">
+      <td class="dim" title="${esc(a.ts)}">${esc(activityWhen(a.ts))}</td>
+      <td class="act-kind">${ico} ${esc(label)}</td>
+      <td class="dim">${esc(a.actor || "—")}</td>
+      <td class="act-detail"><b>${esc(a.target || "")}</b>${a.details ? " — " + esc(a.details) : ""}</td>
+    </tr>`;
+  }
+  html += "</tbody>";
+  $("#activityBody").innerHTML = html;
+}
+
+function loadActivity() {
+  api("/api/activity?limit=60")
+    .then((d) => renderActivity(d.activity || []))
+    .catch((e) => {
+      $("#activityHead").innerHTML = "";
+      $("#activityBody").innerHTML =
+        `<tbody><tr><td class="dim">Activity log unavailable: ${esc(e.message || "")}</td></tr></tbody>`;
+    });
+}
+$("#btnActivityRefresh")?.addEventListener("click", loadActivity);
+
 function readEditRow(tr) {
   const g = (f) => tr.querySelector(`[data-field="${f}"]`);
   return {

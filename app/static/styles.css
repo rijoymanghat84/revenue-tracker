@@ -634,7 +634,24 @@ html[data-theme-dark="0"] #utilTable td.u-cell.orange { color: #8a3d00; }
 .modal-box { width: min(560px, 92vw); padding: 18px 22px; }
 .modal-box h3 { margin: 0 0 10px; font-size: 16px; }
 .modal-body { max-height: 50vh; overflow: auto; font-size: 13px; color: var(--muted); white-space: pre-wrap; }
-.modal-actions { text-align: right; margin-top: 14px; }
+.modal-actions { text-align: right; margin-top: 14px; display: flex; gap: 8px; justify-content: flex-end; }
+/* Merge dialog: spell out the concrete damage before it is committed. */
+.merge-warn {
+  margin-top: 12px; padding: 10px 12px; border-radius: 10px;
+  background: var(--pill-amber-bg); border: 1px solid rgba(var(--amber-rgb), 0.45);
+  font-size: 12px; line-height: 1.5; color: var(--text);
+}
+.merge-warn ul { margin: 6px 0 0; padding-left: 18px; }
+.merge-warn li { margin-bottom: 3px; }
+
+/* ---------- Recent activity log (2026-10-01) ---------- */
+.act-row td { vertical-align: top; }
+.act-kind { font-weight: 600; white-space: nowrap; }
+.act-detail { color: var(--muted); line-height: 1.45; }
+.act-detail b { color: var(--text); }
+/* Destructive entries get a red left edge so they stand out in a long list. */
+.act-row.act-hot { box-shadow: inset 3px 0 0 var(--amber); }
+.act-row.act-hot .act-kind { color: var(--amber); }
 
 /* ---------- column ⚙ panel ---------- */
 .col-panel {
