@@ -1007,10 +1007,10 @@ function pricingRowHTML(p) {
    column showing that person's share of this title's planned hours.
    The header count is `data.count` = people, matching the button exactly. */
 async function openPricingPopup(pid) {
-  const box = $("#resModalBody"), title = $("#resModalTitle");
+  const box = $("#priceResModalBody"), title = $("#priceResModalTitle");
   title.textContent = "Used by";
   box.innerHTML = '<div class="res-empty">Loading…</div>';
-  $("#resModal").classList.remove("hidden");
+  $("#priceResModal").classList.remove("hidden");
   let data;
   try {
     data = await api(`/api/pricing/${pid}/resources`);
@@ -1636,13 +1636,13 @@ function renderDashboard() {
    projects. Explains the number the user clicked instead of just naming people.
    The response is sorted by contribution server-side. */
 async function openResourcePopup(client, project) {
-  const box = $("#resModalBody");
-  const title = $("#resModalTitle");
+  const box = $("#dashResModalBody");
+  const title = $("#dashResModalTitle");
   title.textContent = project
     ? `Resources on ${project} (${client})`
     : `Resources for ${client}`;
   box.innerHTML = '<div class="res-empty">Loading…</div>';
-  $("#resModal").classList.remove("hidden");
+  $("#dashResModal").classList.remove("hidden");
   let data;
   try {
     data = await api(`/api/dashboard/resources?client=${encodeURIComponent(client)}&project=${encodeURIComponent(project || "")}`);
@@ -2446,6 +2446,36 @@ function renderResModal() {
   const titleOpts = `<option value="">—</option>` + titles.map((t) => `<option value="${esc(t)}"${r && r.role === t ? " selected" : ""}>${esc(t)}</option>`).join("");
   const defStart = r ? "" : "2026-01-01";
   const defEnd = r ? "" : "2026-12-31";
+  // --- max 2 titles per person (the owner, 2026-09-30) --------------------------
+  // "A resource should be allocated as one title or the max 2 title — like I
+  // could have a PM do BA for another project." A title lives on the
+  // (client, project) row, so a SECOND title means a second row for the same
+  // person on a different project — that is how Marcus Lane already holds
+  // "Project manager" and "Solution Architect" at different rates.
+  // This panel shows what they hold now and offers a one-click "Add a 2nd
+  // title" that duplicates the person onto a fresh row, ready to pick a
+  // different project + title. The server enforces the same max of 2.
+  const nameTyped = (($("#resName") && $("#resName").value.trim()) || (r ? (r.name || "").trim() : "")).trim();
+  const myRows = nameTyped ? state.resources.filter((x) => (x.name || "").trim() === nameTyped) : [];
+  const held = [...new Set(myRows.map((x) => (x.role || "").trim()).filter(Boolean))];
+  const heldLabel = held.length
+    ? held.map((t) => {
+        const row = myRows.find((x) => (x.role || "").trim() === t);
+        const cp = row ? [row.client, row.project].filter(Boolean).join("/") : "";
+        return esc(cp ? `${t} (${cp})` : t);
+      }).join(" &nbsp;·&nbsp; ")
+    : '<span class="dim">none yet</span>';
+  const twoTitlePanel = (!isEdit && nameTyped) ? `
+      <div class="res-row res-title-panel">
+        <div class="res-titles-held">
+          <b>${esc(nameTyped)}</b> holds <b>${held.length}</b> of 2 titles: ${heldLabel}
+        </div>
+        ${held.length >= 2
+          ? '<div class="res-hint res-max-hint">Maximum of 2 titles reached — edit an existing row to change one.</div>'
+          : `<button type="button" class="btn ghost" id="resAddTitle">+ Add a 2nd title on another project</button>
+             <div class="res-hint res-add-hint">Adds a second row for this person. Pick the other project and its title (rates auto-fill).</div>
+             <div class="res-hint res-max-hint" style="display:none">Maximum of 2 titles reached — edit an existing row to change one.</div>`}
+      </div>` : "";
   $("#resModalBody").innerHTML = `
     <div class="res-form">
       <div class="res-row">
@@ -2472,7 +2502,88 @@ function renderResModal() {
         <label>Start Date <input class="inp res-inp" id="resStart" type="date" value="${r ? "" : defStart}"></label>
         <label>End Date <input class="inp res-inp" id="resEnd" type="date" value="${r ? "" : defEnd}"></label>
       </div>
+      ${twoTitlePanel}
+      <div class="modal-actions">
+        <button class="btn ghost" id="resModalCancel">Cancel</button>
+        <button class="btn primary" id="resModalSave">Save</button>
+      </div>
     </div>`;
+  // Wire Save/Cancel HERE — they are re-created by this innerHTML above, so a
+  // one-time binding at load time would attach to nothing (Save would be dead).
+  const sc = $("#resModalCancel"), sv = $("#resModalSave");
+  if (sc) sc.addEventListener("click", closeResModal);
+  if (sv) sv.addEventListener("click", saveResModal);
+  // wire: keep the "holds N of 2 titles" panel in sync with the typed name.
+  // PITFALL (hit live): calling renderResModal() here re-rendered the whole
+  // form and WIPED the name the user had just typed (the field is rebuilt from
+  // `r`, which is null on a new resource), so Save then failed "name required".
+  // Update only the panel node instead — never re-render the form on input.
+  const nameEl = $("#resName");
+  if (nameEl && !nameEl.dataset.bound) {
+    nameEl.dataset.bound = "1";
+    const syncPanel = () => {
+      const nm = (nameEl.value || "").trim();
+      const panel = document.querySelector(".res-title-panel");
+      if (!panel) return;
+      const rows = nm ? state.resources.filter((x) => (x.name || "").trim() === nm) : [];
+      const heldNow = [...new Set(rows.map((x) => (x.role || "").trim()).filter(Boolean))];
+      const label = heldNow.length
+        ? heldNow.map((t) => {
+            const rw = rows.find((x) => (x.role || "").trim() === t);
+            const cp = rw ? [rw.client, rw.project].filter(Boolean).join("/") : "";
+            return esc(cp ? `${t} (${cp})` : t);
+          }).join(" &nbsp;·&nbsp; ")
+        : '<span class="dim">none yet</span>';
+      panel.querySelector(".res-titles-held").innerHTML =
+        `<b>${esc(nm)}</b> holds <b>${heldNow.length}</b> of 2 titles: ${label}`;
+      // show/hide the "add a 2nd title" affordance without touching the form
+      const btn = panel.querySelector("#resAddTitle");
+      const hintFull = panel.querySelector(".res-max-hint");
+      const hintAdd = panel.querySelector(".res-add-hint");
+      const atMax = heldNow.length >= 2;
+      if (btn) btn.style.display = atMax ? "none" : "";
+      if (hintAdd) hintAdd.style.display = atMax ? "none" : "";
+      if (hintFull) hintFull.style.display = atMax ? "" : "none";
+    };
+    nameEl.addEventListener("input", syncPanel);
+    nameEl.addEventListener("change", syncPanel);
+  }
+  // wire: "Add a 2nd title" — save this person's current row, then reopen the
+  // form as a NEW row for the same person so they can pick the 2nd project
+  // and title. A second title is a second (client, project) row, so we must
+  // not just re-render the same row.
+  const addTitleBtn = $("#resAddTitle");
+  if (addTitleBtn) {
+    addTitleBtn.addEventListener("click", async () => {
+      const nm = (nameEl.value || "").trim();
+      const cl = $("#resClient").value.trim();
+      const pr = $("#resProject").value.trim();
+      addTitleBtn.disabled = true; addTitleBtn.textContent = "…";
+      try {
+        if (cl && pr && nm) {
+          // persist the first title before moving on, so nothing is lost
+          await api("/api/resources", { method: "POST", body: JSON.stringify({
+            client: cl, project: pr, name: nm,
+            role: $("#resTitle").value,
+            rate: num($("#resRate").value),
+            offshore_rate: num($("#resOffRate").value),
+            capacity: num($("#resHpw").value) || 40,
+          }) });
+        }
+        // reopen a blank form, same name, for the 2nd project + title
+        await loadState();
+        resEditId = null;
+        renderResModal();
+        const nn = $("#resName");
+        if (nn) nn.value = nm;
+        toast(`First title saved. Now pick the other project and its title for ${nm}.`);
+      } catch (err) {
+        toast(`Could not add the 2nd title: ${err.message}`, true);
+        addTitleBtn.disabled = false;
+        addTitleBtn.textContent = "+ Add a 2nd title on another project";
+      }
+    });
+  }
   // wire: picking an existing resource pre-fills the form
   $("#resPick").addEventListener("change", (e) => {
     const id = e.target.value;
@@ -2529,8 +2640,10 @@ async function saveResModal() {
   btn.disabled = false; btn.textContent = "Save";
 }
 
-$("#resModalCancel").addEventListener("click", closeResModal);
-$("#resModalSave").addEventListener("click", saveResModal);
+/* Save/Cancel are rendered INSIDE #resModalBody by renderResModal (they need
+   to sit in the scrollable body, not below it), so they do not exist at load
+   time — binding them here once silently attached to nothing and Save became a
+   dead button. Wire them on every render instead, right after innerHTML. */
 
 /* ---------------- Add / Edit Client Project modal ---------------- */
 let projEditId = null; // null = add, else project id being edited
@@ -2791,13 +2904,22 @@ function renderView() {
 
 $$(".tab").forEach((t) => t.addEventListener("click", () => switchView(t.dataset.tab)));
 bindPasswordModal();
-/* Feature #10.2: resource popup close (button + backdrop + Escape). */
-$("#resModalClose").addEventListener("click", () => $("#resModal").classList.add("hidden"));
-$("#resModal").addEventListener("click", (e) => {
-  if (e.target.id === "resModal") $("#resModal").classList.add("hidden");
+/* Feature #10.2: dashboard resource popup close (button + backdrop + Escape).
+   Targets #dashResModal — it must NOT touch #resModal (Add/Edit Resource). */
+$("#dashResModalClose").addEventListener("click", () => $("#dashResModal").classList.add("hidden"));
+$("#dashResModal").addEventListener("click", (e) => {
+  if (e.target.id === "dashResModal") $("#dashResModal").classList.add("hidden");
 });
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") $("#resModal").classList.add("hidden");
+  if (e.key === "Escape") $("#dashResModal").classList.add("hidden");
+});
+/* Feature #11.1: pricing "Used by" popup close (button + backdrop + Escape). */
+$("#priceResModalClose").addEventListener("click", () => $("#priceResModal").classList.add("hidden"));
+$("#priceResModal").addEventListener("click", (e) => {
+  if (e.target.id === "priceResModal") $("#priceResModal").classList.add("hidden");
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") $("#priceResModal").classList.add("hidden");
 });
 
 /* ---------------- boot ---------------- */

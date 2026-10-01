@@ -10,7 +10,7 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icons/icon-192.png">
 <title>Revenue Recon</title>
-<link rel="stylesheet" href="/styles.css?v=55">
+<link rel="stylesheet" href="/styles.css?v=56">
 </head>
 <body>
 <div class="bg-glow"></div>
@@ -253,13 +253,33 @@
   </div>
 </div>
 
-<!-- ============ RESOURCE POPUP (feature #10.2) ============ -->
-<div id="resModal" class="modal hidden">
+<!-- ============ DASHBOARD RESOURCE POPUP (feature #10.2) ============
+     Distinct ids from the Add/Edit Resource modal (#resModal, below).
+     Both popups originally used id="resModal"/"resModalTitle"/"resModalBody",
+     so the duplicate ids collided: getElementById returned the FIRST element,
+     which meant "+ Add/Edit Resource" rendered into this popup's body and its
+     own Cancel/Save buttons (living in the other, still-hidden modal) never
+     showed — the user saw a bare "Close". Caught live 2026-09-30. -->
+<div id="dashResModal" class="modal hidden">
   <div class="modal-box glass res-modal">
-    <h3 id="resModalTitle">Resources</h3>
-    <div id="resModalBody" class="modal-body"></div>
+    <h3 id="dashResModalTitle">Resources</h3>
+    <div id="dashResModalBody" class="modal-body"></div>
     <div class="modal-actions">
-      <button class="btn ghost" id="resModalClose">Close</button>
+      <button class="btn ghost" id="dashResModalClose">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ PRICING "USED BY" POPUP (feature #11.1) ============
+     Its own ids as well: it is read-only, so it must NOT share the Add/Edit
+     Resource modal, or it would render Save/Cancel buttons that write to the
+     wrong record. -->
+<div id="priceResModal" class="modal hidden">
+  <div class="modal-box glass res-modal">
+    <h3 id="priceResModalTitle">Used by</h3>
+    <div id="priceResModalBody" class="modal-body"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="priceResModalClose">Close</button>
     </div>
   </div>
 </div>
@@ -311,15 +331,17 @@
   </div>
 </div>
 
-<!-- ============ ADD / EDIT RESOURCE (Planned) ============ -->
+<!-- ============ ADD / EDIT RESOURCE (Planned) ============
+     Save/Cancel live INSIDE #resModalBody (renderResModal appends them after
+     the form) rather than in a separate .modal-actions below it. They were
+     originally outside the scrollable body, so on a long form they could sit
+     off-screen / look absent — and while the duplicate-id bug was live the
+     user only ever saw "Close". The ids are unchanged, so saveResModal's
+     bindings still work. -->
 <div id="resModal" class="modal hidden">
   <div class="modal-box glass res-modal">
     <h3 id="resModalTitle">Add Resource</h3>
     <div id="resModalBody" class="modal-body"></div>
-    <div class="modal-actions">
-      <button class="btn ghost" id="resModalCancel">Cancel</button>
-      <button class="btn primary" id="resModalSave">Save</button>
-    </div>
   </div>
 </div>
 
@@ -347,7 +369,7 @@
   </div>
 </div>
 
-<script src="/app.js?v=78"></script>
+<script src="/app.js?v=81"></script>
 <script>
   // PWA: register the service worker (only after load; skip on failure)
   if ("serviceWorker" in navigator) {
