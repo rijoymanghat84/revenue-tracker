@@ -10,7 +10,7 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icons/icon-192.png">
 <title>Revenue Recon</title>
-<link rel="stylesheet" href="/styles.css?v=81">
+<link rel="stylesheet" href="/styles.css?v=79">
 </head>
 <body>
 <div class="bg-glow"></div>
@@ -316,6 +316,9 @@
           <button class="btn mini" id="wkNext" title="Next week">→</button>
           <button class="btn mini" id="wkToday" title="Jump to the week containing today">This week</button>
         </div>
+        <button class="btn mini" id="wkExport" title="Download your team's actuals as an Excel file you can edit and upload back">⬇ Excel</button>
+        <label class="btn mini" for="wkImportFile" title="Upload the edited Excel file. Nothing saves unless every row passes the rules.">⬆ Upload</label>
+        <input type="file" id="wkImportFile" accept=".xlsx,.xlsm" style="display:none">
         <button class="btn primary" id="wkSave" disabled>Save week</button>
       </div>
     </div>
@@ -624,7 +627,7 @@
      initialise. -->
 <script src="/workbench.js?v=9"></script>
 <!-- weeksheet.js also loads BEFORE app.js, for the same reason as workbench.js. -->
-<script src="/weeksheet.js?v=7"></script>
+<script src="/weeksheet.js?v=8"></script>
 <script src="/app.js?v=109"></script>
 <script>
   // PWA: register the service worker (only after load; skip on failure)

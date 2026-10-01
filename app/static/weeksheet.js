@@ -422,6 +422,65 @@ async function wkResolve(row, needs, hours, notes) {
   return true;
 }
 
+/* Show a rejected upload as a readable list: WHO, WHICH WEEK, WHAT and the FIX.
+   The server returns { message, problems:[{person, week_label, entered, planned,
+   reason, fix}], problem_count }. */
+function wkShowImportProblems(detail, fileName) {
+  const problems = (detail && detail.problems) || [];
+  const msg = (detail && detail.message) || "The upload was rejected.";
+  const rows = problems.map((p) => `
+    <tr>
+      <td><b>${esc(p.person || "—")}</b></td>
+      <td>${esc(p.project ? (p.client || "") + " · " + p.project : (p.client || "—"))}</td>
+      <td>${esc(p.week_label || "—")}</td>
+      <td class="num">${p.planned == null ? "—" : fmtH(p.planned)}</td>
+      <td class="num">${p.entered == null ? "—" : fmtH(p.entered)}</td>
+      <td>${esc(p.reason || "—")}</td>
+      <td>${esc(p.fix || "—")}</td>
+    </tr>`).join("");
+  const more = (detail && detail.problem_count > problems.length)
+    ? `<div class="muted-note" style="margin-top:8px">…and ${detail.problem_count - problems.length} more row(s).</div>`
+    : "";
+  showModalHTML(
+    "Upload rejected — nothing was saved",
+    `<div class="wk-imp-bad">${esc(msg)}</div>
+     ${fileName ? `<div class="muted-note" style="margin:6px 0 10px">File: <b>${esc(fileName)}</b></div>` : ""}
+     ${problems.length ? `<div class="wk-imp-scroll"><table class="wk-imp-tbl">
+        <thead><tr><th>Person</th><th>Project</th><th>Week</th><th class="num">Planned</th>
+        <th class="num">Entered</th><th>Why it failed</th><th>How to fix</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>${more}` : ""}`
+  );
+}
+
+async function wkUpload(file) {
+  if (!file) return;
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("mode", "merge");
+  const lbl = document.querySelector('label[for="wkImportFile"]');
+  const was = lbl ? lbl.innerHTML : "";
+  if (lbl) lbl.innerHTML = "Uploading…";
+  try {
+    const res = await fetch("/api/import", { method: "POST", body: fd });
+    if (!res.ok) {
+      let detail = null;
+      try { detail = (await res.json()).detail; } catch (_) {}
+      if (detail && typeof detail === "object") wkShowImportProblems(detail, file.name);
+      else toast(`Upload failed: ${detail || res.statusText}`, true);
+      return;
+    }
+    const data = await res.json();
+    const n = data.actuals_added || 0;
+    toast(n ? `Uploaded — ${n} ${n === 1 ? "person" : "people"} updated` : "Upload complete — no changes found");
+    await loadActuals().catch(() => {});
+    await loadWeekSheet();
+  } catch (e) {
+    toast(`Upload failed: ${e.message}`, true);
+  } finally {
+    if (lbl) lbl.innerHTML = was;
+  }
+}
+
 function bindWeekSheet() {
   const sel = $("#wkSelect");
   if (sel) sel.addEventListener("change", () => { WK.week = +sel.value; renderWeekSheet(); });
@@ -442,4 +501,13 @@ function bindWeekSheet() {
   });
   const save = $("#wkSave");
   if (save) save.addEventListener("click", saveWeekSheet);
+  // Export: the endpoint is already PM-scoped (their projects, no rates).
+  const exp = $("#wkExport");
+  if (exp) exp.addEventListener("click", () => { window.location.href = "/api/export"; });
+  const imp = $("#wkImportFile");
+  if (imp) imp.addEventListener("change", (e) => {
+    const f = e.target.files && e.target.files[0];
+    e.target.value = "";
+    wkUpload(f);
+  });
 }
