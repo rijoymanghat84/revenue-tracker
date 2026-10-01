@@ -82,6 +82,16 @@ async function api(path, opts = {}) {
   if (!res.ok) {
     let msg = res.statusText;
     try { msg = (await res.json()).detail || msg; } catch (_) {}
+    // `detail` is sometimes an OBJECT (a structured, actionable error: unknown
+    // title, duplicate person, rejected Excel rows). `new Error(object)` makes
+    // e.message the string "[object Object]", which is useless to show and
+    // unparseable. Keep the object on the error and give the message the
+    // server's own human sentence.
+    if (msg && typeof msg === "object") {
+      const err = new Error(msg.message || res.statusText);
+      err.detail = msg;
+      throw err;
+    }
     throw new Error(msg);
   }
   return res.status === 204 ? null : res.json();
@@ -2225,6 +2235,15 @@ function renderAvailability(data) {
     ? `☰ Available · <b>${avail.length}</b>`
     : "☰ Available";
 
+  // Compute the summary BEFORE the collapsed early-return: it is useful on its
+  // own (the panel header is where the "N hidden at/over capacity" answer lives)
+  // and used to be blank unless the panel happened to be open at render time.
+  $("#availTitle").textContent = `Availability — ${name || "current month"}`;
+  $("#availNote").innerHTML =
+    `<b>${avail.length}</b> available with <b>${fmt(benchHrs, 0)}h</b> free · ` +
+    `${full.length} hidden at/over capacity. Free = capacity − planned hours. ` +
+    `Freeing someone up? Their capacity lives on <b>Team & Access</b>.`;
+
   wrap.classList.toggle("hidden", !state.availOpen);
   if (!state.availOpen) return;
 
@@ -2236,12 +2255,6 @@ function renderAvailability(data) {
       window.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
     });
   }
-
-  $("#availTitle").textContent = `Availability — ${name || "current month"}`;
-  $("#availNote").innerHTML =
-    `<b>${avail.length}</b> available with <b>${fmt(benchHrs, 0)}h</b> free · ` +
-    `${full.length} hidden at/over capacity. Free = capacity − planned hours. ` +
-    `Freeing someone up? Their capacity lives on <b>Team & Access</b>.`;
 
   $("#availHead").innerHTML = `<tr>
     <th>Resource</th><th>Projects</th>

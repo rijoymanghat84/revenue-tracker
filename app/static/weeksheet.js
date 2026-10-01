@@ -544,7 +544,9 @@ async function openBenchModal() {
   perEl.addEventListener("change", sync);
   sync();
 
-  setModalOk("Bench", async () => {
+  // setModalOk takes ONE argument (the handler); a label first would make the
+  // handler a string and the OK button would silently do nothing.
+  setModalOk(async () => {
     const payload = { person_id: +perEl.value };
     if (pctEl.value) payload.allocation_pct = +pctEl.value;
     payload.start_date = $("#bnStart").value || "";
