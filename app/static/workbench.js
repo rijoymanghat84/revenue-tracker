@@ -26,6 +26,8 @@ let WB = {
   people: [],            // /api/people
   load: [],              // /api/pm/load -> people with `weeks`
   weekLabels: [],
+  months: [],            // month bands + their week ranges (from /api/pm/load)
+  weekMonth: [],         // week index -> month name, for labels + tooltips
   selKey: null,          // "client||project" of the selected project
   filter: "",
   loadFilter: "",
@@ -41,6 +43,8 @@ async function loadWorkbench() {
   WB.people = people.people || [];
   WB.load = load.people || [];
   WB.weekLabels = load.week_labels || [];
+  WB.months = load.months || [];
+  WB.weekMonth = load.week_month || [];
   if (!WB.selKey && WB.projects.length) {
     WB.selKey = wbKey(WB.projects[0].client, WB.projects[0].project);
   }
@@ -173,6 +177,32 @@ function loadBarHTML(pct) {
   return `<div class="bar" title="${pct}% of capacity"><i class="${cls}" style="width:${w}%"></i></div>`;
 }
 
+/* The load rail's week grid: a MONTH band across the top, then one column per
+   week (labelled MM-DD) so a block is traceable to a real date, not a mystery
+   square. Built with a CSS grid whose columns are the weeks-in-month, because
+   months are 4-5 weeks long and uneven — a uniform flex strip could never line
+   the band up with its weeks. Each cell is clickable. */
+function weekGridHTML(x) {
+  const weeks = WB.weekLabels || [];
+  const months = WB.months || [];
+  const cols = `grid-template-columns:repeat(${weeks.length || 1}, minmax(0, 1fr));`;
+  if (!weeks.length) return "";
+  const band = months.map((m) => {
+    const span = (m.end - m.start) + 1;
+    return `<i class="wb-mo" style="grid-column:span ${span}" title="${esc(m.name)} (${span} weeks)">${esc(m.name)}</i>`;
+  }).join("");
+  const cells = weeks.map((wl, i) => {
+    const v = (x.weeks || [])[i] || 0;
+    const cls = v > 100 ? "hot" : v >= 50 ? "warn" : v > 0 ? "booked" : "";
+    // "03-Mar" reads as a date; the full tooltip carries month + utilisation.
+    const mmdd = wl.includes("-") ? wl.split("-").slice(1).join("-") : wl;
+    const mon = (WB.weekMonth || [])[i] || "";
+    return `<b class="wb-wk ${cls}" data-wk="${i}" tabindex="0" role="button"
+      title="${esc(x.name)} — ${esc(mon)} ${esc(wl)}: ${v}% of capacity · click for detail">${esc(mmdd)}</b>`;
+  }).join("");
+  return `<div class="wb-grid-rail" style="${cols}">${band}${cells}</div>`;
+}
+
 /* ---------------- the load rail ---------------- */
 function renderWbLoad() {
   const box = $("#wbLoad");
@@ -196,15 +226,17 @@ function renderWbLoad() {
         <div>${pill} <button class="btn mini" data-act="view">Assign…</button></div>
       </div>
       <div class="sub">${projs}</div>
-      <div class="wb-strip">${(x.weeks || []).map((v) => {
-        const cls = v > 100 ? "hot" : v >= 50 ? "warn" : v > 0 ? "booked" : "";
-        return `<i class="${cls}" title="${v}%"></i>`;
-      }).join("")}</div>
+      ${weekGridHTML(x)}
     </div>`;
   }).join("");
   $$("#wbLoad .wb-load button[data-act=view]").forEach((b) => b.addEventListener("click", () => {
     const pid = +b.closest(".wb-load").dataset.pid;
     openAssignModal(wbSel(), pid, null);
+  }));
+  // Any week cell opens the detail popup for that person+week.
+  $$("#wbLoad .wb-wk").forEach((el) => el.addEventListener("click", () => {
+    const pid = +el.closest(".wb-load").dataset.pid;
+    openWeekDetail(pid, +el.dataset.wk);
   }));
 }
 
@@ -387,6 +419,65 @@ function openAssignModal(project, pid, rid) {
   fillTitles(); syncChips(); check();
 }
 
+/* Clicking a week cell: show exactly WHERE that week was spent, the %/hours per
+   project, and offer to jump to the project (so the PM can adjust it) or assign
+   more work in that week. This is what makes the blocks actionable rather than
+   decorative. */
+function openWeekDetail(pid, wk) {
+  const person = WB.load.find((x) => x.id === pid);
+  if (!person) return;
+  const lbl = (WB.weekLabels || [])[wk] || ("#" + wk);
+  const mon = (WB.weekMonth || [])[wk] || "";
+  const pct = (person.weeks || [])[wk] || 0;
+  const detail = ((person.detail || [])[wk] || []);
+  const cap = person.capacity || 40;
+  const hrs = Math.round(pct / 100 * cap * 10) / 10;
+  const state_ = pct > 100 ? `<span class="pill wb-pill-over">over capacity</span>`
+    : pct >= 80 ? `<span class="pill wb-pill-ok">healthy</span>`
+    : pct >= 1 ? `<span class="pill wb-pill-warn">partly booked</span>`
+    : `<span class="pill wb-pill-free">free</span>`;
+  const rows = detail.length
+    ? `<table class="wk-tbl"><thead><tr><th>Client · Project</th><th class="num">Alloc</th>
+         <th class="num">Hours</th><th></th></tr></thead><tbody>
+         ${detail.map((d) => `<tr>
+           <td><b>${esc(d.client || "—")}</b><div class="muted-note">${esc(d.project || "—")}</div></td>
+           <td class="num">${d.pct}%</td>
+           <td class="num">${fmtH(d.hours)}</td>
+           <td>${isMine(d.client, d.project)
+             ? `<button class="btn mini" data-goto="${d.resource_id}" data-client="${esc(d.client)}" data-project="${esc(d.project)}">Open project</button>`
+             : `<span class="muted-note">not yours</span>`}</td>
+         </tr>`).join("")}
+         </tbody></table>`
+    : `<div class="muted-note">No project hours booked in this week — ${esc(person.name)} is free.</div>`;
+  const body = `
+    <div class="wk-head">
+      <div><b>${esc(person.name)}</b> <span class="muted-note">${esc(person.home_title || "—")}</span></div>
+      <div>${esc(mon)} · week of <b>${esc(lbl)}</b></div>
+    </div>
+    <div class="wk-sum">
+      <div><span class="muted-note">Booked</span><br><b>${pct}%</b> <span class="muted-note">(${hrs} of ${fmtH(cap)} h)</span></div>
+      <div><span class="muted-note">Status</span><br>${state_}</div>
+    </div>
+    ${rows}
+    <div class="muted-note" style="margin-top:10px">Allocation is a share of a ${fmtH(cap)}-hour week. Editing a week's hours is done on the project itself, so the change stays attached to the work it belongs to.</div>
+  `;
+  showModalHTML(`${person.name} — ${mon} ${lbl}`.trim(), body);
+  setModalOk(null);   // this popup is informational; its actions are its buttons
+  $$("#modalBody button[data-goto]").forEach((b) => b.addEventListener("click", () => {
+    const client = b.dataset.client, project = b.dataset.project;
+    closeModal();
+    // Select the project in the workbench so its team table is on screen.
+    const hit = (WB.projects || []).find((p) => p.client === client && p.project === project);
+    if (hit) { WB.selKey = wbKey(hit.client, hit.project); renderWorkbench(); }
+    else toast(`No access to ${client} · ${project}`, true);
+  }));
+}
+
+/* Is this (client, project) one of the PM's own? */
+function isMine(client, project) {
+  return (WB.projects || []).some((p) => p.client === client && p.project === project);
+}
+
 function peakLabel(pid) {
   const l = WB.load.find((x) => x.id === pid);
   if (!l) return "load unknown";
@@ -481,7 +572,14 @@ function renderPeople() {
 }
 
 async function refreshLoadOnly() {
-  try { WB.load = (await api("/api/pm/load")).people || []; renderWbLoad(); } catch (_) {}
+  try {
+    const d = await api("/api/pm/load");
+    WB.load = d.people || [];
+    WB.weekLabels = d.week_labels || WB.weekLabels;
+    WB.months = d.months || WB.months;
+    WB.weekMonth = d.week_month || WB.weekMonth;
+    renderWbLoad();
+  } catch (_) {}
 }
 
 function openPersonModal(p) {

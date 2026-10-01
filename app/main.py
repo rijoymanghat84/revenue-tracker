@@ -3938,7 +3938,13 @@ def person_loads_bulk(conn: sqlite3.Connection, weeks: list[str]):
             if wk < n and h:
                 p = h / cap * 100.0
                 a[wk] += p
-                cmap.setdefault(wk, []).append(f"{label} ({round(p)}%)")
+                # Keep the structured detail (label, %, hours), not just a display
+                # string: the load rail needs it to explain a single week and to
+                # offer "go edit this project" from the cell.
+                cmap.setdefault(wk, []).append(
+                    {"label": label, "pct": round(p, 1), "hours": round(h, 2),
+                     "resource_id": r["id"], "client": (r["client"] or "").strip(),
+                     "project": (r["project"] or "").strip()})
     return acc, contrib
 
 
@@ -3962,11 +3968,21 @@ def api_pm_load(request: Request):
             lab = " · ".join(x for x in ((r["client"] or "").strip(), (r["project"] or "").strip()) if x)
             if lab and lab not in projs.setdefault(r["person_id"], []):
                 projs[r["person_id"]].append(lab)
-        acc, _contrib = person_loads_bulk(conn, weeks)
+        acc, contrib = person_loads_bulk(conn, weeks)
+        months = _load_layout()[1]
+        # For each week: which month it belongs to, and the list of projects that
+        # consume it. Sent as two parallel arrays so the client can label the
+        # month band and explain any single week without another request.
+        week_month = []
+        for i in range(len(weeks)):
+            nm = next((m["name"] for m in months if m["start"] <= i <= m["end"]), "")
+            week_month.append(nm)
         out = []
         for p in people:
             pct = acc.get(p["id"], [0.0] * len(weeks))
             peak = max(pct) if pct else 0.0
+            cmap = contrib.get(p["id"], {})
+            detail = [cmap.get(i, []) for i in range(len(weeks))]
             out.append({
                 "id": p["id"], "name": p["name"], "home_title": p["home_title"],
                 "capacity": p["capacity"],
@@ -3975,8 +3991,10 @@ def api_pm_load(request: Request):
                 "avg_pct": round(sum(pct) / len(pct), 1) if pct else 0.0,
                 "projects": projs.get(p["id"], []),
                 "weeks": [round(v, 1) for v in pct],
+                "detail": detail,
             })
-        return {"people": out, "week_labels": weeks}
+        return {"people": out, "week_labels": weeks, "months": months,
+                "week_month": week_month}
     finally:
         conn.close()
 

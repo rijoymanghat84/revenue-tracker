@@ -10,7 +10,7 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icons/icon-192.png">
 <title>Revenue Recon</title>
-<link rel="stylesheet" href="/styles.css?v=73">
+<link rel="stylesheet" href="/styles.css?v=74">
 </head>
 <body>
 <div class="bg-glow"></div>
@@ -254,11 +254,15 @@
           <input type="search" id="wbLoadFilter" placeholder="Find a person…" class="search">
         </div>
         <div class="wb-loadlist" id="wbLoad"></div>
+        <!-- Each block is ONE WEEK. The month band above them groups the weeks,
+             and clicking a block opens that week's detail. -->
         <div class="wb-legend">
-          <span><i class="sw booked"></i>Booked</span>
+          <span class="muted-note">Each block = one week:</span>
+          <span><i class="sw booked"></i>Booked (&lt;50%)</span>
           <span><i class="sw warn"></i>50–99%</span>
           <span><i class="sw hot"></i>Over 100%</span>
           <span><i class="sw free"></i>Free</span>
+          <span class="muted-note">· hover a block for its week &amp; month, click it for detail</span>
         </div>
       </div>
     </div>
@@ -558,7 +562,7 @@
      not executed yet. Getting this order wrong threw a ReferenceError that
      aborted the REST of app.js — including boot() — so the entire app failed to
      initialise. -->
-<script src="/workbench.js?v=4"></script>
+<script src="/workbench.js?v=5"></script>
 <script src="/app.js?v=99"></script>
 <script>
   // PWA: register the service worker (only after load; skip on failure)
