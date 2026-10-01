@@ -753,6 +753,12 @@ def api_themes_set(request: Request, payload: dict):
 
 
 def init_db() -> None:
+    # The data dir is created HERE rather than at import time. A fresh clone has
+    # no data/ (it is gitignored), so `_cipher.connect()` used to die with
+    # "unable to open database file" — which broke the CI workflow on every run
+    # and any first-time checkout. Only the DB-key writer used to mkdir, and only
+    # for its own parent directory.
+    Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
     conn = get_db()
     conn.executescript(
         """
