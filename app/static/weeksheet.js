@@ -481,6 +481,89 @@ async function wkUpload(file) {
   }
 }
 
+/* ---------------- Bench ----------------
+   "A project called bench where the resources will be added if they are not
+   allocated to a project fully or partially." Bench is a real project (client
+   Internal) with ZERO rates, so parking someone there keeps them visible without
+   touching cost or revenue. The percentage is whatever they have FREE, and the
+   server re-checks the 100% rule, so benching cannot become a way to exceed it. */
+async function openBenchModal() {
+  let load = { people: [] };
+  try { load = await api("/api/pm/load"); } catch (_) {}
+  // Only people with headroom can be benched — anyone at 100% has nothing free.
+  const cands = (load.people || [])
+    .map((x) => ({ id: x.id, name: x.name, peak: +(x.peak_pct || 0) }))
+    .filter((x) => x.peak < 100)
+    .sort((a, b) => a.peak - b.peak || String(a.name).localeCompare(b.name));
+  if (!cands.length) {
+    showModalHTML("Bench", `<div class="wb-verdict ok">Everyone on your projects is
+      already fully booked — there is nobody with spare time to bench.</div>`);
+    return;
+  }
+  const body = `
+    <div>
+      <label class="f">Who needs benching?</label>
+      <select id="bnPerson">
+        ${cands.map((x) => `<option value="${x.id}" data-free="${100 - x.peak}">
+          ${esc(x.name)} — ${100 - x.peak}% free</option>`).join("")}
+      </select>
+    </div>
+    <div class="assign-grid" style="margin-top:12px">
+      <div><label class="f">Bench at</label>
+        <select id="bnPct">
+          <option value="">Auto — whatever they have free</option>
+          <option value="25">25%</option><option value="50">50%</option>
+          <option value="75">75%</option>
+        </select>
+      </div>
+      <div><label class="f">From (optional)</label><input type="date" id="bnStart"></div>
+    </div>
+    <div class="wb-verdict ok" id="bnVerdict"></div>
+    <div class="muted-note">Bench sits on client <b>Internal</b> with <b>zero rates</b>, so
+      it adds no cost and no revenue — it only keeps an unallocated person visible instead
+      of letting them disappear from the plan. Leave the date blank to bench them for the
+      whole year.</div>
+  `;
+  showModalHTML("Park someone on the Bench", body);
+
+  const pctEl = $("#bnPct"), perEl = $("#bnPerson");
+  const sync = () => {
+    const free = +((perEl.selectedOptions[0] || {}).dataset || {}).free || 0;
+    const chosen = pctEl.value;
+    const v = $("#bnVerdict");
+    const auto = Math.floor(free / 25) * 25;
+    v.className = "wb-verdict " + ((chosen && +chosen > free) ? "bad" : "ok");
+    v.innerHTML = `They have <b>${free}%</b> free. `
+      + (chosen
+          ? (+chosen > free
+              ? `Benching at ${chosen}% would exceed that — the save will be refused.`
+              : `Benching at <b>${chosen}%</b>.`)
+          : `Auto will bench <b>${auto}%</b> (their free share, rounded down to 25%).`);
+  };
+  pctEl.addEventListener("change", sync);
+  perEl.addEventListener("change", sync);
+  sync();
+
+  setModalOk("Bench", async () => {
+    const payload = { person_id: +perEl.value };
+    if (pctEl.value) payload.allocation_pct = +pctEl.value;
+    payload.start_date = $("#bnStart").value || "";
+    try {
+      const r = await api("/api/bench", { method: "POST", body: JSON.stringify(payload) });
+      toast(`Benched at ${r.allocation_pct}%`);
+      return true;
+    } catch (e) {
+      let d = null;
+      try { d = JSON.parse(e.message); } catch (_) {}
+      const msg = (d && d.message) || e.message || "Could not bench";
+      showModalHTML("Bench refused", `<div class="wb-verdict bad">${esc(msg)}</div>
+        <div class="muted-note" style="margin-top:8px">Bench follows the same 100% rule as
+        any project, so it can never be used to over-allocate someone.</div>`);
+      return false;
+    }
+  });
+}
+
 function bindWeekSheet() {
   const sel = $("#wkSelect");
   if (sel) sel.addEventListener("change", () => { WK.week = +sel.value; renderWeekSheet(); });
@@ -504,6 +587,8 @@ function bindWeekSheet() {
   // Export: the endpoint is already PM-scoped (their projects, no rates).
   const exp = $("#wkExport");
   if (exp) exp.addEventListener("click", () => { window.location.href = "/api/export"; });
+  const bn = $("#wkBench");
+  if (bn) bn.addEventListener("click", () => openBenchModal());
   const imp = $("#wkImportFile");
   if (imp) imp.addEventListener("change", (e) => {
     const f = e.target.files && e.target.files[0];

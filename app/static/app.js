@@ -1329,6 +1329,8 @@ function renderPricing() {
    access tab owns its own data loading instead of piggy-backing on a pricing
    render. */
 function renderAccess() {
+  // The capacity editor lives on this screen now, so keep it in step.
+  if (typeof renderCapacity === "function") renderCapacity();
   if (!loadPMDataStarted) loadPMDataStarted = true;
   loadPMData().then(() => {
     if (state.view !== "access") return;
@@ -1338,7 +1340,11 @@ function renderAccess() {
   // People + OT approvals (2026-10-01). Each block is hidden individually by
   // its own permission so a people-only or ot_approval-only admin still has a
   // usable Team & Access page.
-  const showPeople = canPerm("people");
+  // PMs see the People list too: they must pick from it when assigning, and a PM
+  // may add a new joiner. The server scopes the list (no rates) and gates every
+  // write, so this does not hand a PM admin powers.
+  const isPmRole = !!(state.me && state.me.role === "pm");
+  const showPeople = canPerm("people") || isPmRole;
   showBlock($("#peopleToolbar"), showPeople);
   showBlock($("#peopleWrap"), showPeople);
   if (showPeople) { loadPeople().then(() => { if (state.view === "access") renderPeople(); }); if (!WB.load.length) refreshLoadOnly(); }
@@ -1648,11 +1654,14 @@ function renderCapacity() {
   // Badge: how many resources differ from the 40h/week default — a quick signal
   // that someone is part-time before you read a single percentage.
   const nonStd = resources.filter((r) => (r.capacity ?? 40) !== 40).length;
-  const badge = $("#capBadge");
-  if (badge) {
-    badge.innerHTML = nonStd
-      ? `<b>${nonStd}</b> of ${resources.length} not at 40h/wk`
-      : `${resources.length} resources · all at 40h/wk`;
+  const badgeText = nonStd
+    ? `<b>${nonStd}</b> of ${resources.length} not at 40h/wk`
+    : `${resources.length} resources · all at 40h/wk`;
+  // The badge shows on Utilization (read-only signal); the editor's toolbar
+  // carries its own copy on Team & Access.
+  for (const sel of ["#capBadge", "#capBadge2"]) {
+    const b = $(sel);
+    if (b) b.innerHTML = badgeText;
   }
   $("#capHead").innerHTML = `<tr><th>Resource</th><th>Client · Project</th><th class="num">Capacity (hrs/wk)</th></tr>`;
   let html = "<tbody>";
@@ -2200,6 +2209,11 @@ function renderAvailability(data) {
 
   const avail = rows.filter((r) => r.freePct >= 25);
   const full = rows.filter((r) => r.freePct < 25);
+  // "Availability" is a SHORTLIST question — who can I put on something — so the
+  // table lists only people with headroom. The at/over-capacity group is still
+  // COUNTED in the note (and is the thing you cannot book), it just is not the
+  // list Rijoy asked for: "I only need the people who are available".
+  const shown = avail;
   const benchHrs = avail.reduce((s, r) => s + r.free, 0);
 
   // The button carries the headline count, so a click has visible feedback even
@@ -2225,15 +2239,16 @@ function renderAvailability(data) {
 
   $("#availTitle").textContent = `Availability — ${name || "current month"}`;
   $("#availNote").innerHTML =
-    `<b>${avail.length}</b> of ${rows.length} with headroom · <b>${fmt(benchHrs, 0)}h</b> free · ` +
-    `${full.length} at/over capacity. Free = capacity − planned hours.`;
+    `<b>${avail.length}</b> available with <b>${fmt(benchHrs, 0)}h</b> free · ` +
+    `${full.length} hidden at/over capacity. Free = capacity − planned hours. ` +
+    `Freeing someone up? Their capacity lives on <b>Team & Access</b>.`;
 
   $("#availHead").innerHTML = `<tr>
     <th>Resource</th><th>Projects</th>
     <th class="num">Cap/mo</th><th class="num">Planned</th><th class="num">Free</th>
     <th class="num">Free %</th><th class="num">Booked %</th><th>Status</th></tr>`;
 
-  $("#availBody").innerHTML = rows.map((r) => {
+  $("#availBody").innerHTML = shown.map((r) => {
     const cls = r.freePct >= 50 ? "green" : r.freePct >= 25 ? "yellow" : "red";
     const label = r.bookedPct > 100 ? "Over-allocated"
                 : r.freePct >= 50 ? "Available"
@@ -2248,7 +2263,7 @@ function renderAvailability(data) {
       <td class="u-cell num">${fmt(r.bookedPct, 0)}%</td>
       <td class="u-cell">${label}</td>
     </tr>`;
-  }).join("") || `<tr><td colspan="8" class="empty">No resources for this scope.</td></tr>`;
+  }).join("") || `<tr><td colspan="8" class="empty">Nobody is available for this scope — everyone is at or over capacity.</td></tr>`;
 }
 
 /* Filter the availability list by name/project without refetching. */

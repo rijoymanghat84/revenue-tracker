@@ -10,7 +10,7 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icons/icon-192.png">
 <title>Revenue Recon</title>
-<link rel="stylesheet" href="/styles.css?v=79">
+<link rel="stylesheet" href="/styles.css?v=80">
 </head>
 <body>
 <div class="bg-glow"></div>
@@ -74,7 +74,7 @@
         <!-- 2026-10-01: the old "Pricing" tab was doing six unrelated jobs in one
              long scroll. It is now split by PURPOSE:
                · Rate Card       — what you bill vs what you pay offshore (perm: pricing)
-               · Utilization     — over/under maths + the capacity editor that drives it
+               · Utilization     — over/under maths (capacity is edited on Team &amp; Access)
                · Team & Access   — PMs, admins, permissions, DB security (perm: users /
                                    db_security)
              The `data-tab` values changed (pricing → rates + access) and so did the
@@ -173,7 +173,7 @@
   <!-- ============ UTILIZATION (auto-calculated, read-only) ============ -->
   <section id="utilView" class="view hidden">
     <div class="toolbar glass">
-      <div class="sheet-note" id="utilNote"><span class="dot on"></span>Booked hours ÷ capacity (<b>40 hrs/week = 100%</b>) — 🔴 &gt;100% · 🟢 80–100% · 🟡 50–80% · 🟠 &lt;50%. Auto-calculated; never editable.</div>
+      <div class="sheet-note" id="utilNote"><span class="dot on"></span>Booked hours ÷ capacity (<b>40 hrs/week = 100%</b>) — 🔴 &gt;100% · 🟢 80–100% · 🟡 50–80% · 🟠 &lt;50%. Read-only; edit a person's capacity on <b>Team &amp; Access</b>.</div>
       <div class="util-mode glass" id="utilModeSeg" role="group" aria-label="Utilization granularity">
         <!-- Month = the year at a glance (default). Week drills into each month's
              weeks. Hidden on the single-month drill-down, where there is only one
@@ -182,13 +182,12 @@
         <button type="button" class="seg-btn" data-util-mode="week" aria-pressed="false" title="Each month's weeks, planned vs actual — more granular">Week</button>
       </div>
       <div class="toolbar-right">
-        <!-- 2026-10-01: the capacity editor moved here from the old Pricing tab.
-             Capacity is the DENOMINATOR of every % on this page, so it now lives
-             with the numbers it drives instead of three clicks away. The badge
-             shows how many resources deviate from the 40h default. -->
+        <!-- 2026-10-01 (later): the capacity EDITOR moved to Team & Access, where a
+             person is added and owned. Capacity is still the denominator of every
+             "%" on this page, but editing it here duplicated the People screen. The
+             badge stays as a read-only signal of how many people are not at 40h. -->
         <span class="hint" id="capBadge"></span>
         <button class="btn mini" id="btnToggleAvail" title="Which people have headroom — who you can put on a project">☰ Available</button>
-        <button class="btn mini" id="btnToggleCap" title="Show / hide the per-resource weekly capacity editor">⚙ Capacity</button>
         <span class="hint">Export includes a locked Utilization sheet; uploads ignore it.</span>
       </div>
     </div>
@@ -220,13 +219,9 @@
       </table>
     </div>
 
-    <!-- Per-resource capacity editor (collapsed by default) -->
-    <div class="table-wrap glass narrow hidden" id="capWrap">
-      <table id="capTable">
-        <thead id="capHead"></thead>
-        <tbody id="capBody"></tbody>
-      </table>
-    </div>
+    <!-- The per-resource capacity EDITOR used to live here; it moved to Team &
+         Access (the #capWrap / #capTable ids are kept there so the shared
+         render/bind code is unchanged). -->
   </section>
 
   <!-- ============ ONSITE / OFFSHORE GRID (shared container, mode-driven) ============ -->
@@ -316,6 +311,8 @@
           <button class="btn mini" id="wkNext" title="Next week">→</button>
           <button class="btn mini" id="wkToday" title="Jump to the week containing today">This week</button>
         </div>
+        <button class="btn mini js-add-joiner" id="wkAddJoiner" title="A new hire joined: add them with their availability and title">+ New joiner</button>
+        <button class="btn mini" id="wkBench" title="Not enough work for someone? Park them on the Bench project so they stay visible">⛱ Bench</button>
         <button class="btn mini" id="wkExport" title="Download your team's actuals as an Excel file you can edit and upload back">⬇ Excel</button>
         <label class="btn mini" for="wkImportFile" title="Upload the edited Excel file. Nothing saves unless every row passes the rules.">⬆ Upload</label>
         <input type="file" id="wkImportFile" accept=".xlsx,.xlsm" style="display:none">
@@ -383,7 +380,7 @@
       </table>
     </div>
     <div class="toolbar glass">
-      <div class="sheet-note"><span class="dot on"></span>Who is on each title lives in the <b>Used By</b> column. To change <b>capacity</b> — the number that decides over/under-utilization — go to <b>Utilization</b>.</div>
+      <div class="sheet-note"><span class="dot on"></span>Who is on each title lives in the <b>Used By</b> column. To change <b>capacity</b> — the number that decides over/under-utilization — go to <b>Team &amp; Access</b>.</div>
       <div class="toolbar-right">
         <button class="btn mini" id="btnRatesToUtil">Open Utilization →</button>
       </div>
@@ -398,12 +395,32 @@
       <div class="sheet-note"><span class="dot on"></span><b>People</b> — every person exists once, with a home title, approved titles and a weekly capacity. PMs pick from this list and can never invent a name or a rate. Merging split records here keeps the 100% rule honest.</div>
       <div class="toolbar-right">
         <button class="btn mini" id="btnAddPerson">+ Add Person</button>
+        <!-- Rijoy: a PM may add a new hire — name, availability and a title that
+             must already exist on the Rate Card. Editing/merging people stays
+             admin-only. -->
+        <button class="btn mini js-add-joiner" id="btnAddJoiner" title="A new hire: name, availability and a title from the rate card">+ New joiner</button>
       </div>
     </div>
     <div class="table-wrap glass narrow" id="peopleWrap">
       <table id="peopleTable">
         <thead id="peopleHead"></thead>
         <tbody id="peopleBody"></tbody>
+      </table>
+    </div>
+
+    <!-- Capacity editor (moved here from Utilization, 2026-10-01). Capacity is a
+         property of a PERSON, so it is edited next to the person, not on a page
+         that only consumes the number. Drives the 100% rule and utilization. -->
+    <div class="toolbar glass pm-toolbar" id="capToolbar">
+      <div class="sheet-note"><span class="dot on"></span><b>Capacity</b> — each person's weekly hours (40 = 100%). This drives the 100% allocation rule and every utilization %. <span id="capBadge2"></span></div>
+      <div class="toolbar-right">
+        <button class="btn mini" id="btnToggleCap" title="Show / hide the per-person weekly capacity editor">⚙ Edit capacity</button>
+      </div>
+    </div>
+    <div class="table-wrap glass narrow hidden" id="capWrap">
+      <table id="capTable">
+        <thead id="capHead"></thead>
+        <tbody id="capBody"></tbody>
       </table>
     </div>
 
@@ -625,9 +642,9 @@
      not executed yet. Getting this order wrong threw a ReferenceError that
      aborted the REST of app.js — including boot() — so the entire app failed to
      initialise. -->
-<script src="/workbench.js?v=9"></script>
+<script src="/workbench.js?v=10"></script>
 <!-- weeksheet.js also loads BEFORE app.js, for the same reason as workbench.js. -->
-<script src="/weeksheet.js?v=8"></script>
+<script src="/weeksheet.js?v=9"></script>
 <script src="/app.js?v=109"></script>
 <script>
   // PWA: register the service worker (only after load; skip on failure)

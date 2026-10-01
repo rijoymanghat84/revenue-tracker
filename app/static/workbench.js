@@ -973,7 +973,87 @@ async function loadOt() {
   }));
 }
 
-async function bindPeopleAndOt() {
+async /* ---------------- "Add new joiner" (PM) ----------------
+   Rijoy: a PM should be able to add a new hire "along with their availability
+   and that title. the title should match the title we have where we align the
+   pricing." So the title is a HARD-validated pick from the rate card: the server
+   rejects an off-card title and tells them to ask an admin to add it on Rate
+   Card. Availability here is the weekly capacity (40 = 100%). */
+function openJoinerModal() {
+  const titles = (state.pricing || []).map((t) => t.title).filter(Boolean);
+  const body = `
+    <div class="assign-grid">
+      <div><label class="f">Name</label>
+        <input id="jnName" placeholder="Full name as it should appear"></div>
+      <div><label class="f">Country</label>
+        <input id="jnCountry" placeholder="optional"></div>
+    </div>
+    <div class="assign-grid">
+      <div><label class="f">Title <span class="muted-note">(from the rate card)</span></label>
+        <input id="jnTitle" list="jnTitleList" placeholder="e.g. Quadient Developer">
+        <datalist id="jnTitleList">${titles.map((t) => `<option value="${esc(t)}"></option>`).join("")}</datalist>
+      </div>
+      <div><label class="f">Availability — hrs/week</label>
+        <input type="number" id="jnCap" value="40" min="1" max="168" step="1">
+      </div>
+    </div>
+    <div class="wb-verdict ok" id="jnVerdict">40 hrs/week = 100% allocation. Their title decides how they are priced.</div>
+    <div class="muted-note">The title must already exist on the <b>Rate Card</b> — rates are keyed by title, so a new
+      title has to be added there by an admin first. If you type one that is not on the card, the save will
+      tell you and stop.</div>
+  `;
+  showModalHTML("Add a new joiner", body);
+
+  const capEl = $("#jnCap");
+  const syncCap = () => {
+    const v = +capEl.value || 0;
+    const vd = $("#jnVerdict");
+    vd.className = "wb-verdict ok";
+    vd.innerHTML = `<b>${v} hrs/week</b> = 100% allocation for this person.`
+      + (v !== 40 ? ` Full-time is 40, so ${v} makes them ${Math.round(v / 40 * 100)}% of a standard week.` : "");
+  };
+  capEl.addEventListener("input", syncCap);
+  syncCap();
+
+  setModalOk("Add joiner", async () => {
+    const payload = {
+      name: $("#jnName").value.trim(),
+      country: $("#jnCountry").value.trim(),
+      home_title: $("#jnTitle").value.trim(),
+      capacity: +capEl.value || 40,
+    };
+    if (!payload.name) { toast("A name is required", true); return false; }
+    try {
+      await api("/api/joiners", { method: "POST", body: JSON.stringify(payload) });
+    } catch (e) {
+      // The server sends an OBJECT for the actionable cases (unknown title,
+      // duplicate person). Show it usefully rather than "[object Object]".
+      let d = null;
+      try { d = JSON.parse(e.message); } catch (_) {}
+      if (d && d.code === "unknown_title") {
+        showModalHTML("That title is not on the rate card",
+          `<div class="wb-verdict bad">${esc(d.message)}</div>
+           <div class="muted-note" style="margin-top:8px">Titles currently on the card:</div>
+           <div class="jn-titles">${(d.known_titles || []).map((t) => `<span class="jn-tag">${esc(t)}</span>`).join("")}</div>`);
+        return false;
+      }
+      if (d && d.code === "duplicate_person") {
+        showModalHTML("Already on the roster", `<div class="wb-verdict bad">${esc(d.message)}</div>`);
+        return false;
+      }
+      toast(e.message || "Could not add the joiner", true);
+      return false;
+    }
+    toast(`${payload.name} added`);
+    await loadWorkbench();
+    return true;
+  });
+}
+
+function bindPeopleAndOt() {
+  // Bind every entry point: admins find it on Team & Access (People toolbar), PMs
+  // find it on their week sheet. The SERVER decides who may actually add one.
+  $$(".js-add-joiner").forEach((b) => b.addEventListener("click", () => openJoinerModal()));
   const add = $("#btnAddPerson");
   if (add) add.addEventListener("click", () => openPersonModal(null));
   const gate = $("#btnOtGate");
