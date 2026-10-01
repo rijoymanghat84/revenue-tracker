@@ -1,0 +1,611 @@
+/* ============================================================================
+   PM WORKBENCH + People + OT approvals  (feature: PM access, 2026-10-01)
+   ----------------------------------------------------------------------------
+   Built to the owner's spec:
+     * one master People list; a PM picks a person, never types a name
+     * assign a % of weekly capacity over the project's start/end dates
+     * 100% WEEKLY HARD BLOCK — the save is refused and the refusal names the
+       clashing week and the competing project
+     * restricted titles, with a mandatory reason when it isn't the home title
+     * the load rail shows every person's booked % BEFORE you assign
+   The rail and the server validator both read person_week_load, so they cannot
+   disagree; the client verdict here is a courtesy preview, and the server is
+   always the final authority (it re-validates on save).
+   ========================================================================== */
+
+/* Renders an HTML body (showModal() above is text-only) and installs the OK
+   handler through app.js's single-handler contract. */
+function showModalHTML(title, htmlBody) {
+  $("#modalTitle").textContent = title;
+  $("#modalBody").innerHTML = htmlBody;
+  $("#modal").classList.remove("hidden");
+}
+
+let WB = {
+  projects: [],          // /api/my-projects
+  people: [],            // /api/people
+  load: [],              // /api/pm/load -> people with `weeks`
+  weekLabels: [],
+  selKey: null,          // "client||project" of the selected project
+  filter: "",
+  loadFilter: "",
+};
+const wbKey = (cl, pr) => `${cl}||${pr}`;
+
+/* ---------------- load the workbench ---------------- */
+async function loadWorkbench() {
+  const [proj, people, load] = await Promise.all([
+    api("/api/my-projects"), api("/api/people"), api("/api/pm/load"),
+  ]);
+  WB.projects = proj.projects || [];
+  WB.people = people.people || [];
+  WB.load = load.people || [];
+  WB.weekLabels = load.week_labels || [];
+  if (!WB.selKey && WB.projects.length) {
+    WB.selKey = wbKey(WB.projects[0].client, WB.projects[0].project);
+  }
+  renderWorkbench();
+}
+
+function wbSel() {
+  return WB.projects.find((p) => wbKey(p.client, p.project) === WB.selKey) || null;
+}
+
+function renderWorkbench() {
+  renderWbProjects();
+  renderWbTeam();
+  renderWbLoad();
+}
+
+/* ---------------- left: owned projects ---------------- */
+function renderWbProjects() {
+  const box = $("#wbProjects");
+  if (!box) return;
+  const f = WB.filter.trim().toLowerCase();
+  const list = WB.projects.filter((p) =>
+    !f || `${p.client} ${p.project}`.toLowerCase().includes(f));
+  if (!list.length) {
+    box.innerHTML = `<div class="wb-empty">No projects match.</div>`;
+    return;
+  }
+  box.innerHTML = list.map((p) => {
+    const on = wbKey(p.client, p.project) === WB.selKey;
+    // Count this project's people who are over 100% somewhere — a PM should see
+    // the problem on the project card, not have to hunt for it in the rail.
+    const over = (p.team || []).filter((t) => {
+      const l = WB.load.find((x) => x.id === t.person_id);
+      return l && l.peak_pct > 100;
+    }).length;
+    return `<div class="wb-pitem ${on ? "on" : ""}" data-k="${esc(wbKey(p.client, p.project))}">
+      <div class="cl">${esc(p.client || "—")}</div>
+      <div class="pj">${esc(p.project)}</div>
+      <div class="mt">
+        <span>${p.people} ${p.people === 1 ? "person" : "people"}</span>
+        <span>${fmtH(p.booked_hours)} h</span>
+        ${over ? `<span class="over">${over} over capacity</span>` : ""}
+      </div>
+    </div>`;
+  }).join("");
+  $$("#wbProjects .wb-pitem").forEach((el) => el.addEventListener("click", () => {
+    WB.selKey = el.dataset.k;
+    renderWorkbench();
+  }));
+}
+
+const fmtH = (v) => (v == null ? "—" : Number(v).toLocaleString(undefined, { maximumFractionDigits: 1 }));
+
+/* ---------------- right: the selected project's team ---------------- */
+function renderWbTeam() {
+  const p = wbSel();
+  const head = $("#wbTeamHead"), body = $("#wbTeamBody");
+  if (!head || !body) return;
+  const addBtn = $("#btnWbAdd");
+  if (!p) {
+    head.innerHTML = ""; body.innerHTML = "";
+    if (addBtn) addBtn.disabled = true;
+    $("#wbHead").innerHTML = `<span class="dot off"></span>Pick a project on the left.`;
+    return;
+  }
+  if (addBtn) addBtn.disabled = false;
+  const window_ = [p.start_date, p.end_date].filter(Boolean).join(" → ") || "full year";
+  $("#wbHead").innerHTML = `<span class="dot on"></span><b>${esc(p.client)} · ${esc(p.project)}</b>
+    — ${p.people} ${p.people === 1 ? "person" : "people"}, ${fmtH(p.booked_hours)} h booked. Dates: ${esc(window_)}.`;
+
+  head.innerHTML = `<tr>
+    <th>Person</th><th>Title</th><th class="num">Allocation</th>
+    <th>Start</th><th>End</th><th class="num">Weekly hrs</th>
+    <th>Load (all projects)</th><th>Status</th><th></th>
+  </tr>`;
+  if (!p.team.length) {
+    body.innerHTML = `<tr><td colspan="9"><div class="wb-empty">Nobody on this project yet. Use <b>+ Add team member</b>.</div></td></tr>`;
+    return;
+  }
+  body.innerHTML = p.team.map((t) => {
+    const l = WB.load.find((x) => x.id === t.person_id);
+    const peak = l ? l.peak_pct : null;
+    const cap = t.capacity || 40;
+    const pct = t.allocation_pct;
+    const weekly = pct == null ? "—" : Math.round(pct / 100 * cap * 10) / 10;
+    const status = peak == null ? `<span class="pill">no load data</span>`
+      : peak > 100 ? `<span class="pill wb-pill-over">Over ${peak}%</span>`
+      : peak >= 80 ? `<span class="pill wb-pill-ok">Healthy ${peak}%</span>`
+      : peak >= 50 ? `<span class="pill wb-pill-warn">${peak}%</span>`
+      : `<span class="pill wb-pill-free">${peak}%</span>`;
+    const exc = (t.title_exception || "").trim();
+    return `<tr data-rid="${t.id}" data-pid="${t.person_id}">
+      <td><b>${esc(t.name)}</b>${exc ? `<div class="muted-note">⚑ ${esc(exc)}</div>` : ""}</td>
+      <td>${esc(t.role || "—")}</td>
+      <td class="num">${pct == null ? "—" : esc(pct) + "%"}</td>
+      <td>${esc(t.start_date || "—")}</td>
+      <td>${esc(t.end_date || "—")}</td>
+      <td class="num">${weekly}</td>
+      <td>${peak == null ? "—" : loadBarHTML(peak)}</td>
+      <td>${status}</td>
+      <td class="wb-rowactions">
+        <button class="btn mini" data-act="edit">Edit</button>
+        <button class="btn mini" data-act="del">Remove</button>
+      </td>
+    </tr>`;
+  }).join("");
+  $$("#wbTeamBody tr").forEach((tr) => {
+    const rid = +tr.dataset.rid, pid = +tr.dataset.pid;
+    tr.querySelectorAll("button[data-act]").forEach((b) => b.addEventListener("click", async () => {
+      if (b.dataset.act === "edit") return openAssignModal(p, pid, rid);
+      const t = p.team.find((x) => x.id === rid);
+      if (!confirm(`Remove ${t.name} from ${p.client} · ${p.project}?\n\nThis deletes their planned and actual hours on this project.`)) return;
+      try {
+        await api(`/api/assignments/${rid}`, { method: "DELETE" });
+        toast(`${t.name} removed from ${p.project}`);
+        await loadWorkbench();
+      } catch (e) { toast(e.message || "Remove failed", true); }
+    }));
+  });
+}
+
+function loadBarHTML(pct) {
+  const w = Math.min(pct, 100);
+  const cls = pct > 100 ? "hot" : pct >= 50 ? "warn" : "booked";
+  return `<div class="bar" title="${pct}% of capacity"><i class="${cls}" style="width:${w}%"></i></div>`;
+}
+
+/* ---------------- the load rail ---------------- */
+function renderWbLoad() {
+  const box = $("#wbLoad");
+  if (!box) return;
+  const f = WB.loadFilter.trim().toLowerCase();
+  let list = WB.load.filter((x) => !f || x.name.toLowerCase().includes(f));
+  // Busiest first — the people who can't take work are the ones you must know about.
+  list = list.slice().sort((a, b) => (b.peak_pct - a.peak_pct) || a.name.localeCompare(b.name));
+  if (!list.length) { box.innerHTML = `<div class="wb-empty">No people match.</div>`; return; }
+  box.innerHTML = list.map((x) => {
+    const pill = x.peak_pct > 100 ? `<span class="pill wb-pill-over">Over — ${x.peak_pct}% (${esc(x.peak_week)})</span>`
+      : x.peak_pct >= 80 ? `<span class="pill wb-pill-ok">${x.peak_pct}%</span>`
+      : x.peak_pct >= 1 ? `<span class="pill wb-pill-warn">${x.peak_pct}%</span>`
+      : `<span class="pill wb-pill-free">bench</span>`;
+    const projs = (x.projects || []).length
+      ? x.projects.map(esc).join(" + ")
+      : "no project work booked";
+    return `<div class="wb-load" data-pid="${x.id}">
+      <div class="h">
+        <div><b>${esc(x.name)}</b> <span class="sub">${esc(x.home_title || "—")}</span></div>
+        <div>${pill} <button class="btn mini" data-act="view">Assign…</button></div>
+      </div>
+      <div class="sub">${projs}</div>
+      <div class="wb-strip">${(x.weeks || []).map((v) => {
+        const cls = v > 100 ? "hot" : v >= 50 ? "warn" : v > 0 ? "booked" : "";
+        return `<i class="${cls}" title="${v}%"></i>`;
+      }).join("")}</div>
+    </div>`;
+  }).join("");
+  $$("#wbLoad .wb-load button[data-act=view]").forEach((b) => b.addEventListener("click", () => {
+    const pid = +b.closest(".wb-load").dataset.pid;
+    openAssignModal(wbSel(), pid, null);
+  }));
+}
+
+/* ---------------- assignment dialog ---------------- */
+let wbCheckTimer = null;
+
+function approvedTitles(pid) {
+  const p = WB.people.find((x) => x.id === pid);
+  if (!p) return [];
+  const out = (p.titles || []).slice();
+  if (p.home_title && !out.includes(p.home_title)) out.unshift(p.home_title);
+  return out;
+}
+
+function openAssignModal(project, pid, rid) {
+  if (!project) { toast("Pick a project first", true); return; }
+  const editing = rid != null;
+  const team = project.team || [];
+  const alreadyIds = team.filter((t) => t.id !== rid).map((t) => t.person_id);
+  // On create, only offer people not already on this project — the server
+  // refuses duplicates anyway, but there is no reason to let the PM pick one.
+  const choices = WB.people.filter((p) =>
+    (editing ? true : !alreadyIds.includes(p.id)) &&
+    !(p.active === 0));
+  if (!choices.length) {
+    showModalHTML("Add team member",
+      `<p class="muted-note">Nobody left to add — everyone in the People list is already on this project.</p>`);
+    return;
+  }
+  const cur = editing ? team.find((t) => t.id === rid) : null;
+  const selPid = cur ? cur.person_id : pid || choices[0].id;
+  const p = WB.people.find((x) => x.id === selPid) || choices[0];
+
+  const body = `
+    <div class="assign-grid">
+      <div>
+        <label class="f">Person</label>
+        <select id="wbPerson">
+          ${choices.map((x) => `<option value="${x.id}" ${x.id === selPid ? "selected" : ""}>
+            ${esc(x.name)} — ${esc(x.home_title || "no title")} — ${esc(peakLabel(x.id))}</option>`).join("")}
+        </select>
+      </div>
+      <div>
+        <label class="f">Title <span class="muted-note">(approved titles only)</span></label>
+        <select id="wbTitle"></select>
+      </div>
+    </div>
+    <div id="wbExcWrap" class="hidden">
+      <label class="f">Why a different title? <span style="color:var(--red)">*required</span></label>
+      <textarea id="wbExc" placeholder="e.g. covering BA work on this engagement while the home title is Developer"></textarea>
+      <div class="muted-note" style="margin-top:5px">the owner is flagged whenever the booked title differs from the home title.</div>
+    </div>
+    <div>
+      <label class="f">Allocation — % of their weekly capacity</label>
+      <div class="wb-slide">
+        <input type="range" id="wbPct" min="0" max="100" step="5" value="${cur && cur.allocation_pct != null ? cur.allocation_pct : 50}">
+        <span class="wb-pctval" id="wbPctVal">50%</span>
+      </div>
+      <div class="wb-chips" id="wbChips">
+        ${[25, 50, 75, 100].map((v) => `<div class="wb-chip" data-v="${v}">${v}%</div>`).join("")}
+      </div>
+    </div>
+    <div class="assign-grid">
+      <div><label class="f">Start date</label><input type="date" id="wbStart" value="${cur ? esc(cur.start_date || "") : ""}"></div>
+      <div><label class="f">End date</label><input type="date" id="wbEnd" value="${cur ? esc(cur.end_date || "") : ""}"></div>
+    </div>
+    <div class="wb-verdict ok" id="wbVerdict">Checking…</div>
+    <div class="muted-note">Leave the dates blank to spread the allocation across the whole year. The app fills the weekly grid; you can fine-tune individual weeks afterwards on Planned.</div>
+  `;
+  showModalHTML(editing ? "Edit assignment" : `Add team member — ${project.client} · ${project.project}`, body);
+
+  const $p = $("#wbPerson");
+  function fillTitles() {
+    const pidv = +$p.value;
+    const list = approvedTitles(pidv);
+    const home = (WB.people.find((x) => x.id === pidv) || {}).home_title || "";
+    $("#wbTitle").innerHTML = list.length
+      ? list.map((t) => `<option value="${esc(t)}" ${t === home ? "selected" : ""}>${esc(t)}${t === home ? " (home)" : ""}</option>`).join("")
+      : `<option value="">— no approved title —</option>`;
+    syncException();
+  }
+  function syncException() {
+    const pidv = +$p.value;
+    const home = (WB.people.find((x) => x.id === pidv) || {}).home_title || "";
+    const ttl = $("#wbTitle").value;
+    const diff = !home || (ttl && ttl !== home);
+    $("#wbExcWrap").classList.toggle("hidden", !diff);
+  }
+  function syncChips() {
+    const v = +$("#wbPct").value;
+    $("#wbPctVal").textContent = v + "%";
+    $$("#wbChips .wb-chip").forEach((c) => c.classList.toggle("on", +c.dataset.v === v));
+  }
+  function check() {
+    clearTimeout(wbCheckTimer);
+    wbCheckTimer = setTimeout(async () => {
+      const pidv = +$p.value;
+      const q = new URLSearchParams({
+        person_id: pidv, allocation_pct: $("#wbPct").value,
+        start_date: $("#wbStart").value || "", end_date: $("#wbEnd").value || "",
+      });
+      if (editing) q.set("exclude_resource_id", rid);
+      try {
+        const v = await api(`/api/assignment/check?${q.toString()}`);
+        renderVerdict(v, $("#wbTitle").value);
+      } catch (e) {
+        $("#wbVerdict").className = "wb-verdict bad";
+        $("#wbVerdict").textContent = e.message || "Could not check allocation.";
+      }
+    }, 140);
+  }
+  function renderVerdict(v, ttl) {
+    const el = $("#wbVerdict");
+    const cap = (v.person && v.person.capacity) || 40;
+    const pct = +$("#wbPct").value;
+    const wk = Math.round(pct / 100 * cap * 10) / 10;
+    const name = (v.person && v.person.name) || "This person";
+    const titleNote = ttl && v.person && ttl !== (WB.people.find((x) => x.id === v.person.id) || {}).home_title
+      ? `<br>Booking as <b>${esc(ttl)}</b>.` : "";
+    if (v.ok) {
+      el.className = "wb-verdict ok";
+      el.innerHTML = `<b>OK — no conflict.</b> ${esc(name)} would be at
+        <b>${wk} h/week (${pct}%)</b> across ${v.weeks_in_window} week(s).${titleNote}`;
+    } else {
+      el.className = "wb-verdict bad";
+      const c = (v.conflicts || [])[0] || {};
+      const others = (c.existing || []).slice(0, 3).map(esc).join(", ") || "existing assignments";
+      const more = v.conflict_count > (v.conflicts || []).length
+        ? `<br>…and ${v.conflict_count - v.conflicts.length} more week(s).` : "";
+      el.innerHTML = `<b>⛔ Cannot assign ${esc(name)} at ${pct}%.</b><br>
+        This exceeds 100% of capacity in <b>${v.conflict_count} week(s)</b>.<br>
+        First clash: <b>${esc(c.label || "?")}</b> would reach <b>${c.total_pct}%</b>
+        (${c.existing_pct}% already booked on ${others}).${more}
+        <ul>
+          <li>Lower the allocation to <b>${Math.max(0, Math.round(100 - c.existing_pct))}%</b> or less, or</li>
+          <li>shorten the date range to a window they're free in.</li>
+        </ul>${titleNote}`;
+    }
+    const ok = v.ok;
+    $("#modalOk").disabled = !ok;
+    $("#modalOk").style.opacity = ok ? "" : ".45";
+  }
+
+  $p.addEventListener("change", () => { fillTitles(); check(); });
+  $("#wbTitle").addEventListener("change", () => { syncException(); check(); });
+  $("#wbPct").addEventListener("input", () => { syncChips(); check(); });
+  $("#wbStart").addEventListener("change", check);
+  $("#wbEnd").addEventListener("change", check);
+  $$("#wbChips .wb-chip").forEach((c) => c.addEventListener("click", () => {
+    $("#wbPct").value = c.dataset.v; syncChips(); check();
+  }));
+
+  // The modal's OK button performs the save; closeModal() clears the handler.
+  const okBtn = $("#modalOk");
+  setModalOk(async () => {
+    const pidv = +$p.value;
+    const payload = {
+      person_id: pidv, client: project.client, project: project.project,
+      title: $("#wbTitle").value, allocation_pct: +$("#wbPct").value,
+      start_date: $("#wbStart").value || "", end_date: $("#wbEnd").value || "",
+      title_exception: ($("#wbExc") && $("#wbExc").value) || "",
+    };
+    okBtn.disabled = true;
+    try {
+      if (editing) await api(`/api/assignments/${rid}`, { method: "PUT", body: JSON.stringify(payload) });
+      else await api("/api/assignments", { method: "POST", body: JSON.stringify(payload) });
+      closeModal();
+      toast(editing ? "Assignment updated" : "Team member added");
+      await loadWorkbench();
+    } catch (e) {
+      // The server is the authority: surface its exact refusal in the verdict.
+      $("#wbVerdict").className = "wb-verdict bad";
+      $("#wbVerdict").innerHTML = `<b>⛔ Refused by the server.</b><br>${esc(e.message || "Save failed")}`;
+      toast(e.message || "Save failed", true);
+    } finally {
+      okBtn.disabled = false;
+    }
+  });
+
+  fillTitles(); syncChips(); check();
+}
+
+function peakLabel(pid) {
+  const l = WB.load.find((x) => x.id === pid);
+  if (!l) return "load unknown";
+  if (l.peak_pct > 100) return `over capacity (${l.peak_pct}%)`;
+  if (l.peak_pct >= 80) return `${l.peak_pct}% booked`;
+  if (l.peak_pct >= 1) return `${l.peak_pct}% booked`;
+  return "free";
+}
+
+function bindWorkbench() {
+  const f = $("#wbFilter");
+  if (f) f.addEventListener("input", () => { WB.filter = f.value; renderWbProjects(); });
+  const lf = $("#wbLoadFilter");
+  if (lf) lf.addEventListener("input", () => { WB.loadFilter = lf.value; renderWbLoad(); });
+  const add = $("#btnWbAdd");
+  if (add) add.addEventListener("click", () => openAssignModal(wbSel(), null, null));
+}
+
+/* ============================================================================
+   People page (admin) — the master list, approved titles, capacity, merging
+   ========================================================================== */
+async function loadPeople() {
+  const d = await api("/api/people");
+  WB.people = d.people || [];
+  renderPeople();
+}
+
+function renderPeople() {
+  const head = $("#peopleHead"), body = $("#peopleBody");
+  if (!head || !body) return;
+  head.innerHTML = `<tr>
+    <th>Person</th><th>Home title</th><th>Approved titles</th>
+    <th class="num">Capacity</th><th class="num">Projects</th><th>Load</th><th>Status</th><th></th>
+  </tr>`;
+  if (!WB.people.length) {
+    body.innerHTML = `<tr><td colspan="8"><div class="wb-empty">No people yet.</div></td></tr>`;
+    return;
+  }
+  const sorted = WB.people.slice().sort((a, b) => a.name.localeCompare(b.name));
+  body.innerHTML = sorted.map((p) => {
+    const l = WB.load.find((x) => x.id === p.id);
+    const peak = l ? l.peak_pct : null;
+    const status = p.active === 0 ? `<span class="pill">inactive</span>`
+      : peak == null ? `<span class="pill">—</span>`
+      : peak > 100 ? `<span class="pill wb-pill-over">over ${peak}%</span>`
+      : peak >= 80 ? `<span class="pill wb-pill-ok">${peak}%</span>`
+      : `<span class="pill wb-pill-warn">${peak}%</span>`;
+    const titles = (p.titles || []).length
+      ? p.titles.map((t) => esc(t)).join("<br>")
+      : `<span class="muted-note">none</span>`;
+    return `<tr data-pid="${p.id}">
+      <td><b>${esc(p.name)}</b>${p.country ? `<div class="muted-note">${esc(p.country)}</div>` : ""}</td>
+      <td>${esc(p.home_title || "—")}</td>
+      <td>${titles}</td>
+      <td class="num">${fmtH(p.capacity)}</td>
+      <td class="num">${p.project_count}</td>
+      <td>${peak == null ? "—" : loadBarHTML(peak)}</td>
+      <td>${status}</td>
+      <td class="wb-rowactions">
+        <button class="btn mini" data-act="edit">Edit</button>
+        <button class="btn mini" data-act="merge">Merge</button>
+        <button class="btn mini" data-act="del">Delete</button>
+      </td>
+    </tr>`;
+  }).join("");
+  $$("#peopleBody tr").forEach((tr) => {
+    const pid = +tr.dataset.pid;
+    const p = WB.people.find((x) => x.id === pid);
+    tr.querySelectorAll("button[data-act]").forEach((b) => b.addEventListener("click", async () => {
+      if (b.dataset.act === "edit") return openPersonModal(p);
+      if (b.dataset.act === "merge") return openMergeModal(p);
+      if (!confirm(`Delete ${p.name}? Only possible when they hold no project assignments.`)) return;
+      try {
+        await api(`/api/people/${pid}`, { method: "DELETE" });
+        toast(`${p.name} deleted`);
+        await loadPeople(); await refreshLoadOnly();
+      } catch (e) { toast(e.message || "Delete failed", true); }
+    }));
+  });
+}
+
+async function refreshLoadOnly() {
+  try { WB.load = (await api("/api/pm/load")).people || []; renderWbLoad(); } catch (_) {}
+}
+
+function openPersonModal(p) {
+  const editing = !!p;
+  const titles = (WB.people || []).length ? null : null;
+  const body = `
+    <div class="assign-grid">
+      <div><label class="f">Name</label><input id="pName" value="${editing ? esc(p.name) : ""}" placeholder="Full name as it should appear"></div>
+      <div><label class="f">Country</label><input id="pCountry" value="${editing ? esc(p.country || "") : ""}" placeholder="optional"></div>
+    </div>
+    <div class="assign-grid">
+      <div><label class="f">Home title</label>
+        <input id="pHome" list="titleList" value="${editing ? esc(p.home_title || "") : ""}" placeholder="e.g. Platform Developer">
+        <datalist id="titleList">${(state.pricing || []).map((t) => `<option value="${esc(t.title)}"></option>`).join("")}</datalist>
+      </div>
+      <div><label class="f">Weekly capacity (hrs)</label><input type="number" id="pCap" value="${editing ? fmtH(p.capacity) : 40}" min="1" max="80"></div>
+    </div>
+    <div>
+      <label class="f">Approved titles <span class="muted-note">(comma-separated — PMs may book only these)</span></label>
+      <input id="pTitles" value="${editing ? esc((p.titles || []).join(", ")) : ""}" placeholder="home title is added automatically">
+      <div class="muted-note" style="margin-top:5px">A PM can pick any of these per project. Booking a non-home title forces a comment and is flagged to you.</div>
+    </div>
+    <div class="assign-grid">
+      <div><label class="f">Status</label>
+        <select id="pActive"><option value="1" ${!editing || p.active !== 0 ? "selected" : ""}>Active</option>
+        <option value="0" ${editing && p.active === 0 ? "selected" : ""}>Inactive</option></select>
+      </div>
+      <div><label class="f">Notes</label><input id="pNotes" value="${editing ? esc(p.notes || "") : ""}" placeholder="optional"></div>
+    </div>
+    <div class="muted-note">Capacity drives the 100% rule and utilization: 40 hrs/week = 100%.</div>
+  `;
+  showModalHTML(editing ? `Edit — ${p.name}` : "Add person", body);
+  const okBtn = $("#modalOk");
+  setModalOk(async () => {
+    const payload = {
+      name: $("#pName").value, country: $("#pCountry").value,
+      home_title: $("#pHome").value, capacity: +$("#pCap").value || 40,
+      active: +$("#pActive").value, notes: $("#pNotes").value,
+      titles: $("#pTitles").value.split(",").map((s) => s.trim()).filter(Boolean),
+    };
+    if (!payload.name.trim()) { toast("Name is required", true); return; }
+    okBtn.disabled = true;
+    try {
+      if (editing) await api(`/api/people/${p.id}`, { method: "PUT", body: JSON.stringify(payload) });
+      else await api("/api/people", { method: "POST", body: JSON.stringify(payload) });
+      closeModal();
+      toast(editing ? "Person updated" : "Person added");
+      await loadPeople(); await refreshLoadOnly();
+    } catch (e) { toast(e.message || "Save failed", true); }
+    finally { okBtn.disabled = false; }
+  });
+}
+
+function openMergeModal(p) {
+  const others = WB.people.filter((x) => x.id !== p.id);
+  if (!others.length) { toast("Nobody to merge with", true); return; }
+  const body = `
+    <p class="muted-note">Use this when the same human was entered under two spellings (e.g. <b>Liam</b> and <b>Liam Foster</b>).
+    All project assignments move onto <b>${esc(p.name)}</b>, so the 100% rule sees one person instead of two.</p>
+    <label class="f">Merge these INTO ${esc(p.name)}</label>
+    <select id="mSrc">${others.map((x) => `<option value="${x.id}">${esc(x.name)} (${x.project_count} project(s))</option>`).join("")}</select>
+    <div class="muted-note" style="margin-top:8px">Refused automatically if the two records are both on the same project — that is a real double-booking and needs your decision.</div>
+  `;
+  showModalHTML(`Merge into ${p.name}`, body);
+  const okBtn = $("#modalOk");
+  setModalOk(async () => {
+    const src = +$("#mSrc").value;
+    okBtn.disabled = true;
+    try {
+      await api(`/api/people/${p.id}/merge`, { method: "POST", body: JSON.stringify({ merge_from: src }) });
+      closeModal();
+      toast("Merged");
+      await loadPeople(); await refreshLoadOnly();
+      if (state.view === "workbench") await loadWorkbench();
+    } catch (e) { toast(e.message || "Merge failed", true); }
+    finally { okBtn.disabled = false; }
+  });
+}
+
+/* ============================================================================
+   OT approvals (admin) — the gate that keeps billable OT out of the Dashboard
+   ========================================================================== */
+async function loadOt() {
+  let d;
+  try { d = await api("/api/ot/pending"); } catch (e) {
+    $("#otHead").innerHTML = ""; $("#otBody").innerHTML = "";
+    $("#otNote").innerHTML = `<span class="dot off"></span>OT approvals unavailable: ${esc(e.message || "")}`;
+    return;
+  }
+  const gate = $("#btnOtGate");
+  gate.textContent = `Gate: ${d.gate_enabled ? "on" : "off"}`;
+  gate.title = d.gate_enabled
+    ? "Billable OT waits for your approval before it reaches the Dashboard."
+    : "Gate is OFF — billable OT reaches the Dashboard immediately.";
+  const pend = d.pending || [], appd = d.approved || [];
+  $("#otNote").innerHTML = `<span class="dot ${pend.length ? "on" : "off"}"></span>
+    <b>Billable OT approvals</b> — ${pend.length} awaiting you${pend.length ? ` ($${d.pending_revenue.toLocaleString()} revenue held)` : ""}.`;
+  $("#otHead").innerHTML = `<tr>
+    <th>Person</th><th>Project</th><th>Week</th><th class="num">OT hrs</th>
+    <th class="num">OT rate</th><th>Reason</th><th>PM</th><th>Decision</th>
+  </tr>`;
+  if (!pend.length && !appd.length) {
+    $("#otBody").innerHTML = `<tr><td colspan="8"><div class="wb-empty">No billable OT recorded yet.</div></td></tr>`;
+    return;
+  }
+  const rowHTML = (x, approved) => `<tr data-nid="${x.id}">
+    <td><b>${esc(x.person)}</b><div class="muted-note">${esc(x.title || "")}</div></td>
+    <td>${esc(x.client)} · ${esc(x.project)}</td>
+    <td>${esc(x.week_label)}</td>
+    <td class="num">${fmtH(x.ot_hours)}</td>
+    <td class="num">${money(x.ot_revenue / (x.ot_hours || 1), "USD")}${x.ot_multiplier !== 1 ? ` <span class="muted-note">×${x.ot_multiplier}</span>` : ""}</td>
+    <td>${esc(x.reason || "—")}</td>
+    <td>${esc(x.pm || "—")}</td>
+    <td>${approved
+      ? `<span class="pill wb-pill-ok">approved</span> <button class="btn mini" data-dec="0">Revoke</button>`
+      : `<span class="pill wb-pill-over">pending</span> <button class="btn mini" data-dec="1">Approve</button>`}</td>
+  </tr>`;
+  $("#otBody").innerHTML = pend.map((x) => rowHTML(x, false)).join("")
+    + appd.slice(0, 12).map((x) => rowHTML(x, true)).join("");
+  $$("#otBody button[data-dec]").forEach((b) => b.addEventListener("click", async () => {
+    const nid = +b.closest("tr").dataset.nid;
+    const approve = b.dataset.dec === "1";
+    b.disabled = true;
+    try {
+      await api(`/api/ot/${nid}/decision`, { method: "POST", body: JSON.stringify({ approve }) });
+      toast(approve ? "OT approved — released to the Dashboard" : "OT approval revoked");
+      await loadOt();
+    } catch (e) { toast(e.message || "Failed", true); b.disabled = false; }
+  }));
+}
+
+async function bindPeopleAndOt() {
+  const add = $("#btnAddPerson");
+  if (add) add.addEventListener("click", () => openPersonModal(null));
+  const gate = $("#btnOtGate");
+  if (gate) gate.addEventListener("click", async () => {
+    const on = gate.textContent.includes("on");
+    try {
+      await api(`/api/ot/gate?enabled=${on ? 0 : 1}`, { method: "POST" });
+      toast(`OT approval gate ${on ? "disabled" : "enabled"}`);
+      await loadOt();
+    } catch (e) { toast(e.message || "Failed", true); }
+  });
+}

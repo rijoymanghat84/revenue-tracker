@@ -10,7 +10,7 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icons/icon-192.png">
 <title>Revenue Recon</title>
-<link rel="stylesheet" href="/styles.css?v=68">
+<link rel="stylesheet" href="/styles.css?v=69">
 </head>
 <body>
 <div class="bg-glow"></div>
@@ -68,6 +68,7 @@
       <div class="tabs" id="tabs">
         <button class="tab active" data-tab="dash" title="Dashboard"><span class="tab-ico">▤</span><span class="tab-txt">Dashboard</span></button>
         <button class="tab" data-tab="planned" title="Planned"><span class="tab-ico">✎</span><span class="tab-txt">Planned</span></button>
+        <button class="tab pm-only hidden" data-tab="workbench" title="My Projects"><span class="tab-ico">▦</span><span class="tab-txt">My Projects</span></button>
         <button class="tab" data-tab="actuals" title="Actuals"><span class="tab-ico">✓</span><span class="tab-txt">Actuals</span></button>
         <!-- 2026-10-01: the old "Pricing" tab was doing six unrelated jobs in one
              long scroll. It is now split by PURPOSE:
@@ -221,6 +222,49 @@
   </section>
 
   <!-- ============ ACTUALS (PM reconciliation) ============ -->
+  <!-- ============ PM WORKBENCH (Variant B, 2026-10-01) ====================
+       Master-detail: owned projects on the left, the project's team on the
+       right, and the week-by-week LOAD RAIL that shows every person's booked %
+       BEFORE you try to assign — so a 100% clash is prevented, not reported.
+       PM-only view; admins reach it through Team & Access → People. -->
+  <section id="workbenchView" class="view hidden">
+    <div class="wb-grid">
+      <div class="wb-master glass">
+        <div class="wb-master-head">
+          <span class="wb-eyebrow">Projects assigned to you</span>
+          <input type="search" id="wbFilter" placeholder="Filter projects…" class="search">
+        </div>
+        <div class="wb-plist" id="wbProjects"></div>
+      </div>
+      <div class="wb-detail">
+        <div class="toolbar glass">
+          <div class="sheet-note" id="wbHead"><span class="dot on"></span>Pick a project on the left.</div>
+          <div class="toolbar-right">
+            <button class="btn primary" id="btnWbAdd" disabled>+ Add team member</button>
+          </div>
+        </div>
+        <div class="table-wrap glass" id="wbTeamWrap">
+          <table id="wbTeamTable">
+            <thead id="wbTeamHead"></thead>
+            <tbody id="wbTeamBody"></tbody>
+          </table>
+        </div>
+        <div class="toolbar glass">
+          <div class="sheet-note"><span class="dot on"></span><b>Load across all projects</b> — booked % of each person's weekly capacity. Red = over 100%; those people cannot take new work.</div>
+          <input type="search" id="wbLoadFilter" placeholder="Find a person…" class="search">
+        </div>
+        <div class="wb-loadlist" id="wbLoad"></div>
+        <div class="wb-legend">
+          <span><i class="sw booked"></i>Booked</span>
+          <span><i class="sw warn"></i>50–99%</span>
+          <span><i class="sw hot"></i>Over 100%</span>
+          <span><i class="sw free"></i>Free</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ ACTUALS ============ -->
   <section id="actualsView" class="view hidden">
     <div class="toolbar glass">
       <div class="sheet-note" id="actualsNote"><span class="dot on"></span>Record <b>actual</b> hours worked. Compared against planned (Onsite/Offshore). Overage → OT flow; under → comment required.</div>
@@ -281,8 +325,38 @@
 
   <!-- ============ TEAM & ACCESS (PMs + admins + DB security) ============ -->
   <section id="accessView" class="view hidden">
+    <!-- People master list (2026-10-01): the ONE record per human that makes
+         "already assigned" and the 100% rule possible. Admin-only. -->
+    <div class="toolbar glass pm-toolbar" id="peopleToolbar">
+      <div class="sheet-note"><span class="dot on"></span><b>People</b> — every person exists once, with a home title, approved titles and a weekly capacity. PMs pick from this list and can never invent a name or a rate. Merging split records here keeps the 100% rule honest.</div>
+      <div class="toolbar-right">
+        <button class="btn mini" id="btnAddPerson">+ Add Person</button>
+      </div>
+    </div>
+    <div class="table-wrap glass narrow" id="peopleWrap">
+      <table id="peopleTable">
+        <thead id="peopleHead"></thead>
+        <tbody id="peopleBody"></tbody>
+      </table>
+    </div>
+
+    <!-- OT approval queue: billable OT is invisible to the Dashboard until
+         approved here (the gate the owner asked for). -->
+    <div class="toolbar glass pm-toolbar" id="otToolbar">
+      <div class="sheet-note" id="otNote"><span class="dot on"></span><b>Billable OT approvals</b> — a PM can flag OT as billable, but the money only reaches the Dashboard once you approve it here.</div>
+      <div class="toolbar-right">
+        <button class="btn mini" id="btnOtGate">Gate: on</button>
+      </div>
+    </div>
+    <div class="table-wrap glass narrow" id="otWrap">
+      <table id="otTable">
+        <thead id="otHead"></thead>
+        <tbody id="otBody"></tbody>
+      </table>
+    </div>
+
     <!-- PM assignment section -->
-    <div class="toolbar glass pm-toolbar">
+    <div class="toolbar glass pm-toolbar" id="pmToolbar">
       <div class="sheet-note"><span class="dot on"></span><b>Project managers</b> — create a PM and tick the clients/projects they may record actuals for. A PM only ever sees their own projects, and never sees rates.</div>
       <div class="toolbar-right">
         <button class="btn mini" id="btnAddUser">+ Add PM</button>
@@ -310,7 +384,7 @@
     </div>
 
     <!-- DB security (encryption) section -->
-    <div class="toolbar glass pm-toolbar">
+    <div class="toolbar glass pm-toolbar" id="dbSecToolbar">
       <div class="sheet-note"><span class="dot on"></span><b>Database Security</b> — the finance database is encrypted with SQLCipher. Set or change the DB password here (protects the data at rest).</div>
       <div class="toolbar-right">
         <span class="hint" id="dbSecStatus"></span>
@@ -458,7 +532,13 @@
   </div>
 </div>
 
-<script src="/app.js?v=94"></script>
+<!-- workbench.js MUST load before app.js: app.js calls bindWorkbench() at
+     top level, and a classic script cannot see a function from a file that has
+     not executed yet. Getting this order wrong threw a ReferenceError that
+     aborted the REST of app.js — including boot() — so the entire app failed to
+     initialise. -->
+<script src="/workbench.js?v=2"></script>
+<script src="/app.js?v=96"></script>
 <script>
   // PWA: register the service worker (only after load; skip on failure)
   if ("serviceWorker" in navigator) {
