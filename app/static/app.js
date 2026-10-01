@@ -2213,17 +2213,20 @@ function renderAvailability(data) {
              bookedPct, actual: mo.actual_hours || 0 };
   }).filter(Boolean);
 
-  // Most available first — the question is "who can I put on something", so the
-  // bench belongs at the top. Fully-booked people stay listed, at the bottom.
-  rows.sort((a, b) => b.freePct - a.freePct || a.name.localeCompare(b.name));
-
-  const avail = rows.filter((r) => r.freePct >= 25);
-  const full = rows.filter((r) => r.freePct < 25);
-  // "Availability" is a SHORTLIST question — who can I put on something — so the
-  // table lists only people with headroom. The at/over-capacity group is still
-  // COUNTED in the note (and is the thing you cannot book), it just is not the
-  // list Rijoy asked for: "I only need the people who are available".
-  const shown = avail;
+  // Who gets listed (Rijoy, 2026-10-01): "I only need the people who are not
+  // fully booked or overbooked status" — i.e. hide ONLY the people sitting at
+  // exactly 100%. Available (any headroom) AND over-allocated both stay, because
+  // over-allocation is the thing you most need to see when resourcing.
+  // `hasRoom` needs a real hour free, not a rounding crumb: 99.9% booked is full.
+  const isOver = (r) => r.bookedPct > 100;
+  const hasRoom = (r) => r.freePct >= 1 || r.free >= 1;
+  const avail = rows.filter((r) => !isOver(r) && hasRoom(r));
+  const over = rows.filter(isOver);
+  const full = rows.filter((r) => !isOver(r) && !hasRoom(r));   // exactly 100%
+  // Most available first; over-allocated naturally settle at the bottom (they
+  // have 0 free) which is exactly where the problems should sit.
+  const shown = avail.concat(over)
+    .sort((a, b) => b.freePct - a.freePct || a.name.localeCompare(b.name));
   const benchHrs = avail.reduce((s, r) => s + r.free, 0);
 
   // The button carries the headline count, so a click has visible feedback even
@@ -2232,17 +2235,19 @@ function renderAvailability(data) {
   // toggle looked like it did nothing at all.
   const btn = $("#btnToggleAvail");
   if (btn) btn.innerHTML = rows.length
-    ? `☰ Available · <b>${avail.length}</b>`
+    ? `☰ Available · <b>${avail.length}</b>${over.length ? ` <span class="avail-over">+${over.length} over</span>` : ""}`
     : "☰ Available";
 
   // Compute the summary BEFORE the collapsed early-return: it is useful on its
-  // own (the panel header is where the "N hidden at/over capacity" answer lives)
-  // and used to be blank unless the panel happened to be open at render time.
+  // own (the panel header is where the "N hidden" answer lives) and used to be
+  // blank unless the panel happened to be open at render time.
   $("#availTitle").textContent = `Availability — ${name || "current month"}`;
   $("#availNote").innerHTML =
-    `<b>${avail.length}</b> available with <b>${fmt(benchHrs, 0)}h</b> free · ` +
-    `${full.length} hidden at/over capacity. Free = capacity − planned hours. ` +
-    `Freeing someone up? Their capacity lives on <b>Team & Access</b>.`;
+    `<b>${avail.length}</b> available with <b>${fmt(benchHrs, 0)}h</b> free` +
+    (over.length ? ` · <b>${over.length}</b> over-allocated (listed below)` : "") +
+    (full.length ? ` · ${full.length} at exactly 100% (hidden)` : "") +
+    `. Free = capacity − planned hours. ` +
+    `Capacity lives on <b>Team & Access</b>.`;
 
   wrap.classList.toggle("hidden", !state.availOpen);
   if (!state.availOpen) return;
@@ -2266,7 +2271,7 @@ function renderAvailability(data) {
     const label = r.bookedPct > 100 ? "Over-allocated"
                 : r.freePct >= 50 ? "Available"
                 : r.freePct >= 25 ? "Partly free" : "Fully booked";
-    return `<tr>
+    return `<tr${isOver(r) ? ' class="avail-over-row"' : ""}>
       <td class="u-name-td"><div class="u-name">${esc(r.name)}</div></td>
       <td class="u-proj">${esc(r.projects.join(", ") || "—")}</td>
       <td class="u-cell num">${fmt(r.cap, 0)}</td>
@@ -2690,7 +2695,20 @@ document.addEventListener("click", (e) => {
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closeMsPopups();
 });
-window.addEventListener("scroll", closeMsPopups, true);
+/* Close on OUTSIDE scroll/resize only.
+   These were bound with `true` (capture), which fires for scroll events from ANY
+   element — including a scroll INSIDE the popup itself. The option list is taller
+   than its 300px max-height, so the moment the user touched its own scrollbar (or
+   wheeled over it) the popup closed and the list was unreachable. Rijoy hit this
+   on Project: "I cannot scroll down when i try to click the scrollbar the dropdown
+   goes back". Scrolling the page still closes it, because a page scroll targets
+   document/window, not the popup. */
+const scrollClosesPopups = (e) => {
+  const t = e.target;
+  if (t && t.closest && t.closest(".ms-pop")) return;   // scrolling the list itself
+  closeMsPopups();
+};
+window.addEventListener("scroll", scrollClosesPopups, true);
 window.addEventListener("resize", closeMsPopups);
 
 /* ---------------- collapsible rail (feature #13) ----------------
