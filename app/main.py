@@ -997,7 +997,8 @@ def api_state(request: Request):
         resources = _all_resources(conn, weeks)
         pricing = conn.execute(
             "SELECT p.id, p.title, p.rate, p.offshore_rate, p.currency, "
-            "(SELECT COUNT(*) FROM resources r WHERE TRIM(r.role)=p.title) AS used_by "
+            "(SELECT COUNT(DISTINCT TRIM(r.name)) FROM resources r "
+            " WHERE TRIM(r.role)=p.title) AS used_by "
             "FROM pricing p ORDER BY p.sort_order, p.title"
         ).fetchall()
         return {
@@ -1933,20 +1934,40 @@ def api_utilization(request: Request, month: str = ""):
 
 # ---------------- Pricing library ----------------
 def _pricing_dict(row: sqlite3.Row, conn: sqlite3.Connection) -> dict:
+    # Count PEOPLE, not rows (feature #11 follow-up): a person holding this
+    # title on several projects has one resources row per project, so a raw
+    # COUNT(*) showed "8 resource(s)" for 6 people and disagreed with the popup.
+    # COUNT(DISTINCT TRIM(name)) is the same grouping the popup uses.
     used = conn.execute(
-        "SELECT COUNT(*) FROM resources WHERE TRIM(role)=?", (row["title"],)
+        "SELECT COUNT(DISTINCT TRIM(name)) FROM resources WHERE TRIM(role)=?",
+        (row["title"],),
     ).fetchone()[0]
     return dict(row) | {"used_by": used}
 
 
 @app.get("/api/pricing/{pid}/resources")
 def api_pricing_resources(pid: int, request: Request):
-    """Who uses this pricing title, at what rate, on which projects.
+    """Who uses this pricing title, at what rate, and how their time splits.
 
-    Feature #11.1: the 'Used by' count becomes a button that opens a popup with
-    exactly this. Same match the count itself uses (TRIM(role)=title), so the
-    popup can never disagree with the number the user clicked — a popup that
-    lists a different set than the count is worse than no popup at all.
+    Feature #11.1 / #11 follow-up (Rijoy, 2026-09-30):
+      * ONE ROW PER PERSON. A person holding this title on several projects has
+        one `resources` row each, which made the popup repeat the same name and
+        inflated the count (Project manager read "8" for 6 people).
+      * COUNT IS THE NUMBER OF PEOPLE, not rows — and it agrees with the popup
+        exactly, because both group by the same name key.
+      * Projects are COLLAPSED onto one line as "client/project" joined with
+        " / " (e.g. "IMS/Quadient / Doxim/Indy") instead of one row per project.
+      * ALLOCATION column: each person's share of THIS TITLE's total planned
+        hours, as a percent plus the hour split ("54.2% (640/1180h)").
+
+    Allocation is scoped to this title's rows only — "how this person splits
+    across this title's projects", matching the client/project list in the same
+    row. If a person holds two DIFFERENT titles (3 people in the book do:
+    Ritik Kango, Ringo Chan, Prateek Arora), each title's popup shows only that
+    title's slice.
+
+    Matching stays TRIM(role)=title — exactly what the count and the Apply
+    button use — so the three can never disagree.
 
     NOTE: hours are NOT a column on `resources` — they live in `weekly_hours`.
     Reading `hours` from the resources table 500s. Use _all_resources(), which
@@ -1956,7 +1977,8 @@ def api_pricing_resources(pid: int, request: Request):
     conn = get_db()
     try:
         prow = conn.execute(
-            "SELECT id, title, rate, offshore_rate, currency FROM pricing WHERE id=?", (pid,)
+            "SELECT id, title, rate, offshore_rate, currency FROM pricing WHERE id=?",
+            (pid,),
         ).fetchone()
         if not prow:
             raise HTTPException(404, "Pricing title not found")
@@ -1964,37 +1986,74 @@ def api_pricing_resources(pid: int, request: Request):
 
         weeks, _months = _load_layout()
         allres = _all_resources(conn, weeks)
-        matches = [r for r in allres if (r.get("role") or "").strip() == title]
+        matches = [r for r in allres if (r["role"] or "").strip() == title]
+
+        # --- group by person -------------------------------------------------
+        # Exact trimmed name: the same key the Utilization tab groups on. No
+        # case-folding — merging "Sunil" with "sunil" could hide two people.
+        people: dict[str, dict] = {}
+        order: list[str] = []
+        for r in matches:
+            nm = (r["name"] or "").strip() or "—"
+            e = people.get(nm)
+            if e is None:
+                e = people[nm] = {
+                    "name": nm,
+                    "country": (r.get("country") or "").strip() or "—",
+                    # A person's own rates; duplicated rows agree, but keep the
+                    # first so the row is deterministic.
+                    "rate": r.get("rate") or 0.0,
+                    "offshore_rate": r.get("offshore_rate") or 0.0,
+                    "hours": 0.0,
+                    # EVERY (client, project) this person holds on this title,
+                    # in table order and deduped. Accumulating these is the
+                    # whole point of collapsing rows ("IMS/Quadient / Doxim/Indy")
+                    # — keeping only the first row's project silently dropped the
+                    # rest while still summing all the hours.
+                    "pairs": [],
+                }
+                order.append(nm)
+            cl = (r.get("client") or "").strip()
+            pr = (r.get("project") or "").strip()
+            pair = "/".join(x for x in (cl, pr) if x) or "—"
+            if pair not in e["pairs"]:
+                e["pairs"].append(pair)
+            hrs = r.get("hours") or []
+            e["hours"] += sum(h for h in hrs if h)
+
+        total_hours = sum(e["hours"] for e in people.values())
 
         resources = []
-        for r in matches:
-            hrs = r.get("hours") or []
-            total_h = sum(h for h in hrs if h)
-            # The resource's OWN rates, not the pricing library's — the point is
-            # to see what each person is actually on.
-            rr = r.get("rate") or 0.0
-            ro = r.get("offshore_rate") or 0.0
+        for nm in order:
+            e = people[nm]
+            h = e["hours"]
+            pairs = e["pairs"] or ["—"]
+            rr = e["rate"]
             resources.append({
-                "name": r.get("name") or "—",
-                "client": r.get("client") or "—",
-                "project": r.get("project") or "—",
-                "country": r.get("country") or "—",
+                "name": nm,
+                "pairs": pairs,
+                "projects": " / ".join(pairs),
+                "country": e["country"],
                 "rate": round(rr, 2),
-                "offshore_rate": round(ro, 2),
-                "planned_hours": round(total_h, 1),
-                "planned_revenue": round(rr * total_h, 2),
+                "offshore_rate": round(e["offshore_rate"], 2),
+                "planned_hours": round(h, 1),
+                "planned_revenue": round(rr * h, 2),
+                # Allocation within this title (0.0-100.0).
+                "allocation_pct": round(h / total_hours * 100, 1) if total_hours else 0.0,
             })
-        resources.sort(key=lambda x: (-x["planned_revenue"], x["name"].lower()))
+        resources.sort(key=lambda x: (-x["planned_hours"], x["name"].lower()))
+
         return {
             "pricing": {"id": prow["id"], "title": title,
                         "rate": prow["rate"], "offshore_rate": prow["offshore_rate"],
                         "currency": prow["currency"]},
             "resources": resources,
-            "count": len(resources),
+            "count": len(resources),          # people, not rows
+            "rows": len(matches),             # rows behind the number, for parity
+            "total_hours": round(total_hours, 1),
         }
     finally:
         conn.close()
-
 
 @app.get("/api/pricing")
 def api_pricing_list(request: Request):
