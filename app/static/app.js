@@ -20,7 +20,7 @@
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
-const state = { resources: [], weeks: [], months: [], pricing: [], view: "dash", gridEdit: { planned: false }, me: null, globalMonth: "all", utilMonth: "" };
+const state = { resources: [], weeks: [], months: [], pricing: [], view: "dash", gridEdit: { planned: false }, me: null, globalMonth: "all", utilMonth: "", utilMode: "month" };
 
 /* Full admin permission key set — mirrors ADMIN_PERMISSIONS in app/main.py.
    Used only as a defensive fallback when /api/login omits `permissions`. */
@@ -1690,6 +1690,21 @@ $("#btnToggleCap").addEventListener("click", async () => {
 // "Open Utilization →" on the Rate Card tab.
 $("#btnRatesToUtil").addEventListener("click", () => switchView("util"));
 
+/* Granularity toggle for the Utilization board (feature #15b). Month is the
+   at-a-glance read; Week is the drill-in. Purely a re-render — same data, same
+   endpoint — so switching is instant and changes nothing on the server. */
+function setUtilMode(mode) {
+  state.utilMode = mode === "week" ? "week" : "month";
+  $$("#utilModeSeg .seg-btn").forEach((b) => {
+    const on = b.dataset.utilMode === state.utilMode;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+  if (state.view === "util") renderUtilization();
+}
+$$("#utilModeSeg .seg-btn").forEach((b) =>
+  b.addEventListener("click", () => setUtilMode(b.dataset.utilMode)));
+
 /* ---------------- DB security (encryption) ---------------- */
 function renderDbSec() {
   // DB security block → its own `db_security` permission. This is why the
@@ -1919,17 +1934,116 @@ function utilClass(v) {
   return "orange";
 }
 
+/* Utilization renders the same numbers at two granularities (feature #15b):
+     • Month (default) — the year at a glance. Each month is a Planned/Actual
+       column PAIR and the month header SPANS that pair (colspan=2), so the name
+       sits over both of its cells. Before this the month cell carried no colspan
+       while its sub-row carried two cells: the table spanned them anyway, so JAN
+       measured 51px sitting over a 102px pair — the "A" column dangled outside
+       its own month.
+     • Week — the drill-in. Months become bands over their weeks and a week is
+       itself a P/A pair, so the hierarchy reads Month > Week > P|A. This is the
+       "only if needed" view; Month stays the default.
+
+   Both modes are read-only views of the same hours, and both fix a second bug:
+   every util header row had inherited `top: 0`, so on vertical scroll the P/A
+   row landed ON TOP of the month names (measured 30px of overlap). Each row now
+   gets an explicit offset.
+
+   The API is month-only — /api/utilization returns planned_pct/actual_pct per
+   month — so WEEK figures are derived client-side. state.resources carries
+   hours[53] and actual_hours[53] per person-project row, and those are summed per
+   NAME to match the server's per-person aggregation, then divided by capacity.
+   Verified: derived month figures equal the server's to the decimal. */
+function utilWeeklyByName() {
+  const n = (state.weeks || []).length;
+  const map = new Map();
+  for (const r of state.resources || []) {
+    let e = map.get(r.name);
+    if (!e) { e = { planned: new Array(n).fill(0), actual: new Array(n).fill(0) }; map.set(r.name, e); }
+    (r.hours || []).forEach((h, i) => { if (i < n) e.planned[i] += (h || 0); });
+    (r.actual_hours || []).forEach((h, i) => { if (i < n) e.actual[i] += (h || 0); });
+  }
+  return map;
+}
+/* "Jan-02" -> "02": the month is already carried by the band above the week, and
+   the cells are only ~54px wide. */
+function utilWkLabel(w) {
+  const m = String(w || "").match(/(\d+)\s*$/);
+  return m ? m[1] : String(w || "");
+}
+/* Week indices owned by a month, clamped to the weeks we actually have.
+   IMPORTANT: /api/utilization returns `months` as NAME STRINGS, while the
+   {start,end} week mapping lives in state.months (from /api/state). So this
+   resolves the index against state.months — reading mo.start off the string was
+   returning undefined and silently collapsing every month band to zero weeks. */
+function utilWeeksOf(mi) {
+  const all = state.months || [];
+  const mo = all[mi];
+  if (!mo) return [];
+  const last = (state.weeks || []).length - 1;
+  const out = [];
+  for (let i = Math.max(0, mo.start); i <= Math.min(last, mo.end); i++) out.push(i);
+  return out;
+}
+
 function renderUtilization() {
   const m = state.globalMonth === "all" ? "" : state.globalMonth;
   api(`/api/utilization?month=${encodeURIComponent(m)}`).then((data) => {
     const months = data.months;
     const chosen = state.globalMonth;
-    const sub = (lbl, mi) => `<th class="u-sub${typeof mi === "number" && state.globalMonth === months[mi] ? " u-month-active" : ""}"${typeof mi === "number" ? ` data-month-idx="${mi}"` : ""}>${lbl}</th>`;
+    const weekMode = state.utilMode === "week";
+    const cur = state.current || {};
+    // The Month/Week toggle only means something on the full-year board; the
+    // single-month drill-down is already one month.
+    const seg = $("#utilModeSeg");
+    if (seg) seg.classList.toggle("hidden", chosen !== "all");
+    const sub = (lbl, mi) => `<th class="u-sub"${typeof mi === "number" ? ` data-month-idx="${mi}"` : ""}>${lbl}</th>`;
+    const nowMo = (nm) => cur.month && String(nm).toUpperCase() === String(cur.month).toUpperCase();
+    const wmap = weekMode ? utilWeeklyByName() : null;
 
     if (chosen !== "all") {
-      // ---- MONTH-WISE drill-down: one month, per-resource detail ----
+      // ---- ONE MONTH: per-resource detail ----
       const mi = months.indexOf(chosen);
-      let head = `<tr><th class="u-th-name">Resource</th><th>Projects</th><th class="num">Cap/wk</th><th class="num">Planned hrs</th><th class="num">Actual hrs</th><th class="num">Planned %</th><th class="num">Actual %</th></tr>`;
+      const ws = utilWeeksOf(mi);
+
+      if (weekMode && ws.length) {
+        // WEEK drill-down: this month's weeks as P/A pairs + the month total.
+        let head = `<tr class="u-row-month"><th class="u-th-name" rowspan="2">Resource</th><th rowspan="2">Projects</th><th rowspan="2" class="num">Cap/wk</th>`;
+        head += ws.map((i) => `<th class="num u-wk-head" colspan="2" data-month-idx="${mi}" title="${esc(chosen)} · week of ${esc(state.weeks[i])}">${esc(utilWkLabel(state.weeks[i]))}</th>`).join("");
+        head += `<th class="num" colspan="2">${esc(chosen)} total</th></tr>`;
+        head += `<tr class="u-row-sub">${ws.map(() => sub("P", mi) + sub("A", mi)).join("")}${sub("P")}${sub("A")}</tr>`;
+        let rows = "";
+        for (const row of data.rows) {
+          const mo = row.months[mi];
+          if (!mo) continue;
+          const cap = row.capacity_week || 40;
+          const e = wmap.get(row.name);
+          rows += `<tr>
+          <td class="u-name-td"><div class="u-name">${esc(row.name)}</div></td>
+          <td class="u-proj">${esc(row.projects.join(", ") || "—")}</td>
+          <td class="u-cell num">${cap}</td>`;
+          ws.forEach((i) => {
+            const pl = e ? e.planned[i] : 0;
+            const ac = e ? e.actual[i] : 0;
+            const pp = cap ? (pl / cap) * 100 : 0;
+            const ap = cap ? (ac / cap) * 100 : 0;
+            const wl = esc(utilWkLabel(state.weeks[i]));
+            rows += `<td class="u-cell ${utilClass(pp)}" data-month-idx="${mi}" title="planned ${pl}h / ${cap}h = ${pp.toFixed(0)}%">${fmt(pp, 0)}%</td>`;
+            rows += `<td class="u-cell ${utilClass(ap)}" data-month-idx="${mi}" title="actual ${ac}h / ${cap}h = ${ap.toFixed(0)}%">${fmt(ap, 0)}%</td>`;
+          });
+          rows += `<td class="u-cell ${utilClass(mo.planned_pct)}" title="planned ${(mo.planned_hours || 0).toLocaleString()}h / ${mo.capacity}h">${fmt(mo.planned_pct, 0)}%</td>`;
+          rows += `<td class="u-cell ${utilClass(mo.actual_pct)}" title="actual ${(mo.actual_hours || 0).toLocaleString()}h / ${mo.capacity}h">${fmt(mo.actual_pct, 0)}%</td></tr>`;
+        }
+        $("#utilHead").innerHTML = head;
+        $("#utilBody").innerHTML = rows;
+        bindUtilMonthHeaders(months);
+        alignUtilSticky();
+        return;
+      }
+
+      // MONTH drill-down (unchanged shape: hours + % for the chosen month)
+      let head = `<tr class="u-row-month"><th class="u-th-name">Resource</th><th>Projects</th><th class="num">Cap/wk</th><th class="num">Planned hrs</th><th class="num">Actual hrs</th><th class="num">Planned %</th><th class="num">Actual %</th></tr>`;
       let rows = "";
       for (const row of data.rows) {
         const mo = row.months[mi];
@@ -1952,20 +2066,69 @@ function renderUtilization() {
       return;
     }
 
-    // ---- ALL months: full-year P/A grid ----
+    // ---- ALL MONTHS ----
     // #utilView has no month dropdown of its own; the rail's global month drives
-    // it, so the drill-down branch above never fires. Each month header is
-    // therefore CLICKABLE (feature #15) and highlights that month's P/A column
-    // pair down every resource row — the grid is far too wide to track a month
-    // across 24 columns by eye.
-    let head = `<tr><th class="u-th-name" rowspan="2">Resource</th><th rowspan="2">Projects</th><th rowspan="2" class="num">Cap/wk</th>`;
-    head += months.map((m, mi) => {
-      const on = state.globalMonth === m ? " u-month-active" : "";
-      return `<th class="num u-month-head${on}" data-month-idx="${mi}" title="Highlight ${esc(m)} for every resource">${esc(m)}</th>`;
+    // it, so the drill-down branches above only fire when a month is chosen.
+    // Month headers are CLICKABLE (feature #15) and highlight that month's
+    // columns down every resource row — the grid is far too wide to track a
+    // month by eye.
+    if (weekMode) {
+      // MONTH > WEEK > P|A. Month bands span all of their weeks' P/A columns.
+      let head = `<tr class="u-row-month"><th class="u-th-name" rowspan="3">Resource</th><th rowspan="3">Projects</th><th rowspan="3" class="num">Cap/wk</th>`;
+      head += months.map((mm, mi) => {
+        const w = utilWeeksOf(mi);
+        if (!w.length) return "";
+        const on = nowMo(mm) ? " u-mo-now" : "";
+        return `<th class="num u-month-head${on}" colspan="${w.length * 2}" data-month-idx="${mi}" title="Highlight ${esc(mm)} for every resource">${esc(mm)}</th>`;
+      }).join("");
+      head += `<th class="num" colspan="2" rowspan="1">Overall</th></tr>`;
+      head += `<tr class="u-row-week">` + months.map((mm, mi) =>
+        utilWeeksOf(mi).map((i) => `<th class="num u-wk${cur.week_index === i ? " u-wk-now" : ""}" colspan="2" data-month-idx="${mi}" title="${esc(mm)} · week of ${esc(state.weeks[i])}${cur.week_index === i ? " (current week)" : ""}">${esc(utilWkLabel(state.weeks[i]))}</th>`).join("")
+      ).join("") + `</tr>`;
+      // P/A sub-cells carry the month index too, so the highlight spans the whole
+      // month band (every week, both metrics) rather than just the header.
+      head += `<tr class="u-row-sub u-row-sub-wk">` + months.map((mm, mi) =>
+        utilWeeksOf(mi).map(() => sub("P", mi) + sub("A", mi)).join("")
+      ).join("") + sub("P") + sub("A") + `</tr>`;
+
+      let rows = "";
+      for (const row of data.rows) {
+        const cap = row.capacity_week || 40;
+        const e = wmap.get(row.name);
+        rows += `<tr>
+        <td class="u-name-td"><div class="u-name">${esc(row.name)}</div></td>
+        <td class="u-proj">${esc(row.projects.join(", ") || "—")}</td>
+        <td class="u-cell num">${cap}</td>`;
+        months.forEach((mm, mi) => {
+          utilWeeksOf(mi).forEach((i) => {
+            const pl = e ? e.planned[i] : 0;
+            const ac = e ? e.actual[i] : 0;
+            const pp = cap ? (pl / cap) * 100 : 0;
+            const ap = cap ? (ac / cap) * 100 : 0;
+            const wl = esc(utilWkLabel(state.weeks[i]));
+            rows += `<td class="u-cell ${utilClass(pp)}" data-month-idx="${mi}" title="${esc(mm.name)} wk ${wl} · planned ${pl}h / ${cap}h = ${pp.toFixed(0)}%">${fmt(pp, 0)}%</td>`;
+            rows += `<td class="u-cell ${utilClass(ap)}" data-month-idx="${mi}" title="${esc(mm.name)} wk ${wl} · actual ${ac}h / ${cap}h = ${ap.toFixed(0)}%">${fmt(ap, 0)}%</td>`;
+          });
+        });
+        rows += `<td class="u-cell ${utilClass(row.planned_overall)}" title="planned ${(row.total_planned || 0).toLocaleString()}h total">${fmt(row.planned_overall, 0)}%</td>`;
+        rows += `<td class="u-cell ${utilClass(row.actual_overall)}" title="actual ${(row.total_actual || 0).toLocaleString()}h total">${fmt(row.actual_overall, 0)}%</td></tr>`;
+      }
+      $("#utilHead").innerHTML = head;
+      $("#utilBody").innerHTML = rows;
+      bindUtilMonthHeaders(months);
+      alignUtilSticky();
+      return;
+    }
+
+    // MONTH mode: 12 months, each a P/A pair; the month cell spans its pair.
+    let head = `<tr class="u-row-month"><th class="u-th-name" rowspan="2">Resource</th><th rowspan="2">Projects</th><th rowspan="2" class="num">Cap/wk</th>`;
+    head += months.map((mm, mi) => {
+      const on = state.globalMonth === mm ? " u-month-active" : "";
+      return `<th class="num u-month-head${on}" colspan="2" data-month-idx="${mi}" title="Highlight ${esc(mm)} for every resource">${esc(mm)}</th>`;
     }).join("") + `<th class="num" colspan="2">Overall</th></tr>`;
     // sub-header cells carry the month index too, so the highlight spans BOTH the
     // P and A sub-columns of the selected month.
-    head += `<tr>${months.map((m, mi) =>
+    head += `<tr class="u-row-sub">${months.map((mm, mi) =>
       sub("P", mi) + sub("A", mi)).join("")}${sub("P") + sub("A")}</tr>`;
     let rows = "";
     for (const row of data.rows) {
@@ -1988,7 +2151,7 @@ function renderUtilization() {
     $("#utilHead").innerHTML = head;
     $("#utilBody").innerHTML = rows;
     bindUtilMonthHeaders(months);
-    // sticky alignment for the new 3-column frozen block (Resource + Projects + Cap/wk)
+    // sticky alignment for the 3-column frozen block (Resource + Projects + Cap/wk)
     alignUtilSticky();
   }).catch((e) => toast(`Utilization failed: ${e.message}`, true));
   // The capacity editor lives on this tab (2026-10-01 split) — keep it in sync
