@@ -10,7 +10,7 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icons/icon-192.png">
 <title>Revenue Recon</title>
-<link rel="stylesheet" href="/styles.css?v=56">
+<link rel="stylesheet" href="/styles.css?v=58">
 </head>
 <body>
 <div class="bg-glow"></div>
@@ -41,71 +41,121 @@
   </div>
 </div>
 
-<header class="topbar glass" id="topbar">
-  <div class="brand">
-    <span class="logo">₿</span>
-    <div>
-      <h1>Revenue Recon <span class="year-badge">2026</span></h1>
-      <p class="sub" id="subLine">Planned · Actuals · Dashboard · Pricing · Utilization</p>
-    </div>
-  </div>
-  <div class="actions">
-    <div class="tabs" id="tabs">
-      <button class="tab active" data-tab="dash">Dashboard</button>
-      <button class="tab" data-tab="planned">Planned</button>
-      <button class="tab" data-tab="actuals">Actuals</button>
-      <button class="tab" data-tab="pricing">Pricing</button>
-      <button class="tab" data-tab="util">Utilization</button>
-    </div>
-    <input type="file" id="fileInput" accept=".xlsm,.xlsx" hidden>
-    <select id="globalMonth" class="cur-sel" title="Filter all tabs to a single month (All = full year)">
-      <option value="all">All months</option>
-    </select>
-    <select id="importMode" class="cur-sel" title="How the upload should apply to existing data">
-      <option value="merge">Import: Merge (keep existing, add/update)</option>
-      <option value="replace">Import: Replace (wipe &amp; load this file)</option>
-    </select>
-    <button class="btn ghost" id="btnImport" title="Upload an Excel file (same layout) to update data">Import Excel</button>
-    <a class="btn ghost" id="btnExport" href="/api/export" title="Download an Excel file (Dashboard + On-Site + Off-Shore + Pricing + Actuals tabs)">Export Excel</a>
-    <button class="btn primary" id="btnAdd">+ Add/Edit Resource</button>
-    <button class="btn ghost" id="btnAddProject">+ Add/Edit Client Project</button>
-
-    <!-- Superseded by the account dropdown (feature #9): kept as JS hooks only,
-         never shown. #btnLogout is what the menu's "Sign out" calls; #themeSel
-         is the legacy standalone picker the menu's #themeSelMenu replaced. -->
-    <select id="themeSel" class="cur-sel hidden" title="Choose a theme (saved to your account)"></select>
-    <button class="btn ghost hidden" id="btnLogout" title="Sign out">Sign out</button>
-
-    <!-- Feature #9: the user section is the ONLY home for the repo links and
-         sign-out. GitHub + Report issue were originally loose buttons in the
-         topbar; they were hidden (not removed) when #9 landed, and on
-         2026-09-30 removed from the markup outright. They now live in the
-         account dropdown as #umGitHub and #umIssue only. -->
-    <div class="user-wrap">
-      <button class="btn ghost user-btn" id="btnUser" title="Your account">
-        <span class="user-avatar" id="userAvatar">?</span>
-        <span class="user-name" id="userName">Account</span>
-        <span class="user-caret">▾</span>
-      </button>
-      <div class="user-menu hidden" id="userMenu">
-        <div class="user-menu-head">
-          <div class="user-menu-name" id="umName">—</div>
-          <div class="user-menu-role" id="umRole">—</div>
-        </div>
-        <div class="user-menu-sep"></div>
-        <div class="user-menu-item" id="umTheme">
-          <span>🎨</span><span class="um-label">Theme</span>
-          <select id="themeSelMenu" class="user-menu-sel"></select>
-        </div>
-        <button class="user-menu-item" id="umPassword"><span>🔑</span>Change password</button>
-        <a class="user-menu-item" id="umGitHub" href="https://github.com/rijoymanghat84/revenue-tracker" target="_blank" rel="noopener"><span>💻</span>GitHub repo</a>
-        <a class="user-menu-item" id="umIssue" href="https://github.com/rijoymanghat84/revenue-tracker/issues/new" target="_blank" rel="noopener"><span>🐞</span>Raise a bug / feature</a>
-        <div class="user-menu-sep"></div>
-        <button class="user-menu-item danger" id="umLogout"><span>⏻</span>Sign out</button>
+<!-- ============ APP SHELL (feature #12 redesign) ============
+     Section Panel + Month + Data Panel live in the RAIL on the left.
+     The page title and the ACCOUNT cluster live in the TOP STRIP, which spans
+     only the main column — so the profile stays top-right where it has always
+     been. IDs are unchanged (#tabs/.tab, #globalMonth, #btnImport, #btnExport,
+     #importMode, #userWrap/#btnUser/#userMenu, #subLine) so the existing JS
+     bindings and permission gating keep working untouched. -->
+<div class="shell" id="appShell">
+  <!-- ================= SECTION PANEL + DATA PANEL (rail) =================
+       On desktop this is the fixed left rail. On mobile it collapses to a
+       block above the dashboard. #subLine stays as a hidden hook for the
+       permission summary the JS writes. -->
+  <aside class="rail glass">
+    <div class="rail-brand">
+      <span class="logo">₿</span>
+      <div>
+        <h1>Revenue Recon</h1>
+        <span class="year-badge">2026</span>
       </div>
     </div>
-  </div>
-</header>
+
+    <div class="rail-sec">
+      <div class="panel-label">Section Panel</div>
+      <div class="tabs" id="tabs">
+        <button class="tab active" data-tab="dash">Dashboard</button>
+        <button class="tab" data-tab="planned">Planned</button>
+        <button class="tab" data-tab="actuals">Actuals</button>
+        <button class="tab" data-tab="pricing">Pricing</button>
+        <button class="tab" data-tab="util">Utilization</button>
+      </div>
+    </div>
+
+    <div class="rail-sec">
+      <div class="panel-label">Month</div>
+      <select id="globalMonth" class="cur-sel" title="Filter all tabs to a single month (All = full year)">
+        <option value="all">All months</option>
+      </select>
+    </div>
+
+    <div class="rail-sec">
+      <div class="panel-label">Data Panel</div>
+      <div class="data-grid">
+        <span class="mini-label">Source</span>
+        <select id="dataSource" class="cur-sel" title="Excel only — CSV/API import not enabled">
+          <option value="excel">Excel (.xlsx / .xlsm)</option>
+        </select>
+        <span class="mini-label">Mode</span>
+        <select id="importMode" class="cur-sel" title="How the upload should apply to existing data">
+          <option value="merge">Merge (keep existing)</option>
+          <option value="replace">Replace (wipe &amp; reload)</option>
+        </select>
+      </div>
+      <div class="data-actions">
+        <button class="btn primary" id="btnImport" title="Upload an Excel file (same layout) to update data">⬆ Import</button>
+        <button class="btn ghost" id="btnExportSplit" title="Choose what to download">⬇ Export ▾</button>
+        <div class="exp-menu hidden" id="exportMenu">
+          <a class="exp-item" href="/api/export"><span>📗</span>Full workbook<small>every sheet, all data</small></a>
+          <a class="exp-item" id="expFiltered" href="/api/export?scope=filtered"><span>🎯</span>Filtered view<small>only what the filters show</small></a>
+        </div>
+      </div>
+      <div class="data-note" id="dataNote">Export: the whole workbook, or only what the filters show.</div>
+      <a class="btn ghost hidden" id="btnExport" href="/api/export">Export Excel</a>
+      <input type="file" id="fileInput" accept=".xlsm,.xlsx" hidden>
+    </div>
+
+    <div class="rail-sec rail-hidden">
+      <p class="sub" id="subLine">Planned · Actuals · Dashboard · Pricing · Utilization</p>
+      <select id="themeSel" class="cur-sel" title="Choose a theme (saved to your account)"></select>
+      <button class="btn ghost" id="btnLogout" title="Sign out">Sign out</button>
+    </div>
+  </aside>
+
+  <div class="main">
+    <!-- ============ TOP STRIP: page title left · ACCOUNT top-right ============ -->
+    <header class="topbar glass" id="topbar">
+      <div class="brand">
+        <div>
+          <h1 id="pageTitle">Dashboard</h1>
+          <p class="sub" id="pageSub">Planned vs actual, by client and project</p>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="btn primary" id="btnAdd">+ Add/Edit Resource</button>
+        <button class="btn ghost" id="btnAddProject">+ Add/Edit Client Project</button>
+
+        <!-- Feature #9: the user section is the ONLY home for the repo links and
+             sign-out. GitHub + Report issue were originally loose buttons in the
+             topbar; they were hidden (not removed) when #9 landed, and on
+             2026-09-30 removed from the markup outright. They now live in the
+             account dropdown as #umGitHub and #umIssue only. -->
+        <div class="user-wrap">
+          <button class="btn ghost user-btn" id="btnUser" title="Your account">
+            <span class="user-avatar" id="userAvatar">?</span>
+            <span class="user-name" id="userName">Account</span>
+            <span class="user-caret">▾</span>
+          </button>
+          <div class="user-menu hidden" id="userMenu">
+            <div class="user-menu-head">
+              <div class="user-menu-name" id="umName">—</div>
+              <div class="user-menu-role" id="umRole">—</div>
+            </div>
+            <div class="user-menu-sep"></div>
+            <div class="user-menu-item" id="umTheme">
+              <span>🎨</span><span class="um-label">Theme</span>
+              <select id="themeSelMenu" class="user-menu-sel"></select>
+            </div>
+            <button class="user-menu-item" id="umPassword"><span>🔑</span>Change password</button>
+            <a class="user-menu-item" id="umGitHub" href="https://github.com/rijoymanghat84/revenue-tracker" target="_blank" rel="noopener"><span>💻</span>GitHub repo</a>
+            <a class="user-menu-item" id="umIssue" href="https://github.com/rijoymanghat84/revenue-tracker/issues/new" target="_blank" rel="noopener"><span>🐞</span>Raise a bug / feature</a>
+            <div class="user-menu-sep"></div>
+            <button class="user-menu-item danger" id="umLogout"><span>⏻</span>Sign out</button>
+          </div>
+        </div>
+      </div>
+    </header>
 
 <main>
   <!-- ============ UTILIZATION (auto-calculated, read-only) ============ -->
@@ -169,7 +219,10 @@
 
   <!-- ============ DASHBOARD ============ -->
   <section id="dashView" class="view hidden">
-    <div class="cards" id="dashCards"></div>
+    <!-- filter row: Month · Project · PM · Client · Currency (feature #12) -->
+    <div class="filterbar glass" id="dashFilters"></div>
+    <!-- KPI bar: one horizontal row of key metrics -->
+    <div class="kpis glass" id="dashCards"></div>
     <div class="table-wrap glass narrow" id="dashWrap">
       <table id="dashTable"></table>
     </div>
@@ -242,6 +295,8 @@
     </div>
   </section>
 </main>
+  </div><!-- /.main -->
+</div><!-- /.shell -->
 
 <div id="toast" class="toast"></div>
 <div id="colPanel" class="col-panel hidden"></div>
@@ -369,7 +424,7 @@
   </div>
 </div>
 
-<script src="/app.js?v=81"></script>
+<script src="/app.js?v=84"></script>
 <script>
   // PWA: register the service worker (only after load; skip on failure)
   if ("serviceWorker" in navigator) {

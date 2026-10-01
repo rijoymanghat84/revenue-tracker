@@ -138,14 +138,17 @@ $("#updateBannerClose").addEventListener("click", () => {
 
 function showLogin() {
   $("#loginView").classList.remove("hidden");
-  $("#topbar").classList.add("hidden");
+  // Feature #12: the rail + top strip now live inside #appShell, so hiding the
+  // shell hides the nav, filters and account cluster together on the login
+  // screen. #topbar alone would leave the rail visible behind the login box.
+  $("#appShell").classList.add("hidden");
   $$(".view").forEach((v) => v.classList.add("hidden"));
   $("#loginUser").focus();
 }
 
 function showApp() {
   $("#loginView").classList.add("hidden");
-  $("#topbar").classList.remove("hidden");
+  $("#appShell").classList.remove("hidden");
   const isAdmin = state.me.role === "admin";
   // Defensive: /api/login and /api/me must both supply `permissions`. If the
   // field is ever missing, fall back to the full set for an admin instead of
@@ -1554,56 +1557,185 @@ function alignUtilSticky() {
 }
 
 /* ---------------- dashboard ---------------- */
-/* Feature #10: selected client for the Dashboard filter ('' = all clients). */
-let dashClient = "";
+/* Feature #12 (redesign): multi-select Dashboard filters. Each holds an array
+   of selected values, and an EMPTY array means "no filter at that level" —
+   which is what makes client-only / client+project / +PM combinations work.
+   The month stays global (state.globalMonth) because every tab uses it. */
+const dashF = { project: [], pm: [], client: [] };
+let dashCurrency = "all";
+const UNASSIGNED = "Unassigned";
+
+function dashQs() {
+  const p = new URLSearchParams();
+  if (state.globalMonth && state.globalMonth !== "all") p.set("month", state.globalMonth);
+  if (dashF.client.length) p.set("client", dashF.client.join(","));
+  if (dashF.project.length) p.set("project", dashF.project.join(","));
+  if (dashF.pm.length) p.set("pm", dashF.pm.join(","));
+  if (dashCurrency !== "all") p.set("currency", dashCurrency);
+  return p.toString();
+}
+
+/* Money in the row's own currency — never blend USD and EUR into one number. */
+function money(v, cur) {
+  return (cur === "EUR" ? "€" : "$") + fmt(v);
+}
+
+/* One multi-select control. `opts` = [{value,label}]. */
+function msHtml(key, label, allLabel, opts, sel, note) {
+  const n = sel.length;
+  let val = allLabel;
+  if (n === 1) {
+    const o = opts.find((x) => x.value === sel[0]);
+    val = o ? o.label : sel[0];
+  } else if (n > 1) {
+    val = `${n} selected`;
+  }
+  const body = opts.length
+    ? opts.map((o) => `<label><input type="checkbox" data-msopt="${key}" value="${esc(o.value)}"${sel.includes(o.value) ? " checked" : ""}> ${esc(o.label)}</label>`).join("")
+    : '<div class="empty">Nothing available</div>';
+  return `<div class="fgroup">
+    <span class="fg-label">${esc(label)}</span>
+    <div class="ms">
+      <button class="ms-btn" data-msbtn="${key}"><span class="val">${esc(val)}</span>${n > 1 ? `<span class="ms-count">${n}</span>` : ""}<span class="caret">▾</span></button>
+      <div class="ms-pop hidden" id="msPop-${key}">
+        <input class="ms-search" placeholder="Search ${esc(label.toLowerCase())}…">
+        ${note ? `<div class="casc">${esc(note)}</div>` : ""}
+        <label class="allrow"><input type="checkbox" data-msall="${key}"${n === 0 ? " checked" : ""}> ${esc(allLabel)}</label>
+        ${body}
+      </div>
+    </div>
+  </div>`;
+}
+
+/* Wire the filter row's multi-selects, month and currency pickers. */
+function bindDashFilters() {
+  const closeAll = () => $$(".ms-pop").forEach((p) => p.classList.add("hidden"));
+  $$("[data-msbtn]").forEach((b) => {
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const pop = $(`#msPop-${b.dataset.msbtn}`);
+      const wasOpen = !pop.classList.contains("hidden");
+      closeAll();
+      if (!wasOpen) {
+        pop.classList.remove("hidden");
+        const s = pop.querySelector(".ms-search");
+        if (s) s.focus();
+      }
+    });
+  });
+  $$("[data-msall]").forEach((c) => {
+    c.addEventListener("change", () => {
+      dashF[c.dataset.msall] = [];
+      renderDashboard();
+    });
+  });
+  $$("[data-msopt]").forEach((c) => {
+    c.addEventListener("change", () => {
+      const key = c.dataset.msopt, v = c.value;
+      const arr = dashF[key];
+      const i = arr.indexOf(v);
+      if (c.checked && i === -1) arr.push(v);
+      if (!c.checked && i !== -1) arr.splice(i, 1);
+      renderDashboard();
+    });
+  });
+  /* Search filters the visible labels without touching the selection. */
+  $$(".ms-pop .ms-search").forEach((s) => {
+    s.addEventListener("input", () => {
+      const q = s.value.trim().toLowerCase();
+      Array.from(s.parentElement.querySelectorAll('label:not(.allrow)')).forEach((l) => {
+        l.style.display = !q || l.textContent.toLowerCase().includes(q) ? "" : "none";
+      });
+    });
+  });
+  const dm = $("#dashMonth");
+  if (dm) dm.addEventListener("change", () => {
+    state.globalMonth = dm.value;
+    const gm = $("#globalMonth");
+    if (gm) gm.value = state.globalMonth;   // keep the rail's month in step
+    renderDashboard();
+  });
+  const dc = $("#dashCurrency");
+  if (dc) dc.addEventListener("change", () => { dashCurrency = dc.value; renderDashboard(); });
+  const rs = $("#dashReset");
+  if (rs) rs.addEventListener("click", () => {
+    dashF.project = []; dashF.pm = []; dashF.client = [];
+    dashCurrency = "all";
+    renderDashboard();
+  });
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest(".ms")) closeAll();
+  });
+}
 
 function renderDashboard() {
-  const m = state.globalMonth === "all" ? "" : state.globalMonth;
-  api(`/api/dashboard?month=${encodeURIComponent(m)}&client=${encodeURIComponent(dashClient)}`).then((data) => {
+  api(`/api/dashboard?${dashQs()}`).then((data) => {
     const groups = data.rows.groups, totals = data.rows.totals;
-    let totalRev = 0, totalExp = 0, totalActRev = 0, totalActExp = 0;
-    totals.forEach((t) => {
-      totalRev += t.revenue; totalExp += t.expense;
-      totalActRev += t.actual_rev || 0; totalActExp += t.actual_exp || 0;
-    });
-    const plannedSavings = totalRev - totalExp;
-    const actualSavings = totalActRev - totalActExp;
+    const byCur = {};
+    totals.forEach((t) => { byCur[t.currency] = t; });
+    const curs = Object.keys(byCur).sort();
 
-    /* ── Feature #10.1: client filter ──────────────────────────────
-       Re-totals the whole report for one client. The option list comes from
-       the server's full client set, so picking a client never shrinks the list
-       of clients you can pick next. */
-    const clients = data.clients || [];
-    const clientOpts = ['<option value="">All clients</option>']
-      .concat(clients.map((c) =>
-        `<option value="${esc(c)}"${c === dashClient ? " selected" : ""}>${esc(c)}</option>`))
+    /* ── filter row: Month · Project · PM · Client · Currency ───────
+       Option lists come from the server's FULL set (never the filtered one),
+       so choosing a filter never shrinks what you can pick next. */
+    const projOpts = (data.projects || []).map((p) => ({ value: p.label, label: p.label }));
+    const clientOpts = (data.clients || []).map((c) => ({ value: c, label: c }));
+    const pmOpts = (data.pms || []).map((p) => ({ value: p, label: p }));
+    if (data.has_unassigned) pmOpts.push({ value: UNASSIGNED, label: "Unassigned (no PM yet)" });
+    const monthOpts = ['<option value="all">All months</option>']
+      .concat((state.months || []).map((m) =>
+        `<option value="${esc(m.name)}"${state.globalMonth === m.name ? " selected" : ""}>${esc(m.name)}</option>`))
       .join("");
-    const filtering = !!dashClient;
-    const dashBar = `
-      <div class="dash-bar glass">
-        <label class="dash-bar-label" for="dashClientSel">Filter by client</label>
-        <select id="dashClientSel" class="cur-sel">${clientOpts}</select>
-        ${filtering ? `<span class="dash-chip">Showing only <b>${esc(dashClient)}</b><button class="dash-chip-x" id="dashClientClear" title="Clear filter">✕</button></span>` : ""}
-        <span class="dash-bar-note">All figures below are totals for ${filtering ? "this client" : "every client"}${data.month && data.month !== "all" ? ` · ${esc(data.month)}` : ""}</span>
-      </div>`;
+    $("#dashFilters").innerHTML = `
+      <div class="fgroup">
+        <span class="fg-label">Month</span>
+        <select class="cur-sel" id="dashMonth">${monthOpts}</select>
+      </div>
+      ${msHtml("project", "Project", "All projects", projOpts, dashF.project, "Grouped by client — picking a client narrows this list")}
+      ${msHtml("pm", "PM", "All PMs", pmOpts, dashF.pm, "Projects with no PM assigned appear as Unassigned")}
+      ${msHtml("client", "Client", "All clients", clientOpts, dashF.client, "Pick a client on its own for client-level totals")}
+      <div class="fgroup">
+        <span class="fg-label">Currency</span>
+        <select class="cur-sel" id="dashCurrency">
+          <option value="all"${dashCurrency === "all" ? " selected" : ""}>All</option>
+          <option value="USD"${dashCurrency === "USD" ? " selected" : ""}>USD</option>
+          <option value="EUR"${dashCurrency === "EUR" ? " selected" : ""}>EUR</option>
+        </select>
+      </div>
+      <button class="fclear" id="dashReset">Reset filters</button>`;
 
-    $("#dashCards").innerHTML = dashBar + `
-      <div class="card glass"><div class="k">Planned Revenue</div><div class="v cyan">$${fmt(totalRev)}</div></div>
-      <div class="card glass"><div class="k">Planned Expense</div><div class="v">$${fmt(totalExp)}</div></div>
-      <div class="card glass"><div class="k">Planned Savings</div><div class="v ${plannedSavings >= 0 ? "green" : "red"}">$${fmt(plannedSavings)}</div></div>
-      <div class="card glass"><div class="k">Revenue till date</div><div class="v cyan">$${fmt(totalActRev)}</div></div>
-      <div class="card glass"><div class="k">Expense till date</div><div class="v">$${fmt(totalActExp)}</div></div>
-      <div class="card glass"><div class="k">Savings till date</div><div class="v ${actualSavings >= 0 ? "green" : "red"}">$${fmt(actualSavings)}</div></div>`;
+    /* ── KPI bar: ONE horizontal row of metrics ────────────────────
+       With more than one currency in scope the tiles show one line per
+       currency rather than adding EUR to USD (which would be meaningless). */
+    const perCur = (f, fmtv) => (curs.length
+      ? curs.map((c) => fmtv(f(byCur[c]), c)).join("<br>")
+      : "—");
+    const anyNeg = (f) => curs.some((c) => f(byCur[c]) < 0);
+    const sum = (f) => curs.reduce((a, c) => a + f(byCur[c]), 0);
+    const resCount = groups.reduce((a, g) => a + (g.resources || 0), 0);
+    const kpi = (k, v, cls, sub2) =>
+      `<div class="kpi"><div class="k">${esc(k)}</div><div class="v ${cls || ""}">${v}</div>${sub2 ? `<div class="sub2">${esc(sub2)}</div>` : ""}</div>`;
+    $("#dashCards").innerHTML =
+      kpi("Planned Revenue", perCur((t) => t.revenue, money), "cyan", `${resCount} resources`)
+      + kpi("Planned Expense", perCur((t) => t.expense, money), "", "offshore rate × hrs")
+      + kpi("Planned Savings", perCur((t) => t.revenue - t.expense, money),
+            anyNeg((t) => t.revenue - t.expense) ? "red" : "green", "revenue − expense")
+      + kpi("Revenue till date", perCur((t) => t.actual_rev || 0, money), "cyan", "recorded actuals only")
+      + kpi("Expense till date", perCur((t) => t.actual_exp || 0, money), "", "recorded actuals only")
+      + kpi("Savings till date", perCur((t) => (t.actual_rev || 0) - (t.actual_exp || 0), money),
+            anyNeg((t) => (t.actual_rev || 0) - (t.actual_exp || 0)) ? "red" : "green", "actuals − expenses")
+      + kpi("Variance", perCur((t) => ((t.actual_rev || 0) - (t.actual_exp || 0)) - (t.revenue - t.expense), money),
+            anyNeg((t) => ((t.actual_rev || 0) - (t.actual_exp || 0)) - (t.revenue - t.expense)) ? "red" : "green",
+            "savings till date vs plan");
 
-    const sel = $("#dashClientSel");
-    sel.addEventListener("change", () => { dashClient = sel.value; renderDashboard(); });
-    const clr = $("#dashClientClear");
-    if (clr) clr.addEventListener("click", () => { dashClient = ""; renderDashboard(); });
+    bindDashFilters();
+    syncExportLinks();
 
     let rows = `<thead><tr><th>Country</th><th>Client</th><th>Project</th><th>Resource(s)</th><th>Planned Revenue</th><th>Planned Expense</th><th>Planned Savings</th><th>Revenue till date</th><th>Expense till date</th><th>Savings till date</th></tr></thead><tbody>`;
     for (const g of groups) {
       const pSavings = g.revenue - g.expense;
       const aSavings = (g.actual_rev || 0) - (g.actual_exp || 0);
+      const cur = g.currency || "USD";   // rows are per-currency; never blend
       /* Feature #10.2: the resource count is a BUTTON that opens a popup
          listing who they are, their rates, and their projects. */
       const resCell = g.resources
@@ -1612,20 +1744,21 @@ function renderDashboard() {
         : "0";
       rows += `<tr>
         <td>${esc(g.country)}</td><td>${esc(g.client)}</td><td>${esc(g.project)}</td><td>${resCell}</td>
-        <td>$${fmt(g.revenue)}</td><td>$${fmt(g.expense)}</td>
-        <td style="color:${pSavings >= 0 ? "var(--green)" : "var(--red)"}">$${fmt(pSavings)}</td>
-        <td>$${fmt(g.actual_rev || 0)}</td><td>$${fmt(g.actual_exp || 0)}</td>
-        <td style="color:${aSavings >= 0 ? "var(--green)" : "var(--red)"}">$${fmt(aSavings)}</td></tr>`;
+        <td>${money(g.revenue, cur)}</td><td>${money(g.expense, cur)}</td>
+        <td style="color:${pSavings >= 0 ? "var(--green)" : "var(--red)"}">${money(pSavings, cur)}</td>
+        <td>${money(g.actual_rev || 0, cur)}</td><td>${money(g.actual_exp || 0, cur)}</td>
+        <td style="color:${aSavings >= 0 ? "var(--green)" : "var(--red)"}">${money(aSavings, cur)}</td></tr>`;
     }
     for (const t of totals) {
       const pSavings = t.revenue - t.expense;
       const aSavings = (t.actual_rev || 0) - (t.actual_exp || 0);
+      const cur = t.currency || "USD";
       rows += `<tr class="total-row">
-        <td>TOTAL ${t.currency}</td><td>—</td><td>—</td><td>—</td>
-        <td>$${fmt(t.revenue)}</td><td>$${fmt(t.expense)}</td>
-        <td style="color:${pSavings >= 0 ? "var(--green)" : "var(--red)"}">$${fmt(pSavings)}</td>
-        <td>$${fmt(t.actual_rev || 0)}</td><td>$${fmt(t.actual_exp || 0)}</td>
-        <td style="color:${aSavings >= 0 ? "var(--green)" : "var(--red)"}">$${fmt(aSavings)}</td></tr>`;
+        <td>TOTAL ${esc(cur)}</td><td>—</td><td>—</td><td>—</td>
+        <td>${money(t.revenue, cur)}</td><td>${money(t.expense, cur)}</td>
+        <td style="color:${pSavings >= 0 ? "var(--green)" : "var(--red)"}">${money(pSavings, cur)}</td>
+        <td>${money(t.actual_rev || 0, cur)}</td><td>${money(t.actual_exp || 0, cur)}</td>
+        <td style="color:${aSavings >= 0 ? "var(--green)" : "var(--red)"}">${money(aSavings, cur)}</td></tr>`;
     }
     rows += "</tbody>";
     $("#dashTable").innerHTML = rows;
@@ -2825,6 +2958,36 @@ document.addEventListener("click", (e) => {
 });
 
 /* ---------------- import / export ---------------- */
+/* Feature #12: the Data Panel's Export button offers BOTH downloads. The full
+   workbook keeps the original /api/export path untouched; the filtered export
+   passes the live Dashboard filters through ?scope=filtered. */
+function syncExportLinks() {
+  const full = $("#btnExport");
+  if (full) full.setAttribute("href", "/api/export");
+  const filt = $("#expFiltered");
+  if (filt) filt.setAttribute("href", `/api/export?scope=filtered&${dashQs()}`);
+  const note = $("#dataNote");
+  if (note) {
+    const active = dashF.client.length + dashF.project.length + dashF.pm.length
+      + (dashCurrency !== "all" ? 1 : 0) + (state.globalMonth !== "all" ? 1 : 0);
+    note.textContent = active
+      ? `Export: whole workbook, or just the ${active} active filter${active === 1 ? "" : "s"}.`
+      : "Export: the whole workbook, or only what the filters show.";
+  }
+}
+
+$("#btnExportSplit")?.addEventListener("click", (e) => {
+  e.stopPropagation();
+  const menu = $("#exportMenu");
+  if (menu) menu.classList.toggle("hidden");
+});
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("#exportMenu, #btnExportSplit")) {
+    const menu = $("#exportMenu");
+    if (menu) menu.classList.add("hidden");
+  }
+});
+
 $("#btnImport").addEventListener("click", () => $("#fileInput").click());
 $("#fileInput").addEventListener("change", async (e) => {
   const file = e.target.files[0];
@@ -2872,18 +3035,14 @@ async function switchView(view) {
   await flush();
   await pFlush();
   await aFlush();
-  // toggle view visibility (renderView handles the rest)
-  $$(".tab").forEach((x) => x.classList.toggle("active", x.dataset.tab === view));
-  const isGrid = view === "planned";
-  $("#gridView").classList.toggle("hidden", !isGrid);
-  $("#dashView").classList.toggle("hidden", view !== "dash");
-  $("#pricingView").classList.toggle("hidden", view !== "pricing");
-  $("#utilView").classList.toggle("hidden", view !== "util");
-  $("#actualsView").classList.toggle("hidden", view !== "actuals");
-  $("#btnAdd").style.display = isGrid ? "initial" : "none";
-  if (view === "actuals") { loadActuals(); return; }
-  if (view === "util") { renderUtilization(); return; }
-  await loadState();
+  // Feature #12: renderView owns tab highlighting, view visibility, the top
+  // strip's page title and the "+ Add/Edit Resource" gating. This function used
+  // to duplicate all of that AND return early for Actuals/Utilization, which
+  // meant renderView never ran on those two tabs and the top-strip title kept
+  // showing the PREVIOUS section. Route everything through renderView instead.
+  if (view === "actuals") { renderView(); loadActuals(); return; }
+  if (view === "util") { renderView(); renderUtilization(); return; }
+  await loadState();   // loadState ends by calling renderView()
 }
 
 function renderView() {
@@ -2894,6 +3053,22 @@ function renderView() {
   $("#pricingView").classList.toggle("hidden", state.view !== "pricing");
   $("#utilView").classList.toggle("hidden", state.view !== "util");
   $("#actualsView").classList.toggle("hidden", state.view !== "actuals");
+  // Feature #12: the top strip reports which section you're in, since the nav
+  // now lives in the rail and the title is no longer attached to the tabs.
+  const title = $("#pageTitle"), sub = $("#pageSub");
+  const META = {
+    dash: ["Dashboard", "Planned vs actual, by client and project"],
+    planned: ["Planned", "Master entry — hours, rates and the weekly grid"],
+    actuals: ["Actuals", "PM reconciliation — recorded hours vs plan"],
+    pricing: ["Pricing", "Title library, Project → PM assignment, capacity"],
+    util: ["Utilization", "Booked hours ÷ capacity (40 hrs/week = 100%)"],
+  };
+  if (title && META[state.view]) {
+    title.textContent = META[state.view][0];
+    if (sub) sub.textContent = META[state.view][1];
+  }
+  // "+ Add/Edit Resource" only applies to the Planned grid — but the button now
+  // lives in the rail, so hide the whole cluster rather than a single button.
   $("#btnAdd").style.display = isGrid ? "initial" : "none";
   if (isGrid) renderGrid();
   else if (state.view === "dash") renderDashboard();
