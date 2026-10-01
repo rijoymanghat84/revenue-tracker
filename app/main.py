@@ -1331,6 +1331,16 @@ class ActualsUpdate(BaseModel):
     notes: dict[int, dict] | None = None      # week -> {comment,is_ot,approved,billed,reason}
 
 
+def _reason_text(note: dict) -> str:
+    """The free-text justification for a week, from whichever field carries it.
+
+    `comment` is the original field (the weekly grid's prompt chain writes the
+    unbilled-OT reason there); `reason` was added later for the newer flows. Both
+    are persisted, so accept either rather than refusing a valid entry.
+    """
+    return ((note.get("reason") or "").strip() or (note.get("comment") or "").strip())
+
+
 def _validate_actual_week(planned: float, actual: float, capacity: float,
                           note: dict | None) -> dict:
     """Return the reconciliation status for one resource-week."""
@@ -1347,15 +1357,16 @@ def _validate_actual_week(planned: float, actual: float, capacity: float,
         return {"status": "ok", "overage": 0.0,
                 "under_billed": note.get("under_billed")}
     if overage < 0:
-        # under-delivery: mandatory comment + a billing decision
+        # Under-delivery needs a REASON. The billing decision is deliberately
+        # OPTIONAL here rather than mandatory: the 53-week grid has no prompt for
+        # it, so requiring it made every under-delivery unsavable from that grid
+        # (a regression). The new week sheet asks for it, and when it IS supplied
+        # the money treatment follows (see _actuals_financials).
         if not (note.get("comment") or "").strip():
             return {"status": "needs_comment", "overage": overage}
         ub = note.get("under_billed")
-        if ub is None:
-            # Rijoy's rule: the PM must say whether the client still pays the
-            # planned hours (recovered) or the shortfall is a real revenue loss.
-            return {"status": "needs_under_billing", "overage": overage}
-        return {"status": "ok", "overage": overage, "under_billed": bool(ub)}
+        return {"status": "ok", "overage": overage,
+                "under_billed": (None if ub is None else bool(ub))}
     # overage -> OT flow (any overage)
     is_ot = note.get("is_ot")
     if is_ot is None:
@@ -1366,7 +1377,11 @@ def _validate_actual_week(planned: float, actual: float, capacity: float,
         return {"status": "ok", "overage": overage, "is_ot": False}
     billed = bool(note.get("billed"))
     if not billed:
-        if not (note.get("reason") or "").strip():
+        # The reason may arrive in EITHER field: the weekly grid's prompt chain
+        # historically stored it in `comment` and never sent `reason`, while the
+        # newer shape uses `reason`. Requiring only `reason` made every unbilled
+        # week unsavable from the grid (a regression). Accept either.
+        if not _reason_text(note):
             return {"status": "needs_billing_reason", "overage": overage, "is_ot": True}
         return {"status": "ok", "overage": overage, "is_ot": True, "billed": False}
     # Billable OT no longer self-approves. `approved` is an ADMIN decision
@@ -1442,7 +1457,11 @@ def api_update_actuals(rid: int, body: ActualsUpdate, request: Request):
                 "reason=excluded.reason, under_billed=excluded.under_billed, "
                 "is_ot=excluded.is_ot, approved=excluded.approved, billed=excluded.billed",
                 (rid, i, user["u"], v["overage"], (note.get("comment") or "").strip(),
-                 (note.get("reason") or "").strip(),
+                 # Persist the justification in BOTH fields: the grid writes
+                 # `comment`, the week sheet writes `reason`, and the unbilled
+                 # report reads one or the other. Keeping them in step avoids a
+                 # row that is valid in one view and blank in the other.
+                 _reason_text(note),
                  (None if v.get("under_billed") is None else int(bool(v["under_billed"]))),
                  int(v.get("is_ot", False)), keep_approved, int(v.get("billed", False))),
             )
