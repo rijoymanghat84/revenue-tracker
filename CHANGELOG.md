@@ -9,7 +9,75 @@ wasn't one) and the commit.
 
 ---
 
-## 2026-10-01 — Utilization: Month/Week toggle + two header defects (GH-28)
+## 2026-10-01 — Utilization: filters, availability view, centred month band (GH-29)
+
+Commit `a6bee72` — **GH-29**. Rijoy asked for three things on the Utilization
+page: filters "per project and per resource", "a way to look which resources
+will be available for a given month based on the percentage", and "the month
+name in the week view should be in middle not right aligned".
+
+**1. Filters (Client / Project / PM).** The Dashboard's cascading multi-select
+is reused but holds its **own** state (`state.utilFilters`), so filtering
+Utilization never disturbs the Dashboard's selection. They are sent to the
+server and applied to the per-project resource rows **before**
+`compute_utilization` aggregates them — which is the whole point:
+`_all_resources` returns one row per `(name, client, project)`, so filtering it
+**drops the hours of the projects you did not ask for** instead of merely
+hiding people.
+
+| Filter | People | Planned | Note |
+|---|---|---|---|
+| none | 48 | 63,190.3h | baseline |
+| `Doxim · Indy` | 2 | 1,280.0h | hours scoped to that project |
+| `Doxim` (client) | 18 | 26,914.3h | only 1 person still spans >1 project |
+| `testPM` | 16 | 25,227.3h | owner-based |
+| `Unassigned` | 40 | 37,963.0h | projects with no PM |
+
+Option lists are built from the **pre-filter** set, so choosing a filter never
+shrinks what you can pick next; `has_unassigned` drives the Unassigned option. A
+scope line states in plain words what the numbers currently cover.
+
+**2. Availability.** An "Available" panel lists, for the chosen month, every
+resource's capacity, planned hours, free hours and free %, sorted **most-free
+first** so the bench is visible at a glance (10 people at 100% free, down to 0%,
+with over-allocated people flagged). Capacity and planned hours come off the
+**same** month payload the grid shows, so the two cannot disagree, and a project
+filter narrows availability along with it. The month follows the rail selector
+and falls back to the current month.
+
+**3. Centred month band.** In Week view the month cell is far wider than its
+label and sits above a row of week numbers, so the `.num` right-align pushed
+"JAN" hard against the last week of its block — it read as a label for *that
+week* rather than the month. The band row is now centred; P/A and Overall keep
+their numeric alignment.
+
+**Also fixed:** week-mode cell tooltips used `esc(mm.name)` where `mm` is already
+a month **name** string, so every title rendered `undefined wk …`.
+
+| Check | Result |
+|---|---|
+| Availability maths vs raw API, all 48 rows | **0 mismatches** |
+| Sort order | monotonic non-increasing |
+| Month band centring | 12/12 centred; band-over-weeks still 0px |
+| Console errors | 0 |
+| Mobile 390px overflow | 0px; popups stay on screen |
+| `tests/test_admin_mgmt.py` | **ALL PASSED** |
+| `tests/test_issue4_pm_admin_separation.py` | **ALL PASSED** |
+
+**Usability fix found by measuring, not assuming:** the Availability panel's top
+landed at **944px on a 950px viewport** — the bottom edge — so clicking
+"Available" looked like it did nothing. It now scrolls into view on open and the
+button carries the bench count (`☰ Available · 16`).
+
+**No DB or schema change.** `/api/utilization` keeps its old response shape and
+simply gains three optional query params (`client`, `project`, `pm`).
+
+**Pitfall confirmed again:** editing `app.js` without bumping `?v=` means the
+service worker serves the **cached** copy and the change looks undeployed —
+happened twice in this task (`v=107` reused after an edit). Every static edit
+needs a **new** version number.
+
+---
 
 Commit `59989a4` — **GH-28**. Reported from the board: _"all the month is now
 together, design wise it should be proper like Jan month and then the 4 weeks
