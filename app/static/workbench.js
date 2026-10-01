@@ -79,7 +79,12 @@ function renderWbProjects() {
     return `<div class="wb-pitem ${on ? "on" : ""}" data-k="${esc(wbKey(p.client, p.project))}">
       <div class="cl">${esc(p.client || "—")}</div>
       <div class="pj">${esc(p.project)}</div>
+      <!-- The client is repeated under the project name on purpose: project
+           NAMES repeat across clients ("Quadient" at 5 clients, "Support" at
+           3), so a PM owning two of them would otherwise see two identical
+           rows and not know which is which. -->
       <div class="mt">
+        <span title="Client">${esc(p.client || "—")}</span>
         <span>${p.people} ${p.people === 1 ? "person" : "people"}</span>
         <span>${fmtH(p.booked_hours)} h</span>
         ${over ? `<span class="over">${over} over capacity</span>` : ""}
