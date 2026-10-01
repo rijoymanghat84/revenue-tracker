@@ -404,10 +404,15 @@ const MODES = {
  * persisted in localStorage (see viewPrefs / savePrefs).
  */
 const COLUMNS = {
+  /* Feature #14 (grid density, variant C): the child rows no longer repeat
+     Country/Client/Project. The group row ALREADY prints "Client · Project", so
+     those three columns were pure noise on every resource row — that is what made
+     the grid feel unreadable and pushed the months off-screen. They are still in
+     the registry (so ⚙ Columns can bring them back) but default to hidden. */
   planned: [
-    { key: "country", h: "Country",       w: 70,  meta: true, field: "country" },
-    { key: "client",  h: "Client",        w: 150, meta: true, field: "client" },
-    { key: "project", h: "Project",       w: 140, meta: true, field: "project" },
+    { key: "country", h: "Country",       w: 70,  meta: true, field: "country", defaultHidden: true },
+    { key: "client",  h: "Client",        w: 150, meta: true, field: "client",  defaultHidden: true },
+    { key: "project", h: "Project",       w: 140, meta: true, field: "project", defaultHidden: true },
     { key: "name",    h: "Resource Name", w: 160, meta: true, field: "name" },
     { key: "title",   h: "Title",         w: 160, meta: true, field: "role", dropdown: true },
     { key: "rate",    h: "Rate",          w: 90,  rate: "rate" },
@@ -415,23 +420,49 @@ const COLUMNS = {
     { key: "th",      h: "Total Hours",   w: 90,  calc: "total_hrs", dim: true },
     { key: "tr",      h: "Total Revenue", w: 110, calc: "total_rev" },
     { key: "te",      h: "Total Expense", w: 110, calc: "total_exp", dim: true },
+    { key: "share",   h: "Share",         w: 120, calc: "share", bar: true },
   ],
   actuals: [
-    { key: "country", h: "Country",       w: 70,  meta: true },
-    { key: "client",  h: "Client",        w: 150, meta: true },
-    { key: "project", h: "Project",       w: 140, meta: true },
+    { key: "country", h: "Country",       w: 70,  meta: true, defaultHidden: true },
+    { key: "client",  h: "Client",        w: 150, meta: true, defaultHidden: true },
+    { key: "project", h: "Project",       w: 140, meta: true, defaultHidden: true },
     { key: "name",    h: "Resource Name", w: 160, meta: true },
     { key: "title",   h: "Title",         w: 160, meta: true },
     { key: "planned", h: "Planned",       w: 70,  calc: "total_planned" },
     { key: "actual",  h: "Actual",        w: 70,  calc: "total_actual" },
     { key: "delta",   h: "Δ",             w: 70,  calc: "delta" },
+    { key: "pvabar",  h: "Plan vs actual", w: 120, calc: "pvabar", bar: true },
   ],
 };
 
 /* ---------------- combined grid (Planned: both rate sides) ---------------- */
 
 function defaultPrefs(view) {
-  return { hidden: [], freeze: COLUMNS[view].length };
+  // Feature #14: columns flagged defaultHidden start hidden (Country/Client/
+  // Project — the group row already names them). They stay in the registry so
+  // ⚙ Columns can restore them.
+  const hidden = COLUMNS[view].filter((c) => c.defaultHidden).map((c) => c.key);
+  /* Freeze up to and including the last metric column, so Resource, Title, rates
+     and the totals stay pinned while the weeks/months scroll past — that is what
+     makes a wide grid readable. Previously this defaulted to ALL columns, which
+     pinned everything and therefore scrolled nothing. */
+  const vis = COLUMNS[view].filter((c) => !hidden.includes(c.key));
+  const lastCalc = vis.map((c) => !!c.calc).lastIndexOf(true);
+  const freeze = lastCalc === -1 ? vis.length : lastCalc + 1;
+  return { hidden, freeze };
+}
+
+/* Feature #14: a small inline bar used by the Share (planned) and Plan vs actual
+   (actuals) columns. `parts` = [{v, color}] drawn as a 100%-width track with the
+   first part as the reference length. Returns "" when there is nothing to show. */
+function barHTML(parts, scaleMax) {
+  const max = scaleMax || Math.max(...parts.map((p) => p.v), 0);
+  if (!max) return '<span class="bar-empty">—</span>';
+  const rows = parts.map((p) => {
+    const pct = Math.max(0, Math.min(100, (p.v / max) * 100));
+    return `<span class="bar-track"><span class="bar-fill" style="width:${pct.toFixed(1)}%;background:${p.color}"></span></span>`;
+  }).join("");
+  return `<span class="bar-stack">${rows}</span>`;
 }
 function viewPrefs(view) {
   let p = null;
@@ -533,6 +564,10 @@ function gridEditState() {
   return { meta: unlocked, hours: unlocked, rates: unlocked };
 }
 
+/* Feature #14: per-resource planned revenue + owning group total, filled by
+   renderGrid() before rows are built. Read by gridRowHTML for the Share column. */
+let groupMetrics = new Map();
+
 function gridRowHTML(r) {
   const es = gridEditState();
   const mode = MODES[state.view];
@@ -570,6 +605,13 @@ function gridRowHTML(r) {
       return `<td class="${sticky} meta-col num-cell">${body}</td>`;
     }
     if (c.calc) {
+      if (c.key === "share") {
+        // Feature #14: this resource's slice of planned revenue for its group.
+        const gt = groupMetrics.get(r.id);
+        const share = gt && gt.total ? (gt.rev / gt.total) * 100 : 0;
+        return `<td class="${sticky} calc bar-cell"><span class="bar-num">${share.toFixed(1)}%</span>`
+             + barHTML([{ v: share, color: "linear-gradient(90deg,var(--accent),var(--accent2))" }], 100) + `</td>`;
+      }
       const v = c.calc === "total_hrs" ? total : c.calc === "total_rev" ? rev : cost;
       const dimCls = c.dim ? " dim" : "";
       return `<td class="${sticky} calc${dimCls}" data-calc="${c.calc}">${fmt(v, c.calc === "total_hrs" ? 1 : 2)}</td>`;
@@ -623,6 +665,23 @@ function renderGrid() {
       groups.push({ key, client, project, members: [r] });
     }
   }
+  /* Feature #14: the Share column needs each resource's planned revenue AND its
+     group's total, so compute both in one pass up front (groupMetrics is read by
+     gridRowHTML). Computed over the VISIBLE week range so it matches the totals
+     shown in the row. */
+  groupMetrics = new Map();
+  const visIdx = visibleWeekIndices();
+  for (const g of groups) {
+    let total = 0;
+    const per = [];
+    for (const m of g.members) {
+      const hrs = visIdx.reduce((a, i) => a + ((m.hours || [])[i] || 0), 0);
+      const rev = (effRate(m) || 0) * hrs;
+      per.push([m.id, rev]);
+      total += rev;
+    }
+    for (const [rid, rev] of per) groupMetrics.set(rid, { rev, total });
+  }
   const filter = ($("#filter").value || "").toLowerCase();
   const lockHint = es.meta ? "" : " · LOCKED — click Edit to make changes";
   $("#gridNote").innerHTML = `<span class="dot ${mode.dot}"></span>${mode.note}${lockHint}`;
@@ -656,6 +715,15 @@ function renderGrid() {
       if (!c.calc) return;
       const idx = i + 1;
       const sticky = idx <= fz ? ` sticky-l sc${idx}` : "";
+      if (c.key === "share") {
+        // Feature #14: a group's own share of itself is 100% — showing a full bar
+        // makes the group row read as the reference the rows are measured against.
+        grp += `<td class="${sticky} calc bar-cell">`
+             + `<span class="bar-num">100%</span>`
+             + barHTML([{ v: 1, color: "linear-gradient(90deg,var(--accent),var(--accent2))" }], 1)
+             + `</td>`;
+        return;
+      }
       const v = c.calc === "total_hrs" ? hrs : c.calc === "total_rev" ? rev : cost;
       const dimCls = c.dim ? " dim" : "";
       grp += `<td class="${sticky} calc${dimCls}" data-calc="${c.calc}">${fmt(v, c.calc === "total_hrs" ? 1 : 2)}</td>`;
@@ -2000,6 +2068,16 @@ function actualsRowHTML(r) {
     if (c.key === "planned") return `<td class="${sticky} calc dim" data-calc="total_planned">${fmt(totalPlanned, 1)}</td>`;
     if (c.key === "actual") return `<td class="${sticky} calc" data-calc="total_actual">${fmt(totalActual, 1)}</td>`;
     if (c.key === "delta") return `<td class="${sticky} calc ${deltaCls}" data-calc="delta">${delta > 0 ? "+" : ""}${fmt(delta, 1)}</td>`;
+    if (c.key === "pvabar") {
+      /* Feature #14: two stacked bars — plan (cyan) over actual (green when at or
+         over plan, red when under) — so the shape of a whole project is readable
+         without reading any numbers. Scales both bars to the larger of the two. */
+      const color = delta >= 0 ? "var(--green)" : "var(--red)";
+      return `<td class="${sticky} calc bar-cell">`
+           + barHTML([{ v: totalPlanned, color: "linear-gradient(90deg,var(--accent),var(--accent2))" },
+                      { v: totalActual, color }])
+           + `</td>`;
+    }
     return `<td${sticky ? ` class="${sticky}"` : ""}></td>`;
   }).join("");
   return `<tr class="resource-row" data-rid="${r.id}">
@@ -2042,6 +2120,15 @@ function renderActuals() {
       if (!c.calc) return;
       const idx = i + 1;
       const sticky = idx <= fz0 ? ` sticky-l sc${idx}` : "";
+      if (c.key === "pvabar") {
+        // Feature #14: group-level plan-vs-actual bar (same encoding as the rows).
+        const color = a >= p ? "var(--green)" : "var(--red)";
+        grp += `<td class="${sticky} calc bar-cell">`
+             + barHTML([{ v: p, color: "linear-gradient(90deg,var(--accent),var(--accent2))" },
+                        { v: a, color }])
+             + `</td>`;
+        return;
+      }
       const v = c.key === "planned" ? p : c.key === "actual" ? a : (a - p);
       const dimCls = c.key === "planned" ? " dim" : "";
       grp += `<td class="${sticky} calc${dimCls}" data-calc="${c.calc}">${fmt(v, 1)}</td>`;
