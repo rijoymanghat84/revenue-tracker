@@ -28,6 +28,7 @@ let WB = {
   weekLabels: [],
   months: [],            // month bands + their week ranges (from /api/pm/load)
   weekMonth: [],         // week index -> month name, for labels + tooltips
+  current: {},           // which week/month is "now" (server-authoritative)
   selKey: null,          // "client||project" of the selected project
   filter: "",
   loadFilter: "",
@@ -45,6 +46,7 @@ async function loadWorkbench() {
   WB.weekLabels = load.week_labels || [];
   WB.months = load.months || [];
   WB.weekMonth = load.week_month || [];
+  WB.current = load.current || {};
   if (!WB.selKey && WB.projects.length) {
     WB.selKey = wbKey(WB.projects[0].client, WB.projects[0].project);
   }
@@ -187,9 +189,13 @@ function weekGridHTML(x) {
   const months = WB.months || [];
   const cols = `grid-template-columns:repeat(${weeks.length || 1}, minmax(0, 1fr));`;
   if (!weeks.length) return "";
+  const cur = WB.current || {};
   const band = months.map((m) => {
     const span = (m.end - m.start) + 1;
-    return `<i class="wb-mo" style="grid-column:span ${span}" title="${esc(m.name)} (${span} weeks)">${esc(m.name)}</i>`;
+    // The month we are IN gets a solid accent so "where am I?" needs no counting.
+    const isNow = cur.month && String(m.name).toUpperCase() === String(cur.month).toUpperCase();
+    return `<i class="wb-mo ${isNow ? "now" : ""}" style="grid-column:span ${span}"
+      title="${esc(m.name)} (${span} weeks)${isNow ? " — current month" : ""}">${esc(m.name)}</i>`;
   }).join("");
   const cells = weeks.map((wl, i) => {
     const v = (x.weeks || [])[i] || 0;
@@ -197,8 +203,12 @@ function weekGridHTML(x) {
     // "03-Mar" reads as a date; the full tooltip carries month + utilisation.
     const mmdd = wl.includes("-") ? wl.split("-").slice(1).join("-") : wl;
     const mon = (WB.weekMonth || [])[i] || "";
-    return `<b class="wb-wk ${cls}" data-wk="${i}" tabindex="0" role="button"
-      title="${esc(x.name)} — ${esc(mon)} ${esc(wl)}: ${v}% of capacity · click for detail">${esc(mmdd)}</b>`;
+    const isNow = cur.week_index === i;
+    const nowNote = isNow && cur.week_start
+      ? ` — CURRENT WEEK (${esc(cur.week_start)} to ${esc(cur.week_end)})`
+      : "";
+    return `<b class="wb-wk ${cls} ${isNow ? "now" : ""}" data-wk="${i}" tabindex="0" role="button"
+      title="${esc(x.name)} — ${esc(mon)} ${esc(wl)}: ${v}% of capacity${nowNote} · click for detail">${esc(mmdd)}</b>`;
   }).join("");
   return `<div class="wb-grid-rail" style="${cols}">${band}${cells}</div>`;
 }
@@ -436,6 +446,14 @@ function openWeekDetail(pid, wk) {
     : pct >= 80 ? `<span class="pill wb-pill-ok">healthy</span>`
     : pct >= 1 ? `<span class="pill wb-pill-warn">partly booked</span>`
     : `<span class="pill wb-pill-free">free</span>`;
+  const cur = WB.current || {};
+  const isNowWeek = cur.week_index === wk;
+  // "Now" needs to be stated, not inferred: the week containing today carries
+  // the label of its Monday, so the current week can read as a PREVIOUS month
+  // (Thu 1 Oct 2026 sits in the week labelled Sep-28 / month SEP).
+  const nowBadge = (!isNowWeek && String(cur.month || "").toUpperCase() !== String(mon).toUpperCase())
+    ? ""
+    : `<span class="wk-now">● ${isNowWeek ? "This is the current week" : "Current month"}${isNowWeek && cur.week_start ? ` (${esc(cur.week_start)} → ${esc(cur.week_end)})` : ""}</span>`;
   const rows = detail.length
     ? `<table class="wk-tbl"><thead><tr><th>Client · Project</th><th class="num">Alloc</th>
          <th class="num">Hours</th><th></th></tr></thead><tbody>
@@ -452,7 +470,7 @@ function openWeekDetail(pid, wk) {
   const body = `
     <div class="wk-head">
       <div><b>${esc(person.name)}</b> <span class="muted-note">${esc(person.home_title || "—")}</span></div>
-      <div>${esc(mon)} · week of <b>${esc(lbl)}</b></div>
+      <div>${esc(mon)} · week of <b>${esc(lbl)}</b> ${nowBadge}</div>
     </div>
     <div class="wk-sum">
       <div><span class="muted-note">Booked</span><br><b>${pct}%</b> <span class="muted-note">(${hrs} of ${fmtH(cap)} h)</span></div>
@@ -578,6 +596,7 @@ async function refreshLoadOnly() {
     WB.weekLabels = d.week_labels || WB.weekLabels;
     WB.months = d.months || WB.months;
     WB.weekMonth = d.week_month || WB.weekMonth;
+    WB.current = d.current || WB.current;
     renderWbLoad();
   } catch (_) {}
 }

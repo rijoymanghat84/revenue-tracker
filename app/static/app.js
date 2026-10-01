@@ -612,12 +612,24 @@ function gridHeadHTML() {
     const idx = i + 1;
     return idx <= fz ? `<th class="sticky-h sc${idx}"></th>` : "<th></th>";
   }).join("");
+  // Mark the month and week we are CURRENTLY in, so the year-long grid has an
+  // anchor. `state.current` comes from the server so the grid and the PM load
+  // rail can never disagree about what "now" is.
+  const cur = state.current || {};
   const monthCells = months.filter((m) => m.end >= vis[0] && m.start <= vis[vis.length - 1])
     .map((m) => {
       const s = Math.max(m.start, vis[0]), e = Math.min(m.end, vis[vis.length - 1]);
-      return `<th colspan="${e - s + 1}">${esc(m.name)}</th>`;
+      const isNow = cur.month && String(m.name).toUpperCase() === String(cur.month).toUpperCase();
+      return `<th colspan="${e - s + 1}" class="${isNow ? "mo-now" : ""}" title="${esc(m.name)}${isNow ? " - current month" : ""}">${esc(m.name)}</th>`;
     }).join("");
-  const weekCells = vis.map((i) => `<th class="week-h">${esc(weeks[i])}</th>`).join("");
+  const weekCells = vis.map((i) => {
+    const isNow = cur.week_index === i;
+    const mon = (months.find((m) => m.start <= i && i <= m.end) || {}).name || "";
+    const tip = isNow && cur.week_start
+      ? `Current week - ${cur.week_start} to ${cur.week_end} (${mon} by month band)`
+      : `${mon} ${weeks[i]}`;
+    return `<th class="week-h ${isNow ? "wk-now" : ""}" title="${esc(tip)}">${esc(weeks[i])}</th>`;
+  }).join("");
   const actionBlank = "<th></th>";
   return `<tr class="head-row">
             ${headCells}
@@ -2373,13 +2385,31 @@ function actualsHeadHTML() {
     const idx = i + 1;
     return idx <= fz ? `<th class="sticky-h sc${idx}"></th>` : "<th></th>";
   }).join("");
+  // Mark the month and week we are CURRENTLY in, so the year-long grid has an
+  // anchor. `state.current` comes from the server so the grid and the PM load
+  // rail can never disagree about what "now" is.
+  const cur = state.current || {};
   const monthCells = months.filter((m) => m.end >= vis[0] && m.start <= vis[vis.length - 1])
     .map((m) => {
       const s = Math.max(m.start, vis[0]), e = Math.min(m.end, vis[vis.length - 1]);
-      return `<th colspan="${e - s + 1}">${esc(m.name)}</th>`;
+      const isNow = cur.month && String(m.name).toUpperCase() === String(cur.month).toUpperCase();
+      return `<th colspan="${e - s + 1}" class="${isNow ? "mo-now" : ""}" title="${esc(m.name)}${isNow ? " - current month" : ""}">${esc(m.name)}</th>`;
     }).join("");
-  const weekCells = vis.map((i) => `<th class="week-h">${esc(weeks[i])}</th>`).join("");
-  return `<tr class="head-row">${headCells}${weekCells}</tr>
+  const weekCells = vis.map((i) => {
+    const isNow = cur.week_index === i;
+    const mon = (months.find((m) => m.start <= i && i <= m.end) || {}).name || "";
+    const tip = isNow && cur.week_start
+      ? `Current week - ${cur.week_start} to ${cur.week_end} (${mon} by month band)`
+      : `${mon} ${weeks[i]}`;
+    return `<th class="week-h ${isNow ? "wk-now" : ""}" title="${esc(tip)}">${esc(weeks[i])}</th>`;
+  }).join("");
+  // NOTE: the head row must hold BLANKS over the week area, not the week labels.
+  // It used to render `${headCells}${weekCells}`, which drew every week label a
+  // second time one row above the real week-row (the Planned grid does this
+  // correctly with headBlank()). Harmless-looking, but it duplicated the header
+  // and, once the current week is highlighted, marked two cells instead of one.
+  const headBlanks = vis.map(() => "<th></th>").join("");
+  return `<tr class="head-row">${headCells}${headBlanks}</tr>
           <tr class="month-row">${spacers}${monthCells}</tr>
           <tr class="week-row">${spacers}${weekCells}</tr>`;
 }
