@@ -9,7 +9,54 @@ wasn't one) and the commit.
 
 ---
 
-## 2026-10-01 — Trail convention made enforceable
+## 2026-10-01 — Utilization: Month/Week toggle + two header defects (GH-28)
+
+Commit `59989a4` — **GH-28**. Reported from the board: _"all the month is now
+together, design wise it should be proper like Jan month and then the 4 weeks
+below it"_ and _"make sure that the month and the Planned and Actual are aligned
+properly for that month."_
+
+Two separate rendering bugs, both measured in the live app before touching
+anything:
+
+1. **The month header did not span its own pair.** Each month renders as a
+   **Planned** and an **Actual** column, but the month `<th>` had no `colspan`
+   while its sub-row had two cells. `JAN` measured **51px sitting over a 102px
+   pair** — `MISALIGN_RIGHT = -51px` — so the month name covered its Planned
+   column only and the Actual column dangled outside its own month. Fixed with
+   `colspan="2"`; all 12 months now measure **0px** on both edges.
+2. **Header rows overlapped on scroll.** `thead th` is `position: sticky` and
+   every row kept `top: auto`, so all rows pinned to the *same* offset. After
+   scrolling, row 0 sat at `top=169 bottom=199` and row 1 at `top=169 bottom=197`
+   — **30px of overlap on a 30px row**, i.e. the month names were completely
+   covered. Each header row now pins to its own offset.
+
+**New: a Month / Week toggle** on the Utilization toolbar.
+
+- **Month** (default) — the year at a glance, unchanged numbers.
+- **Week** — each month is a band over its weeks and a week is itself a P/A
+  pair, so the hierarchy reads **Month > Week > P|A**. Hidden on the single-month
+  drill-down; Week also works inside a chosen month.
+
+`/api/utilization` is month-only, so weekly figures are derived client-side from
+`state.resources` (`hours[53]` / `actual_hours[53]`), **summed per person name**
+to match the server's per-person aggregation. **No server, schema or DB change.**
+
+| Check | Before | After |
+|---|---|---|
+| Month header vs its P/A pair | `-51px` | **0px**, all 12 months |
+| Header overlap on scroll | 30px (names covered) | **none** |
+| Month figures | — | **identical** to pre-change |
+| Week columns | — | 53 weeks, 111 cells/row |
+| Frozen columns (header vs body) | — | `d=0` in both modes |
+| Month-column highlight | 96 cells | **96 cells** (unchanged) |
+
+**Pitfall worth remembering:** the service worker caches assets cache-first, so
+re-bumping to a *previously used* version string (I reused `?v=105`) serves the
+old file from cache and the fix looks undeployed. Every deploy needs a **new**
+version number.
+
+---
 
 the owner's instruction: _"if there is anything we are fixing and it's already a bug
 or a fix or feature to an already done thing, make the changes in git also, so
