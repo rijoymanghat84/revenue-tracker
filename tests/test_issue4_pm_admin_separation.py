@@ -13,6 +13,7 @@ Covers:
     creating the same username as admin then as PM (or vice versa) is a 409.
 """
 import os, sys, json, tempfile, shutil
+from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import app.main as m
@@ -22,9 +23,13 @@ print("TMP:", tmp)
 os.environ["REVENUE_AUTH_USER"] = "admin"
 os.environ["REVENUE_AUTH_PASSWORD"] = "super-secret"
 os.environ["REVENUE_DB_PASSWORD"] = ""
-m.DATA_DIR = tmp
-m.DB_PATH = os.path.join(tmp, "revenue.db")
-m.DB_KEY_FILE = os.path.join(tmp, ".dbkey")
+m.DATA_DIR = Path(tmp)
+m.DB_PATH = Path(tmp) / "revenue.db"
+# Paths, not strs — _db_key() calls .exists() on them. See the same note in
+# test_admin_mgmt.py; both files had drifted from production's Path types.
+m.DB_KEY_FILE = Path(tmp) / ".dbkey"
+# Redirect the legacy key path too, so the test can never read the live DB key.
+m.LEGACY_KEY_FILE = Path(tmp) / ".dbkey.legacy"
 
 import sqlite3 as _plain
 m._cipher = _plain

@@ -5,6 +5,7 @@ then drives the TestClient: login as super-admin, create an admin with
 permissions, verify permission gating, verify the last-admin safeguard.
 """
 import os, sys, json, tempfile, shutil
+from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import app.main as m
@@ -15,9 +16,16 @@ print("TMP:", tmp)
 os.environ["REVENUE_AUTH_USER"] = "admin"
 os.environ["REVENUE_AUTH_PASSWORD"] = "super-secret"
 os.environ["REVENUE_DB_PASSWORD"] = ""          # plain DB for test
-m.DATA_DIR = tmp
-m.DB_PATH = os.path.join(tmp, "revenue.db")
-m.DB_KEY_FILE = os.path.join(tmp, ".dbkey")
+m.DATA_DIR = Path(tmp)
+m.DB_PATH = Path(tmp) / "revenue.db"
+# MUST stay a Path: _db_key() calls .exists() on it (production defines these as
+# Path objects). Assigning a str here raised
+# "AttributeError: 'str' object has no attribute 'exists'".
+m.DB_KEY_FILE = Path(tmp) / ".dbkey"
+# Also redirect the LEGACY key path. It used to be left pointing at the repo's
+# real data/.dbkey, so if a legacy key ever existed the test would silently read
+# the LIVE database key instead of staying in its sandbox.
+m.LEGACY_KEY_FILE = Path(tmp) / ".dbkey.legacy"
 
 # ensure _HAS_CIPHER doesn't interfere: force plain sqlite3 for the test
 import sqlite3 as _plain
