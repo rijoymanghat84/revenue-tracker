@@ -30,7 +30,15 @@ from . import importer
 BASE = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE / "data"
 DB_PATH = DATA_DIR / "revenue.db"
-DB_KEY_FILE = DATA_DIR / ".dbkey"   # holds the DB encryption password (gitignored)
+# The DB encryption key lives OUTSIDE the app dir (2026-10-01). Keeping it next
+# to data/ put the key, the DB and every backup in one folder — so any copy of
+# the app directory (including the NAS/weekly tarball) carried both, making the
+# encryption decorative. It now sits in /opt/data/keys/, which the weekly tar
+# does not include. The old in-dir path is still honoured as a fallback so a
+# revert or an older checkout keeps working.
+KEYS_DIR = Path("/opt/data/keys")
+DB_KEY_FILE = KEYS_DIR / "revenue.dbkey"
+LEGACY_KEY_FILE = DATA_DIR / ".dbkey"   # pre-2026-10-01 location
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 # SQLCipher-backed connection (real encryption). Falls back to plain sqlite3
@@ -44,19 +52,34 @@ except Exception:  # noqa: BLE001
 
 
 def _db_key() -> str:
-    """Return the DB encryption password: env var first, else the .dbkey file.
-    Empty string = no encryption (only when neither is set)."""
+    """Return the DB encryption password.
+
+    Order (2026-10-01): env var, then the out-of-app key file, then the legacy
+    in-app location. The legacy read keeps an older checkout / a reverted
+    deploy working — it is a fallback, never the preferred source.
+    Empty string = no encryption (only when none of them is set).
+    """
     env = os.environ.get("REVENUE_DB_PASSWORD", "")
     if env:
         return env
-    kf = Path(DB_KEY_FILE)
-    if kf.exists():
-        return kf.read_text().strip()
+    for kf in (DB_KEY_FILE, LEGACY_KEY_FILE):
+        try:
+            if kf.exists():
+                txt = kf.read_text().strip()
+                if txt:
+                    return txt
+        except OSError:
+            continue
     return ""
 
 
 def _set_db_key(pw: str) -> None:
-    """Persist the DB password to the .dbkey file (0600, gitignored)."""
+    """Persist the DB password to the key file (0600, outside the app dir).
+
+    Writes to the new location; also refreshes the legacy in-app copy when one
+    already exists, so an in-flight re-key does not leave a stale key behind
+    that a fallback read could pick up.
+    """
     kf = Path(DB_KEY_FILE)
     kf.parent.mkdir(parents=True, exist_ok=True)
     kf.write_text(pw)
@@ -64,6 +87,12 @@ def _set_db_key(pw: str) -> None:
         os.chmod(kf, 0o600)
     except OSError:
         pass
+    if LEGACY_KEY_FILE.exists():
+        try:
+            LEGACY_KEY_FILE.write_text(pw)
+            os.chmod(LEGACY_KEY_FILE, 0o600)
+        except OSError:
+            pass
 
 
 def _is_encrypted(path) -> bool:
@@ -1660,34 +1689,116 @@ def _till_date_cap(weeks: list[str]) -> int | None:
     return last
 
 
-@app.get("/api/dashboard")
-def api_dashboard(request: Request, month: str = "", client: str = ""):
-    """Dashboard rows, optionally scoped to a month and/or a single client.
+def _split_csv(v: str) -> list[str]:
+    """'a, b ,c' -> ['a','b','c']. Empty/None -> []. Used by the Dashboard
+    multi-select filters, which arrive as one comma-joined query param."""
+    return [x.strip() for x in (v or "").split(",") if x.strip()]
 
-    `client` (feature #10.1) filters the report to one client and re-totals it.
+
+UNASSIGNED_PM = "Unassigned"   # sentinel for (client,project) with no owner
+
+
+def _dash_filter(resources: list[dict], clients: list[str], projects: list[str],
+                 pms: list[str], owners: dict[tuple[str, str], str]) -> list[dict]:
+    """Apply the Dashboard's multi-select filters. An empty list at a level
+    means "no filter at that level", so the user can select client-only,
+    client+project, or any other combination.
+
+    Projects arrive either as a "Client · Project" label (unambiguous, what the
+    UI sends when the client is known) or as a bare project name. PM matching
+    uses the Project→PM assignment; `Unassigned` selects projects with no PM.
+    All matching is normalised so 'acme' finds 'ACME Inc.'.
+    """
+    cset = {_norm(c) for c in clients}
+    pset: set[tuple[str | None, str]] = set()
+    for p in projects:
+        if " · " in p:
+            c, pr = p.split(" · ", 1)
+            pset.add((_norm(c), _norm(pr)))
+        else:
+            pset.add((None, _norm(p)))
+    pmset = {_norm(p) for p in pms}
+    want_unassigned = UNASSIGNED_PM in pms
+
+    out = []
+    for r in resources:
+        raw_client = (r.get("client") or "").strip()
+        raw_project = (r.get("project") or "").strip()
+        c, p = _norm(raw_client), _norm(raw_project)
+
+        if cset and c not in cset:
+            continue
+        if pset and not any((pc is None and p == pn) or (pc == c and p == pn)
+                            for pc, pn in pset):
+            continue
+        if pmset or want_unassigned:
+            owner = owners.get((raw_client, raw_project))
+            # A resource with no project can never be tied to a PM assignment,
+            # so it counts as unassigned rather than silently disappearing.
+            hit = bool(want_unassigned and not owner)
+            if owner and _norm(owner) in pmset:
+                hit = True
+            if not hit:
+                continue
+        out.append(r)
+    return out
+
+
+@app.get("/api/dashboard")
+def api_dashboard(request: Request, month: str = "", client: str = "",
+                  project: str = "", pm: str = "", currency: str = ""):
+    """Dashboard rows, optionally scoped by month, client(s), project(s), PM(s)
+    and currency.
+
+    Feature #12 (redesign): every filter is a multi-select. Filters cascade —
+    Month · Project · PM · Client · Currency — so the user can pick client-only,
+    client+project, or any other combination; an omitted filter means "all".
     Matching is normalised, so 'acme' finds 'ACME Inc.' exactly as the grouping
     logic already normalises country/client keys.
+
+    The option lists (clients/projects/pms) always come from the FULL set, never
+    the filtered one, so choosing a filter never shrinks the list of things you
+    can pick next.
     """
     _require_admin(request)
     conn = get_db()
     try:
         weeks, months = _load_layout()
-        resources = _all_resources(conn, weeks)
-        if client.strip():
-            want = _norm(client)
-            resources = [r for r in resources if _norm(r.get("client")) == want]
+        all_res = _all_resources(conn, weeks)
+        owners = _project_owners(conn)
+
+        resources = _dash_filter(all_res, _split_csv(client), _split_csv(project),
+                                 _split_csv(pm), owners)
         wr = _month_week_range(months, month)
         rows = build_dashboard_rows(resources, weeks, wr, _till_date_cap(weeks))
-        # Distinct clients for the filter dropdown — always from the FULL set,
-        # so choosing one client never shrinks the list of choosable clients.
-        conn2_clients = sorted({
-            (r.get("client") or "").strip()
-            for r in _all_resources(conn, weeks)
-            if (r.get("client") or "").strip()
-        }, key=lambda s: s.lower())
+
+        # Currency selector. When a single currency is chosen, drop the other
+        # currency's rows/totals entirely so the KPI tiles and table agree.
+        cur = (currency or "").strip().upper()
+        if cur in ("USD", "EUR"):
+            rows = {"groups": [g for g in rows["groups"] if g["currency"] == cur],
+                    "totals": [t for t in rows["totals"] if t["currency"] == cur]}
+
+        # Option lists — always from the FULL set (see docstring).
+        all_clients = sorted({(r.get("client") or "").strip() for r in all_res
+                              if (r.get("client") or "").strip()}, key=lambda s: s.lower())
+        proj_pairs = sorted({((r.get("client") or "").strip(), (r.get("project") or "").strip())
+                             for r in all_res if (r.get("project") or "").strip()},
+                            key=lambda t: (t[0].lower(), t[1].lower()))
+        pm_opts = sorted({v for v in owners.values() if v}, key=lambda s: s.lower())
+        has_unassigned = any(
+            (r.get("project") or "").strip()
+            and ((r.get("client") or "").strip(), (r.get("project") or "").strip()) not in owners
+            for r in all_res
+        )
+
         return {"rows": rows, "generated_at": None,
                 "month": month or "all", "client": client or "",
-                "clients": conn2_clients}
+                "project": project or "", "pm": pm or "", "currency": cur,
+                "clients": all_clients,
+                "projects": [{"client": c, "project": p, "label": f"{c} · {p}"}
+                             for c, p in proj_pairs],
+                "pms": pm_opts, "has_unassigned": has_unassigned}
     finally:
         conn.close()
 
@@ -2541,7 +2652,8 @@ async def api_import(file: UploadFile = File(...), mode: str = Form("merge"), re
 
 # ---------------- Export ----------------
 @app.get("/api/export")
-def api_export(request: Request):
+def api_export(request: Request, scope: str = "", month: str = "", client: str = "",
+               project: str = "", pm: str = "", currency: str = ""):
     user = _require_pm(request)
     conn = get_db()
     try:
@@ -2566,6 +2678,38 @@ def api_export(request: Request):
             )
         # Admin export (non-PM): gated behind the import_export permission.
         _require_perm(request, "import_export")
+
+        # Feature #12: ?scope=filtered&month=&client=&project=&pm=&currency=
+        # exports just what the Dashboard filters show, instead of the full
+        # workbook. The default (no scope param) path below is unchanged, so
+        # every existing Export button/link keeps working exactly as before.
+        if (scope or "").strip().lower() == "filtered":
+            owners = _project_owners(conn)
+            scoped = _dash_filter(resources, _split_csv(client), _split_csv(project),
+                                  _split_csv(pm), owners)
+            cur = (currency or "").strip().upper()
+            if cur in ("USD", "EUR"):
+                scoped = [r for r in scoped
+                          if ("EUR" if _norm(r.get("country")) in EU_COUNTRIES else "USD") == cur]
+            wr = _month_week_range(months, month)
+            # Re-total over the scoped rows so the export's Dashboard sheet
+            # matches the numbers the user is looking at on screen.
+            dash = build_dashboard_rows(scoped, weeks, wr, _till_date_cap(weeks))
+            util = compute_utilization(weeks, months, scoped)
+            # Keep the Pricing sheet in the filtered workbook too, so a filtered
+            # export round-trips into the importer exactly like the full one.
+            pricing = conn.execute(
+                "SELECT title, rate, offshore_rate, currency FROM pricing ORDER BY sort_order, title"
+            ).fetchall()
+            buf = importer.build_workbook(weeks, months, scoped, dash,
+                                          [dict(r) for r in pricing], util)
+            buf.seek(0)
+            return StreamingResponse(
+                buf,
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={"Content-Disposition": 'attachment; filename="Revenue_Recon_filtered.xlsx"'},
+            )
+
         dash = build_dashboard_rows(resources, weeks)
         pricing = conn.execute(
             "SELECT title, rate, offshore_rate, currency FROM pricing ORDER BY sort_order, title"
