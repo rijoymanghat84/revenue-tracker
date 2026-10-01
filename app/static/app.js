@@ -20,7 +20,7 @@
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
-const state = { resources: [], weeks: [], months: [], pricing: [], view: "dash", gridEdit: { planned: false }, me: null, globalMonth: "all", utilMonth: "", utilMode: "month" };
+const state = { resources: [], weeks: [], months: [], pricing: [], view: "dash", gridEdit: { planned: false }, me: null, globalMonth: "all", utilMonth: "", utilMode: "month", utilFilters: { client: [], project: [], pm: [] }, availOpen: false };
 
 /* Full admin permission key set — mirrors ADMIN_PERMISSIONS in app/main.py.
    Used only as a defensive fallback when /api/login omits `permissions`. */
@@ -1987,13 +1987,312 @@ function utilWeeksOf(mi) {
   return out;
 }
 
+/* ---------------- Utilization filters + availability (GH-29) ----------------
+
+   the owner: "there should an option to filter as well so that I can see the
+   details, per project and per resource" and "a way to look which resources will
+   be available for a given month based on the percentage."
+
+   The filters reuse msHtml() (the Dashboard's cascading multi-select) but hold
+   their OWN state in state.utilFilters rather than dashF, so filtering
+   Utilization never disturbs the Dashboard's selection. Unlike the Dashboard —
+   where a filter only picks which rows are listed — these are sent to the server
+   and applied BEFORE the utilization aggregation, so picking a project shows
+   that project's hours rather than the person's whole book.
+*/
+function utilFiltersQS() {
+  const p = new URLSearchParams();
+  const f = state.utilFilters || {};
+  for (const k of ["client", "project", "pm"]) {
+    if (f[k] && f[k].length) p.set(k, f[k].join(","));
+  }
+  if (state.globalMonth && state.globalMonth !== "all") p.set("month", state.globalMonth);
+  return p.toString();
+}
+
+/* Keep the two PM-ish lists from fighting: a PM option can never match a project
+   that was filtered out, so narrow the PM list to the owners of the surviving
+   projects. Cascading downward only — a PM choice never empties the project list. */
+function utilOptsCascaded(opts, f) {
+  const un = "Unassigned";
+  let pms = opts.pms || [];
+  if (f.project && f.project.length) {
+    const want = new Set(f.project);
+    const owners = new Set();
+    let anyUnassigned = false;
+    for (const p of opts.projects || []) {
+      if (!want.has(p.label) && !want.has(p.project)) continue;
+      const o = (p.owner || "").trim();
+      if (o) owners.add(o); else anyUnassigned = true;
+    }
+    pms = pms.filter((x) => owners.has(x));
+    if (anyUnassigned && !pms.includes(un)) pms = pms.concat([un]);
+  }
+  if ((opts.pms || []).length && pms.length === 0 && !opts.has_unassigned) {
+    pms = opts.pms; // never strand the user with an empty control
+  }
+  return pms;
+}
+
+function renderUtilFilters(opts) {
+  const host = $("#utilFilterRow");
+  if (!host || !opts) return;
+  const f = state.utilFilters;
+  const projOpts = (opts.projects || []).map((p) => ({ value: p.label, label: p.label }));
+  const pms = utilOptsCascaded(opts, f);
+  const pmOpts = pms.map((x) => ({ value: x, label: x }));
+
+  let html = "";
+  html += msHtml("u_client", "Client", "All clients",
+                 (opts.clients || []).map((c) => ({ value: c, label: c })), f.client, "");
+  html += msHtml("u_project", "Project", "All projects", projOpts, f.project,
+                 f.client && f.client.length ? `Showing ${f.client.length} client(s)` : "");
+  html += msHtml("u_pm", "PM", "All PMs", pmOpts, f.pm,
+                 opts.has_unassigned ? "Includes Unassigned" : "");
+  const anySel = f.client.length + f.project.length + f.pm.length;
+  html += `<div class="uf-clear"><button class="btn mini" id="btnUtilClear"${anySel ? "" : " disabled"}>Clear${anySel ? ` (${anySel})` : ""}</button></div>`;
+
+  host.innerHTML = `<div class="filterbar">${html}</div><div class="uf-scope" id="utilScope"></div>`;
+  bindUtilFilters();
+  updateUtilScope();
+}
+
+/* Plain-language statement of what the numbers currently cover — the thing that
+   makes a filtered grid trustworthy rather than mysterious. */
+function updateUtilScope() {
+  const el = $("#utilScope");
+  if (!el) return;
+  const f = state.utilFilters || {};
+  const bits = [];
+  if (f.client.length) bits.push(`client${f.client.length > 1 ? "s" : ""} <b>${esc(f.client.join(", "))}</b>`);
+  if (f.project.length) bits.push(`project${f.project.length > 1 ? "s" : ""} <b>${esc(f.project.join(", "))}</b>`);
+  if (f.pm.length) bits.push(`PM <b>${esc(f.pm.join(", "))}</b>`);
+  const mon = state.globalMonth && state.globalMonth !== "all" ? ` for <b>${esc(state.globalMonth)}</b>` : "";
+  if (!bits.length) { el.innerHTML = ""; el.classList.add("hidden"); return; }
+  el.classList.remove("hidden");
+  el.innerHTML = `<span class="dot on"></span>Showing <b>filtered</b> utilization — ${bits.join(" · ")}${mon}. Hours are scoped to these rows, so totals drop below the full-year figures.`;
+}
+
+function bindUtilFilters() {
+  const closeAll = () => {
+    $$("#utilFilterRow .ms-pop").forEach((p) => p.classList.add("hidden"));
+    $$("#utilFilterRow [data-msbtn]").forEach((b) => b.classList.remove("open"));
+  };
+  const place = (btn, pop) => {
+    const r = btn.getBoundingClientRect();
+    pop.style.left = "0px"; pop.style.top = "0px";
+    const w = pop.offsetWidth || 280;
+    let left = Math.min(r.left, window.innerWidth - w - 8);
+    left = Math.max(8, left);
+    const h = pop.offsetHeight || 300;
+    const below = window.innerHeight - r.bottom - 10;
+    const up = below < Math.min(h, 220) && r.top > below;
+    pop.classList.toggle("drop-up", up);
+    pop.style.left = left + "px";
+    pop.style.top = (up ? Math.max(8, r.top - pop.offsetHeight - 6) : r.bottom + 6) + "px";
+  };
+  $$("#utilFilterRow [data-msbtn]").forEach((b) => {
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const pop = $(`#msPop-${b.dataset.msbtn}`);
+      if (!pop) return;
+      const wasOpen = !pop.classList.contains("hidden");
+      closeAll();
+      if (!wasOpen) {
+        document.body.appendChild(pop);   // portal out of the panel, same as the Dashboard
+        pop.classList.remove("hidden");
+        b.classList.add("open");
+        place(b, pop);
+        const s = pop.querySelector(".ms-search");
+        if (s) s.focus();
+      }
+    });
+  });
+  $$("#utilFilterRow [data-msall]").forEach((c) => {
+    c.addEventListener("change", () => {
+      const key = c.dataset.msall;
+      if (key === "u_client") state.utilFilters.client = [];
+      else if (key === "u_project") state.utilFilters.project = [];
+      else if (key === "u_pm") state.utilFilters.pm = [];
+      renderUtilization();
+    });
+  });
+  $$("#utilFilterRow [data-msopt]").forEach((c) => {
+    c.addEventListener("change", () => {
+      const key = c.dataset.msopt, v = c.value;
+      const map = { u_client: "client", u_project: "project", u_pm: "pm" };
+      const arr = state.utilFilters[map[key]];
+      const i = arr.indexOf(v);
+      if (c.checked && i === -1) arr.push(v);
+      if (!c.checked && i !== -1) arr.splice(i, 1);
+      renderUtilization();
+    });
+  });
+  $$("#utilFilterRow .ms-search").forEach((s) => {
+    s.addEventListener("input", () => {
+      const q = s.value.trim().toLowerCase();
+      Array.from(s.parentElement.querySelectorAll("label:not(.allrow)")).forEach((l) => {
+        l.style.display = !q || l.textContent.toLowerCase().includes(q) ? "" : "none";
+      });
+    });
+  });
+  const clr = $("#btnUtilClear");
+  if (clr) clr.addEventListener("click", () => {
+    state.utilFilters = { client: [], project: [], pm: [] };
+    renderUtilization();
+  });
+}
+
+/* ---------------- Availability for a month (GH-29) ----------------
+   "which resources will be available for a given month based on the percentage."
+
+   Availability = capacity − planned hours for the chosen month, from the SAME
+   month payload the grid shows, so the two can never disagree. Both figures were
+   summed across the person's projects server-side, so no extra field is needed.
+
+   The month follows the rail's month selector; with no month chosen we read the
+   CURRENT month, which is the one a resourcing decision is actually about.
+
+   Caveat worth stating on screen: this uses PLANNED hours. The Actual column is
+   hours already recorded, not remaining capacity, so it is deliberately not used
+   as the denominator here.
+*/
+function utilAvailMonth(data) {
+  const months = data.months || [];
+  if (!months.length) return { idx: -1, name: "" };
+  let idx = months.indexOf(state.globalMonth);
+  if (idx === -1) {
+    // current month, matched on the month LABEL the payload uses (state.months
+    // holds {name,start,end}, the payload holds plain names)
+    const nm = String((state.current || {}).month || "").toUpperCase();
+    idx = months.findIndex((m) => String(m).toUpperCase() === nm);
+  }
+  if (idx === -1) {
+    // fall back to the calendar month of today
+    const now = new Date();
+    const guess = ["JAN", "FEB", "MARCH", "APRIL", "MAY", "JUNE",
+                   "JULY", "AUG", "SEP", "OCT", "NOV", "DEC"][now.getMonth()];
+    idx = months.findIndex((m) => String(m).toUpperCase() === guess);
+  }
+  if (idx === -1) idx = 0;
+  return { idx, name: months[idx] };
+}
+
+function renderAvailability(data) {
+  const wrap = $("#availWrap");
+  if (!wrap) return;
+  const { idx, name } = utilAvailMonth(data);
+  const rows = (data.rows || []).map((r) => {
+    const mo = r.months && r.months[idx];
+    if (!mo) return null;
+    const cap = mo.capacity || 0;
+    const planned = mo.planned_hours || 0;
+    const free = Math.max(0, cap - planned);
+    const freePct = cap ? (free / cap) * 100 : 0;
+    const bookedPct = mo.planned_pct || 0;
+    return { name: r.name, projects: r.projects || [], cap, planned, free, freePct,
+             bookedPct, actual: mo.actual_hours || 0 };
+  }).filter(Boolean);
+
+  // Most available first — the question is "who can I put on something", so the
+  // bench belongs at the top. Fully-booked people stay listed, at the bottom.
+  rows.sort((a, b) => b.freePct - a.freePct || a.name.localeCompare(b.name));
+
+  const avail = rows.filter((r) => r.freePct >= 25);
+  const full = rows.filter((r) => r.freePct < 25);
+  const benchHrs = avail.reduce((s, r) => s + r.free, 0);
+
+  // The button carries the headline count, so a click has visible feedback even
+  // before the panel is reached. Measured before this was added: the panel's top
+  // landed at 944px on a 950px viewport — i.e. at the very bottom edge — so the
+  // toggle looked like it did nothing at all.
+  const btn = $("#btnToggleAvail");
+  if (btn) btn.innerHTML = rows.length
+    ? `☰ Available · <b>${avail.length}</b>`
+    : "☰ Available";
+
+  wrap.classList.toggle("hidden", !state.availOpen);
+  if (!state.availOpen) return;
+
+  // Bring the panel into view when it is opened (see above).
+  if (state._awaitAvailScroll) {
+    state._awaitAvailScroll = false;
+    requestAnimationFrame(() => {
+      const top = wrap.getBoundingClientRect().top + window.scrollY - 90;
+      window.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+    });
+  }
+
+  $("#availTitle").textContent = `Availability — ${name || "current month"}`;
+  $("#availNote").innerHTML =
+    `<b>${avail.length}</b> of ${rows.length} with headroom · <b>${fmt(benchHrs, 0)}h</b> free · ` +
+    `${full.length} at/over capacity. Free = capacity − planned hours.`;
+
+  $("#availHead").innerHTML = `<tr>
+    <th>Resource</th><th>Projects</th>
+    <th class="num">Cap/mo</th><th class="num">Planned</th><th class="num">Free</th>
+    <th class="num">Free %</th><th class="num">Booked %</th><th>Status</th></tr>`;
+
+  $("#availBody").innerHTML = rows.map((r) => {
+    const cls = r.freePct >= 50 ? "green" : r.freePct >= 25 ? "yellow" : "red";
+    const label = r.bookedPct > 100 ? "Over-allocated"
+                : r.freePct >= 50 ? "Available"
+                : r.freePct >= 25 ? "Partly free" : "Fully booked";
+    return `<tr>
+      <td class="u-name-td"><div class="u-name">${esc(r.name)}</div></td>
+      <td class="u-proj">${esc(r.projects.join(", ") || "—")}</td>
+      <td class="u-cell num">${fmt(r.cap, 0)}</td>
+      <td class="u-cell num">${fmt(r.planned, 0)}</td>
+      <td class="u-cell ${cls} num">${fmt(r.free, 0)}</td>
+      <td class="u-cell ${cls} num">${fmt(r.freePct, 0)}%</td>
+      <td class="u-cell num">${fmt(r.bookedPct, 0)}%</td>
+      <td class="u-cell">${label}</td>
+    </tr>`;
+  }).join("") || `<tr><td colspan="8" class="empty">No resources for this scope.</td></tr>`;
+}
+
+/* Filter the availability list by name/project without refetching. */
+function bindAvailSearch() {
+  const s = $("#availSearch");
+  if (!s || s.dataset.bound === "1") return;
+  s.dataset.bound = "1";
+  s.addEventListener("input", () => {
+    const q = s.value.trim().toLowerCase();
+    $$("#availBody tr").forEach((tr) => {
+      const t = tr.textContent.toLowerCase();
+      tr.style.display = !q || t.includes(q) ? "" : "none";
+    });
+  });
+}
+
+function initUtilExtras() {
+  const b = $("#btnToggleAvail");
+  if (b && b.dataset.bound !== "1") {
+    b.dataset.bound = "1";
+    b.addEventListener("click", () => {
+      state.availOpen = !state.availOpen;
+      state._awaitAvailScroll = state.availOpen;   // scroll it into view on open
+      b.classList.toggle("active-toggle", state.availOpen);
+      renderUtilization();
+    });
+  }
+  bindAvailSearch();
+}
+
 function renderUtilization() {
   const m = state.globalMonth === "all" ? "" : state.globalMonth;
-  api(`/api/utilization?month=${encodeURIComponent(m)}`).then((data) => {
+  api(`/api/utilization?${utilFiltersQS()}`).then((data) => {
     const months = data.months;
     const chosen = state.globalMonth;
     const weekMode = state.utilMode === "week";
     const cur = state.current || {};
+    // GH-29: the pick-lists come off this same payload (built from the PRE-filter
+    // set), so the Utilization tab is self-contained — no dependency on having
+    // loaded the Dashboard first.
+    state.utilOptions = data.options || null;
+    renderUtilFilters(data.options);
+    initUtilExtras();
+    $("#utilModeSeg") && ($("#utilModeSeg").dataset.wk = weekMode ? "1" : "0");
     // The Month/Week toggle only means something on the full-year board; the
     // single-month drill-down is already one month.
     const seg = $("#utilModeSeg");
@@ -2039,6 +2338,7 @@ function renderUtilization() {
         $("#utilBody").innerHTML = rows;
         bindUtilMonthHeaders(months);
         alignUtilSticky();
+        renderAvailability(data);
         return;
       }
 
@@ -2063,6 +2363,7 @@ function renderUtilization() {
       $("#utilHead").innerHTML = head;
       $("#utilBody").innerHTML = rows;
       alignUtilSticky();
+      renderAvailability(data);
       return;
     }
 
@@ -2079,12 +2380,16 @@ function renderUtilization() {
         const w = utilWeeksOf(mi);
         if (!w.length) return "";
         const on = nowMo(mm) ? " u-mo-now" : "";
-        return `<th class="num u-month-head${on}" colspan="${w.length * 2}" data-month-idx="${mi}" title="Highlight ${esc(mm)} for every resource">${esc(mm)}</th>`;
+        return `<th class="num u-month-head u-band${on}" colspan="${w.length * 2}" data-month-idx="${mi}" title="Highlight ${esc(mm)} for every resource">${esc(mm)}</th>`;
       }).join("");
       head += `<th class="num" colspan="2" rowspan="1">Overall</th></tr>`;
       head += `<tr class="u-row-week">` + months.map((mm, mi) =>
         utilWeeksOf(mi).map((i) => `<th class="num u-wk${cur.week_index === i ? " u-wk-now" : ""}" colspan="2" data-month-idx="${mi}" title="${esc(mm)} · week of ${esc(state.weeks[i])}${cur.week_index === i ? " (current week)" : ""}">${esc(utilWkLabel(state.weeks[i]))}</th>`).join("")
       ).join("") + `</tr>`;
+      // GH-29: `u-band` marks the month band so it can be CENTRED. The band's
+      // cell is wider than its label and it sits above a row of week numbers, so
+      // right-aligning it (the .num default) pushed "JAN" to the far edge of its
+      // own block — it read as if it belonged to the last week instead of the month.
       // P/A sub-cells carry the month index too, so the highlight spans the whole
       // month band (every week, both metrics) rather than just the header.
       head += `<tr class="u-row-sub u-row-sub-wk">` + months.map((mm, mi) =>
@@ -2106,8 +2411,9 @@ function renderUtilization() {
             const pp = cap ? (pl / cap) * 100 : 0;
             const ap = cap ? (ac / cap) * 100 : 0;
             const wl = esc(utilWkLabel(state.weeks[i]));
-            rows += `<td class="u-cell ${utilClass(pp)}" data-month-idx="${mi}" title="${esc(mm.name)} wk ${wl} · planned ${pl}h / ${cap}h = ${pp.toFixed(0)}%">${fmt(pp, 0)}%</td>`;
-            rows += `<td class="u-cell ${utilClass(ap)}" data-month-idx="${mi}" title="${esc(mm.name)} wk ${wl} · actual ${ac}h / ${cap}h = ${ap.toFixed(0)}%">${fmt(ap, 0)}%</td>`;
+            const mn = esc(String(mm));
+            rows += `<td class="u-cell ${utilClass(pp)}" data-month-idx="${mi}" title="${mn} wk ${wl} · planned ${pl}h / ${cap}h = ${pp.toFixed(0)}%">${fmt(pp, 0)}%</td>`;
+            rows += `<td class="u-cell ${utilClass(ap)}" data-month-idx="${mi}" title="${mn} wk ${wl} · actual ${ac}h / ${cap}h = ${ap.toFixed(0)}%">${fmt(ap, 0)}%</td>`;
           });
         });
         rows += `<td class="u-cell ${utilClass(row.planned_overall)}" title="planned ${(row.total_planned || 0).toLocaleString()}h total">${fmt(row.planned_overall, 0)}%</td>`;
@@ -2153,6 +2459,7 @@ function renderUtilization() {
     bindUtilMonthHeaders(months);
     // sticky alignment for the 3-column frozen block (Resource + Projects + Cap/wk)
     alignUtilSticky();
+    renderAvailability(data);
   }).catch((e) => toast(`Utilization failed: ${e.message}`, true));
   // The capacity editor lives on this tab (2026-10-01 split) — keep it in sync
   // with whatever the grid just rendered.

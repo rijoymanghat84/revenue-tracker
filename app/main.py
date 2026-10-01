@@ -2371,10 +2371,27 @@ def compute_utilization(weeks, months, resources) -> dict:
 
 
 @app.get("/api/utilization")
-def api_utilization(request: Request, month: str = ""):
+def api_utilization(request: Request, month: str = "", client: str = "",
+                    project: str = "", pm: str = ""):
     """Utilization for admin (all resources) or PM (scoped to their
     client/project pairs). PMs see planned + actual utilization for their
-    team only. month restricts to a single month's weeks."""
+    team only. month restricts to a single month's weeks.
+
+    GH-29: client/project/pm are the Dashboard's own multi-select filters
+    (comma-joined, normalised, empty = "all"). They are applied to the
+    per-project resource rows BEFORE aggregation, which is what makes the
+    numbers genuinely project-scoped: `_all_resources` returns one row per
+    (name, client, project), so filtering it drops the hours of the projects you
+    did not ask for instead of merely hiding people. A person who works on two
+    projects therefore shows only the selected project's hours — which is the
+    honest reading of "show me this project's utilization".
+
+    `options` carries the same cascading pick-lists the Dashboard uses
+    (clients / projects as "Client · Project" labels / pms), built from the set
+    BEFORE the admin filters are applied — so choosing a filter never shrinks
+    the list of things you can pick next. `has_unassigned` reports whether any
+    project lacks a PM, which is what lets the front end offer "Unassigned".
+    """
     user = _require_pm(request)
     conn = get_db()
     try:
@@ -2385,10 +2402,33 @@ def api_utilization(request: Request, month: str = ""):
             resources = [r for r in resources
                          if not (r["project"] or "").strip()
                          or _pm_owns(projs, (r["client"] or "").strip(), (r["project"] or "").strip())]
+        owners = _project_owners(conn)
+        # Option lists come from the PRE-filter set (see docstring above).
+        opts_clients = sorted({(r.get("client") or "").strip() for r in resources
+                               if (r.get("client") or "").strip()}, key=lambda s: s.lower())
+        opts_projects = sorted({((r.get("client") or "").strip(), (r.get("project") or "").strip())
+                                for r in resources if (r.get("project") or "").strip()},
+                               key=lambda t: (t[0].lower(), t[1].lower()))
+        opts_pms = sorted({v for k, v in owners.items() if v}, key=lambda s: s.lower())
+        has_unassigned = any(
+            (r.get("project") or "").strip()
+            and not owners.get(((r.get("client") or "").strip(), (r.get("project") or "").strip()))
+            for r in resources)
+        # Admin filters. PMs are already scoped above; a PM sending these would
+        # only ever narrow their own set, which is harmless, so no special case.
+        resources = _dash_filter(resources, _split_csv(client), _split_csv(project),
+                                 _split_csv(pm), owners)
         data = compute_utilization(weeks, months, resources)
         data["capacity_week"] = CAP_WEEK_HOURS
         data["role"] = user.get("r")
         data["month"] = month or "all"
+        data["options"] = {
+            "clients": opts_clients,
+            "projects": [{"client": c, "project": p,
+                          "label": (f"{c} · {p}" if c else p)} for c, p in opts_projects],
+            "pms": opts_pms,
+            "has_unassigned": has_unassigned,
+        }
         return data
     finally:
         conn.close()
