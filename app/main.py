@@ -909,6 +909,13 @@ def init_db() -> None:
         ("start_date", "ALTER TABLE resources ADD COLUMN start_date TEXT NOT NULL DEFAULT ''"),
         ("end_date", "ALTER TABLE resources ADD COLUMN end_date TEXT NOT NULL DEFAULT ''"),
         ("title_exception", "ALTER TABLE resources ADD COLUMN title_exception TEXT NOT NULL DEFAULT ''"),
+        # Time-phased allocation (2026-10-01). A person on a project for 5 months
+        # at 100% -> 50% -> 25% cannot be expressed by a single allocation_pct, so
+        # the assignment carries an ordered list of phases as JSON:
+        #   [{"allocation_pct":100,"start_date":"2026-01-02","end_date":"2026-03-29"}, ...]
+        # Empty string means the legacy flat mode (allocation_pct across the whole
+        # start/end window), so existing rows are untouched.
+        ("phases", "ALTER TABLE resources ADD COLUMN phases TEXT NOT NULL DEFAULT ''"),
     ):
         if col not in rcols2:
             conn.execute(ddl)
@@ -1079,6 +1086,11 @@ def _all_resources(conn: sqlite3.Connection, weeks: list[str]) -> list[dict]:
         # out of the Dashboard. Both are read by _actuals_financials.
         d["ot_multiplier"] = ot_by_title.get((r["role"] or "").strip(), 1.0)
         d["ot_requires_approval"] = gate
+        # Time-phased allocation. `allocation_schedule` is the resolved, week-
+        # aligned view (what actually got written), which is what the UI shows.
+        ph = parse_phases(r["phases"] if "phases" in r.keys() else "")
+        d["phases"] = ph
+        d["allocation_schedule"] = _resolve_schedule(ph) if ph else []
         out.append(d)
     return out
 
@@ -3361,7 +3373,7 @@ def _people_rows(conn: sqlite3.Connection) -> list[dict]:
         ).fetchall()]
         assigns = conn.execute(
             "SELECT r.id, r.client, r.project, r.role, r.allocation_pct, "
-            "r.start_date, r.end_date FROM resources r WHERE r.person_id=? "
+            "r.start_date, r.end_date, r.phases FROM resources r WHERE r.person_id=? "
             "ORDER BY r.client, r.project", (p["id"],)
         ).fetchall()
         out.append({
@@ -3369,7 +3381,7 @@ def _people_rows(conn: sqlite3.Connection) -> list[dict]:
             "home_title": p["home_title"], "capacity": p["capacity"],
             "active": p["active"], "notes": p["notes"],
             "titles": titles,
-            "assignments": [dict(a) for a in assigns],
+            "assignments": [{**dict(a), "phases": parse_phases(a["phases"])} for a in assigns],
             "project_count": len(assigns),
         })
     return out
@@ -3463,6 +3475,13 @@ class PersonBody(BaseModel):
     titles: list[str] | None = None
 
 
+class Phase(BaseModel):
+    """One leg of a time-phased allocation, e.g. 100% Jan-Mar then 50% Apr."""
+    allocation_pct: float
+    start_date: str | None = ""
+    end_date: str | None = ""
+
+
 class AssignmentBody(BaseModel):
     person_id: int
     client: str
@@ -3472,6 +3491,9 @@ class AssignmentBody(BaseModel):
     start_date: str | None = ""
     end_date: str | None = ""
     title_exception: str | None = ""
+    # Time-phased mode. When present and non-empty this WINS over the flat
+    # allocation_pct/start_date/end_date, so the same endpoint serves both.
+    phases: list[Phase] | None = None
 
 
 def _require_people(request):
@@ -3677,11 +3699,55 @@ def api_person_delete(pid: int, request: Request):
         conn.close()
 
 
+class PhaseCheckBody(BaseModel):
+    person_id: int
+    phases: list[Phase]
+    exclude_resource_id: int | None = None
+
+
+@app.post("/api/assignment/check-phases")
+def api_assignment_check_phases(body: PhaseCheckBody, request: Request):
+    """Dry-run a TIME-PHASED plan so the dialog can warn before committing.
+
+    POST (not GET) because a phase list is a structure, not a few scalars. Same
+    100% rule, applied per phase.
+    """
+    _require_people(request)
+    conn = get_db()
+    try:
+        p = conn.execute("SELECT * FROM people WHERE id=?", (body.person_id,)).fetchone()
+        if not p:
+            raise HTTPException(404, "Person not found")
+        phases = parse_phases([x.model_dump() for x in body.phases])
+        bad = validate_phases(phases)
+        cap = p["capacity"] or CAP_WEEK_HOURS
+        base = {"person": {"id": p["id"], "name": p["name"], "capacity": cap},
+                "existing_weekly_hours": round(M_peak(conn, body.person_id, body.exclude_resource_id) / 100.0 * cap, 2)}
+        if bad:
+            return {**base, "ok": False, "invalid": bad, "conflict_count": 0,
+                    "conflicts": [], "schedule": [], "total_hours": 0}
+        v = validate_phases_assignment(conn, body.person_id, phases, body.exclude_resource_id)
+        sched = _resolve_schedule(phases)
+        for s in sched:
+            s["hours_per_week"] = round(s["allocation_pct"] / 100.0 * cap, 2)
+        v.update(base)
+        v["schedule"] = sched
+        v["total_hours"] = round(sum(s["hours_per_week"] * s["weeks"] for s in sched), 1)
+        return v
+    finally:
+        conn.close()
+
+
+def M_peak(conn, person_id: int, exclude_resource_id: int | None = None) -> float:
+    """Peak existing weekly % for a person (small helper for the check payload)."""
+    return person_week_load(conn, person_id, exclude_resource_id)["peak_pct"]
+
+
 @app.get("/api/assignment/check")
 def api_assignment_check(person_id: int, allocation_pct: float = 0.0,
                          start_date: str = "", end_date: str = "",
                          exclude_resource_id: int | None = None, request: Request = None):
-    """Dry-run the 100% rule so the UI can warn BEFORE the PM commits."""
+    """Dry-run the FLAT 100% rule so the UI can warn BEFORE the PM commits."""
     _require_people(request)
     conn = get_db()
     try:
@@ -3756,16 +3822,30 @@ def api_assignment_create(body: AssignmentBody, request: Request):
         if dup:
             raise HTTPException(409, f"{p['name']} is already assigned to {client} · {project}.")
 
-        alloc = float(body.allocation_pct or 0.0)
-        if alloc < 0 or alloc > 100:
-            raise HTTPException(400, "Allocation must be between 0 and 100%")
-        sd = (body.start_date or "").strip()
-        ed = (body.end_date or "").strip()
-        sd_d, ed_d = _iso_date(sd), _iso_date(ed)
-        if sd_d and ed_d and ed_d < sd_d:
-            raise HTTPException(400, "End date cannot be before the start date")
+        # Time-phased mode when phases are supplied; otherwise the flat path.
+        phases = parse_phases([x.model_dump() for x in (body.phases or [])]) if body.phases else []
+        if phases:
+            err = validate_phases(phases)
+            if err:
+                raise HTTPException(400, err)
+            sd, ed = phases_span(phases)
+            alloc = phases[0]["allocation_pct"]   # headline % = the opening phase
+        else:
+            alloc = float(body.allocation_pct or 0.0)
+            if alloc < 0 or alloc > 100:
+                raise HTTPException(400, "Allocation must be between 0 and 100%")
+            sd = (body.start_date or "").strip()
+            ed = (body.end_date or "").strip()
+            sd_d, ed_d = _iso_date(sd), _iso_date(ed)
+            if sd_d and ed_d and ed_d < sd_d:
+                raise HTTPException(400, "End date cannot be before the start date")
 
+        # The 100% rule must see the person's load INCLUDING what this assignment
+        # will add, week by week — a flat single-% check would miss a taper whose
+        # opening phase is the only heavy one.
         v = validate_assignment(conn, body.person_id, alloc, sd, ed)
+        if phases:
+            v = validate_phases_assignment(conn, body.person_id, phases)
         if not v["ok"]:
             raise HTTPException(409, _clash_message(p["name"], alloc, v))
 
@@ -3774,21 +3854,65 @@ def api_assignment_create(body: AssignmentBody, request: Request):
         cur = conn.execute(
             "INSERT INTO resources (country, client, project, name, role, rate, "
             "offshore_rate, sort_order, capacity, person_id, allocation_pct, "
-            "start_date, end_date, title_exception) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "start_date, end_date, title_exception, phases) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             ((p["country"] or ""), client, project, p["name"], title,
              (pr["rate"] if pr else None), (pr["offshore_rate"] if pr else None),
              (conn.execute("SELECT COALESCE(MAX(sort_order),0)+1 FROM resources").fetchone()[0]),
-             cap, body.person_id, alloc, sd, ed, exception),
+             cap, body.person_id, alloc, sd, ed, exception,
+             (json.dumps(phases) if phases else "")),
         )
         rid = int(cur.lastrowid or 0)
-        _write_allocation_hours(conn, rid, alloc, cap, sd, ed)
+        if phases:
+            _write_phase_hours(conn, rid, phases, cap)
+        else:
+            _write_allocation_hours(conn, rid, alloc, cap, sd, ed)
         conn.commit()
         return {"ok": True, "resource_id": rid,
                 "weeks_booked": v["weeks_in_window"],
-                "weekly_hours": round(alloc / 100.0 * cap, 2)}
+                "weekly_hours": round(alloc / 100.0 * cap, 2),
+                "phased": bool(phases)}
     finally:
         conn.close()
+
+
+def validate_phases_assignment(conn: sqlite3.Connection, person_id: int,
+                               phases: list[dict],
+                               exclude_resource_id: int | None = None,
+                               max_conflicts: int = 12) -> dict:
+    """The 100% hard block, applied PHASE BY PHASE.
+
+    The flat `validate_assignment` checks one % against one window. A taper has
+    several windows at different %, so each phase's weeks are tested against the
+    person's EXISTING load (excluding this assignment when editing), and every
+    week that would exceed 100% is reported. Same `person_week_load` source as
+    the rail, so the preview and the rail cannot disagree.
+    """
+    load = person_week_load(conn, person_id, exclude_resource_id)
+    weeks = load["weeks"]
+    conflicts = []
+    owned: set[int] = set()
+    for p in phases:
+        for wk in _phase_weeks(weeks, p["start_date"], p["end_date"]):
+            owned.add(wk)
+            total = load["pct"][wk] + float(p["allocation_pct"] or 0.0)
+            if total > 100.0 + 1e-9:
+                conflicts.append({
+                    "week": wk, "label": weeks[wk],
+                    "total_pct": round(total, 1),
+                    "existing_pct": round(load["pct"][wk], 1),
+                    "existing": load["contrib"].get(wk, []),
+                    "phase_pct": round(float(p["allocation_pct"] or 0.0), 1),
+                })
+    return {
+        "ok": not conflicts,
+        "conflicts": conflicts[:max_conflicts],
+        "conflict_count": len(conflicts),
+        "peak_pct": load["peak_pct"],
+        "current_weekly_pct": load["total_pct"],
+        "weeks_in_window": len(owned),
+        "phased": True,
+    }
 
 
 def _clash_message(name: str, alloc: float, v: dict) -> str:
@@ -3802,6 +3926,84 @@ def _clash_message(name: str, alloc: float, v: dict) -> str:
         f"{c0.get('total_pct','?')}% ({c0.get('existing_pct',0)}% already booked on "
         f"{others}). Reduce the allocation or shorten the date range."
     )
+
+
+def parse_phases(raw) -> list[dict]:
+    """Read an assignment's phases from the DB (JSON string) — tolerant of junk."""
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:  # noqa: BLE001
+        return []
+    if not isinstance(data, list):
+        return []
+    out = []
+    for p in data:
+        if not isinstance(p, dict):
+            continue
+        try:
+            pct = float(p.get("allocation_pct") or 0)
+        except (TypeError, ValueError):
+            continue
+        out.append({
+            "allocation_pct": pct,
+            "start_date": str(p.get("start_date") or "").strip(),
+            "end_date": str(p.get("end_date") or "").strip(),
+        })
+    return out
+
+
+def validate_phases(phases: list[dict]) -> str:
+    """Return an error message if the phase list is unusable, else ''.
+
+    Rules: at least one phase; each 0-100%; start <= end when both given; and NO
+    OVERLAPPING weeks. Overlap matters because two phases owning the same week
+    would silently double that week's hours for the person, which is exactly the
+    kind of quiet inflation the 100% rule exists to prevent.
+    """
+    if not phases:
+        return "At least one phase is required."
+    for i, p in enumerate(phases, 1):
+        pct = p["allocation_pct"]
+        if pct < 0 or pct > 100:
+            return f"Phase {i}: allocation must be between 0 and 100%."
+        sd, ed = _iso_date(p["start_date"]), _iso_date(p["end_date"])
+        if p["start_date"] and not sd:
+            return f"Phase {i}: start date is not a valid date."
+        if p["end_date"] and not ed:
+            return f"Phase {i}: end date is not a valid date."
+        if sd and ed and ed < sd:
+            return f"Phase {i}: end date is before the start date."
+    # Overlap check, computed on the SNAPPED weeks so it matches what is written.
+    weeks, _ = _load_layout()
+    owned: dict[int, int] = {}
+    for i, p in enumerate(phases, 1):
+        for wk in _phase_weeks(weeks, p["start_date"], p["end_date"]):
+            if wk in owned:
+                return (f"Phase {i} overlaps phase {owned[wk]} in the week of "
+                        f"{weeks[wk]}. Phases must not share a week.")
+            owned[wk] = i
+    return ""
+
+
+def _phase_weeks(weeks: list[str], start_date: str, end_date: str) -> list[int]:
+    """Week indices owned by one phase, SNAPPED to whole weeks.
+
+    Weeks run Monday->Sunday and allocation is per-week, so a boundary landing
+    mid-week has to pick a side. The rule: a phase owns every week whose Monday
+    falls in its window (the same rule the flat mode's `_weeks_between` uses), and
+    because the UI snaps the dates it hands us to week boundaries, the phases
+    tile the span without gaps or double-ownership.
+    """
+    return sorted(_weeks_between(weeks, start_date, end_date))
+
+
+def phases_span(phases: list[dict]) -> tuple[str, str]:
+    """Overall start/end of a phase list, ignoring unbounded ends."""
+    starts = [p["start_date"] for p in phases if p["start_date"]]
+    ends = [p["end_date"] for p in phases if p["end_date"]]
+    return (min(starts) if starts else "", max(ends) if ends else "")
 
 
 def _write_allocation_hours(conn: sqlite3.Connection, rid: int, alloc_pct: float,
@@ -3832,6 +4034,55 @@ def _write_allocation_hours(conn: sqlite3.Connection, rid: int, alloc_pct: float
                 (rid, i, h))
 
 
+def _resolve_schedule(phases: list[dict]) -> list[dict]:
+    """Turn phases into a human-readable, week-aligned schedule.
+
+    Reports the FIRST and LAST week each phase actually owns plus the week count,
+    so the UI can show "100% · Jan-02 → Mar-30 · 13 weeks" instead of echoing
+    back the raw dates the user typed (which may not sit on week boundaries).
+    """
+    if not phases:
+        return []
+    weeks, _ = _load_layout()
+    out = []
+    for p in phases:
+        idx = _phase_weeks(weeks, p["start_date"], p["end_date"])
+        out.append({
+            "allocation_pct": p["allocation_pct"],
+            "start_date": p["start_date"],
+            "end_date": p["end_date"],
+            "first_week": (weeks[idx[0]] if idx else ""),
+            "last_week": (weeks[idx[-1]] if idx else ""),
+            "weeks": len(idx),
+            "hours_per_week": None,   # filled by the caller when capacity is known
+        })
+    return out
+
+
+def _write_phase_hours(conn: sqlite3.Connection, rid: int, phases: list[dict],
+                       capacity: float) -> None:
+    """Write weekly hours from a phase list: pct × capacity for each owned week.
+
+    Weeks OUTSIDE every phase are left exactly as they are — same contract as the
+    flat writer, so a hand-tuned week sitting outside the phased window is never
+    silently wiped. A phase at 0% clears its weeks.
+    """
+    weeks, _ = _load_layout()
+    cap = float(capacity or CAP_WEEK_HOURS)
+    owned: set[int] = set()
+    for p in phases:
+        weekly = float(p["allocation_pct"] or 0.0) / 100.0 * cap
+        for wk in _phase_weeks(weeks, p["start_date"], p["end_date"]):
+            owned.add(wk)
+            if abs(weekly) < 1e-9:
+                conn.execute("DELETE FROM weekly_hours WHERE resource_id=? AND week=?", (rid, wk))
+            else:
+                conn.execute(
+                    "INSERT INTO weekly_hours (resource_id, week, hours) VALUES (?,?,?) "
+                    "ON CONFLICT(resource_id, week) DO UPDATE SET hours=excluded.hours",
+                    (rid, wk, weekly))
+
+
 @app.put("/api/assignments/{rid}")
 def api_assignment_update(rid: int, body: AssignmentBody, request: Request):
     """Change an existing assignment's %, window or title (with the same rules)."""
@@ -3858,23 +4109,42 @@ def api_assignment_update(rid: int, body: AssignmentBody, request: Request):
         home = (p["home_title"] or "").strip()
         if title and (not home or title != home) and not exception:
             raise HTTPException(400, f"A reason is required when booking {p['name']} as '{title}'.")
-        alloc = float(body.allocation_pct if body.allocation_pct is not None else (row["allocation_pct"] or 0.0))
-        sd = (body.start_date if body.start_date is not None else row["start_date"]) or ""
-        ed = (body.end_date if body.end_date is not None else row["end_date"]) or ""
-        v = validate_assignment(conn, pid, alloc, sd, ed, exclude_resource_id=rid)
+        phases = parse_phases([x.model_dump() for x in (body.phases or [])]) if body.phases else []
+        if phases:
+            err = validate_phases(phases)
+            if err:
+                raise HTTPException(400, err)
+            sd, ed = phases_span(phases)
+            alloc = phases[0]["allocation_pct"]
+        else:
+            alloc = float(body.allocation_pct if body.allocation_pct is not None
+                          else (row["allocation_pct"] or 0.0))
+            sd = (body.start_date if body.start_date is not None else row["start_date"]) or ""
+            ed = (body.end_date if body.end_date is not None else row["end_date"]) or ""
+        if phases:
+            v = validate_phases_assignment(conn, pid, phases, exclude_resource_id=rid)
+        else:
+            v = validate_assignment(conn, pid, alloc, sd, ed, exclude_resource_id=rid)
         if not v["ok"]:
             raise HTTPException(409, _clash_message(p["name"], alloc, v))
         pr = _pricing_row(conn, title)
         cap = p["capacity"] or CAP_WEEK_HOURS
         conn.execute(
             "UPDATE resources SET person_id=?, role=?, rate=?, offshore_rate=?, "
-            "capacity=?, allocation_pct=?, start_date=?, end_date=?, title_exception=? WHERE id=?",
+            "capacity=?, allocation_pct=?, start_date=?, end_date=?, title_exception=?, "
+            "phases=? WHERE id=?",
             (pid, title, (pr["rate"] if pr else row["rate"]),
              (pr["offshore_rate"] if pr else row["offshore_rate"]),
-             cap, alloc, sd, ed, exception, rid))
-        _write_allocation_hours(conn, rid, alloc, cap, sd, ed)
+             cap, alloc, sd, ed, exception,
+             (json.dumps(phases) if phases else ""), rid))
+        # Switching an assignment back to flat mode must not leave the old
+        # phased hours behind in weeks the flat window no longer covers.
+        if phases:
+            _write_phase_hours(conn, rid, phases, cap)
+        else:
+            _write_allocation_hours(conn, rid, alloc, cap, sd, ed)
         conn.commit()
-        return {"ok": True, "weeks_booked": v["weeks_in_window"]}
+        return {"ok": True, "weeks_booked": v["weeks_in_window"], "phased": bool(phases)}
     finally:
         conn.close()
 
@@ -3927,7 +4197,8 @@ def api_my_projects(request: Request):
                 "SELECT start_date, end_date FROM projects WHERE TRIM(UPPER(client))=? AND TRIM(UPPER(project))=?",
                 ((r["client"] or "").upper(), (r["project"] or "").upper())).fetchone()
             team = conn.execute(
-                "SELECT id, name, role, allocation_pct, start_date, end_date, capacity, title_exception "
+                "SELECT id, name, role, allocation_pct, start_date, end_date, capacity, "
+                "title_exception, phases "
                 "FROM resources WHERE TRIM(UPPER(client))=? AND TRIM(UPPER(project))=? ORDER BY name",
                 ((r["client"] or "").upper(), (r["project"] or "").upper())).fetchall()
             out.append({
@@ -3935,7 +4206,7 @@ def api_my_projects(request: Request):
                 "people": r["n"], "booked_hours": round(r["hrs"] or 0, 1),
                 "start_date": (meta["start_date"] if meta else "") or "",
                 "end_date": (meta["end_date"] if meta else "") or "",
-                "team": [dict(t) for t in team],
+                "team": [{**dict(t), "phases": parse_phases(t["phases"])} for t in team],
             })
         return {"projects": out, "role": user.get("r"), "weeks": len(weeks)}
     finally:
