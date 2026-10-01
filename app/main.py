@@ -861,6 +861,7 @@ def init_db() -> None:
     upcols = {r[1] for r in conn.execute("PRAGMA table_info(user_projects)").fetchall()}
     if "client" not in upcols:
         conn.execute("ALTER TABLE user_projects ADD COLUMN client TEXT NOT NULL DEFAULT ''")
+    _fix_user_projects_pk(conn)
     # Migration: add permissions column to users if it predates it (admin management)
     ucols = {r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
     if "permissions" not in ucols:
@@ -1570,6 +1571,18 @@ def api_user_create(body: UserCreate, request: Request):
         perms = [p for p in body.permissions if p in ADMIN_PERMISSIONS] if role == "admin" else []
         projs = [ProjectAssign(client=(p.client or "").strip(), project=(p.project or "").strip())
                  for p in body.projects if (p.project or "").strip()]
+        # De-duplicate the payload. Without this, the same (client, project)
+        # listed twice hit the PRIMARY KEY and surfaced as a raw 500 instead of
+        # a clear message. Keyed on (client, project), NOT project alone — the
+        # same project NAME under two clients is a legitimate pair.
+        seen_pairs, uniq = set(), []
+        for p in projs:
+            k = (_norm(p.client), _norm(p.project))
+            if k not in seen_pairs:
+                seen_pairs.add(k)
+                uniq.append(p)
+        dups = len(projs) - len(uniq)
+        projs = uniq
         if role == "pm":
             _validate_project_ownership(conn, projs, self_username=None)
         cur = conn.execute(
@@ -1579,10 +1592,11 @@ def api_user_create(body: UserCreate, request: Request):
         uid = cur.lastrowid
         if role == "pm":
             for p in projs:
-                conn.execute("INSERT INTO user_projects (user_id, client, project) VALUES (?,?,?)",
-                             (uid, p.client, p.project))
+                conn.execute("INSERT OR IGNORE INTO user_projects (user_id, client, project) "
+                             "VALUES (?,?,?)", (uid, p.client, p.project))
         conn.commit()
-        return {"ok": True, "id": uid, "username": uname, "role": role, "permissions": perms}
+        return {"ok": True, "id": uid, "username": uname, "role": role, "permissions": perms,
+                "duplicate_projects_ignored": dups}
     finally:
         conn.close()
 
@@ -1775,6 +1789,57 @@ def api_project_delete(pid: int, request: Request):
         return {"ok": True}
     finally:
         conn.close()
+
+
+def _fix_user_projects_pk(conn: sqlite3.Connection) -> None:
+    """Repair user_projects' primary key: (user_id, project) -> (user_id, client, project).
+
+    BUG IT FIXES (found 2026-10-01): `client` was bolted on later with
+    ALTER TABLE, which cannot change a PRIMARY KEY. The key stayed
+    (user_id, project), so a PM could only ever hold ONE project of a given
+    NAME — assigning the same person to Microsoft·Platform and NVIDIA·Platform, or to
+    Apple·Support and Google·Support, raised
+    `UNIQUE constraint failed: user_projects.user_id, user_projects.project`
+    and returned a 500. Project names repeat across clients (Platform at 5
+    clients, Support at 3), so this was reachable from the UI.
+
+    SQLite cannot ALTER a primary key, so the table is rebuilt. Guarded and
+    idempotent: it no-ops once the key is already correct, and any failure is
+    swallowed so a schema wrinkle can never break app import.
+    """
+    try:
+        ddl = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='user_projects'"
+        ).fetchone()
+        if not ddl or not ddl[0]:
+            return
+        sql = " ".join(ddl[0].split()).lower()
+        if "(user_id, client, project)" in sql or "(user_id,client,project)" in sql:
+            return  # already correct
+        rows = conn.execute("SELECT user_id, client, project FROM user_projects").fetchall()
+        # De-duplicate before rebuilding, in case legacy rows collide once the
+        # key widens (they shouldn't, but a rebuild must not fail on them).
+        seen, keep = set(), []
+        for r in rows:
+            k = (r[0], (r[1] or "").strip(), (r[2] or "").strip())
+            if k not in seen:
+                seen.add(k)
+                keep.append(k)
+        conn.execute("DROP TABLE IF EXISTS user_projects")
+        conn.execute(
+            """CREATE TABLE user_projects (
+                user_id INTEGER NOT NULL,
+                client TEXT NOT NULL DEFAULT '',
+                project TEXT NOT NULL,
+                PRIMARY KEY (user_id, client, project)
+            )"""
+        )
+        conn.executemany(
+            "INSERT OR IGNORE INTO user_projects (user_id, client, project) VALUES (?,?,?)", keep)
+        conn.commit()
+    except Exception:  # noqa: BLE001
+        # Never let a schema repair break startup; the next run retries.
+        pass
 
 
 def _week_date(label: str):
