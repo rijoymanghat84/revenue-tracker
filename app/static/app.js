@@ -2292,7 +2292,6 @@ function renderUtilization() {
     state.utilOptions = data.options || null;
     renderUtilFilters(data.options);
     initUtilExtras();
-    $("#utilModeSeg") && ($("#utilModeSeg").dataset.wk = weekMode ? "1" : "0");
     // The Month/Week toggle only means something on the full-year board; the
     // single-month drill-down is already one month.
     const seg = $("#utilModeSeg");
