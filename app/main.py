@@ -1496,7 +1496,11 @@ def api_actuals(request: Request):
                 r["expense"] = None
                 r["difference"] = None
         return {"weeks": weeks, "months": _load_layout()[1], "resources": resources,
-                "role": user["r"], "username": user["u"], "year": 2026}
+                "role": user["r"], "username": user["u"], "year": 2026,
+                # Which week/month is "now". `/api/state` carries this too but it is
+                # ADMIN-only, so a PM had no source for it and the week sheet could
+                # not default to the current week.
+                "current": _current_period(weeks, _load_layout()[1])}
     finally:
         conn.close()
 

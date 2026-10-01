@@ -1377,3 +1377,47 @@ html[data-theme-dark="0"] .wk-now { color: #0a5f6d; border-color: rgba(13, 125, 
 /* The schedule list inside the verdict reuses list styling. */
 .wb-verdict ul { margin: 7px 0 0; padding-left: 18px; }
 .wb-verdict li { margin: 3px 0; font-variant-numeric: tabular-nums; }
+
+/* ============================================================================
+   WEEK SHEET (2026-10-01) — week-centric actuals entry
+   Pick the week, all the PM's people in one list, type down the column, save.
+   The 53-week grid stays as the REVIEW surface; this is the ENTRY surface.
+   ========================================================================== */
+.wk-picker { display: flex; align-items: center; gap: 6px; }
+.wk-picker select { min-width: 190px; font-size: 13px; padding: 7px 9px; }
+.wk-summary {
+  display: flex; gap: 26px; flex-wrap: wrap; padding: 12px 16px; margin-bottom: 12px;
+}
+.wk-kpi { display: flex; flex-direction: column; gap: 2px; }
+.wk-kpi b { font-size: 17px; font-variant-numeric: tabular-nums; }
+.wk-kpi.warn b { color: var(--amber); }
+.wk-kpi.bad b { color: var(--red); }
+#wkWrap { max-height: calc(100vh - 320px); }
+#wkTable { width: 100%; border-collapse: collapse; font-size: 13px; }
+#wkTable thead th {
+  position: sticky; top: 0; z-index: 5; text-align: left;
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: .7px; color: var(--muted);
+  padding: 9px 11px; border-bottom: 1px solid var(--hairline); background: var(--header-bg);
+}
+#wkTable td { padding: 8px 11px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+#wkTable tbody tr:hover { background: var(--surface-3); }
+#wkTable .num { text-align: right; font-variant-numeric: tabular-nums; }
+/* A person with no planned hours this week is dimmed — they are not expected,
+   but they are still listed so "everyone on my projects" is complete. */
+#wkTable tr.wk-offplan { opacity: .62; }
+.wk-inp {
+  width: 94px; text-align: right; font: inherit; font-variant-numeric: tabular-nums;
+  background: var(--surface-4); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px;
+}
+.wk-inp:focus { outline: none; border-color: var(--accent); }
+.wk-inp.a-over { border-color: var(--red); }
+.wk-inp.a-under { border-color: var(--amber); }
+.wk-delta.over { color: var(--red); font-weight: 700; }
+.wk-delta.under { color: var(--amber); font-weight: 700; }
+.wk-detail { max-width: 320px; }
+.wk-pill-none { background: var(--surface-3); color: var(--muted); }
+/* On a light theme the amber/red delta text needs the darker variants the
+   codebase already uses for status text on pale surfaces. */
+html[data-theme-dark="0"] .wk-delta.over { color: #a3241a; }
+html[data-theme-dark="0"] .wk-delta.under { color: #7a4d00; }
