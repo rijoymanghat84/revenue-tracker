@@ -1006,3 +1006,70 @@ td.week .a-inp { text-align: center; }
 .p-tools-right { display: flex; align-items: center; gap: 8px; margin-left: auto; }
 .p-tools .search { max-width: 220px; }
 .p-tools .btn.mini[disabled] { opacity: 0.45; cursor: default; }
+
+/* ============================================================================
+   PM WORKBENCH (Variant B, 2026-10-01)
+   Master-detail: owned projects on the left, the project's team on the right,
+   and the week-by-week load rail underneath. The rail is the point: it shows
+   every person's booked % ACROSS ALL PROJECTS before the PM commits, so the
+   100% rule prevents a clash instead of reporting one afterwards.
+   ========================================================================== */
+.wb-grid { display: grid; grid-template-columns: 288px 1fr; gap: 14px; align-items: start; }
+.wb-master { overflow: hidden; display: flex; flex-direction: column; max-height: calc(100vh - 190px); }
+.wb-master-head { padding: 12px 13px 10px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 9px; }
+.wb-eyebrow { font-size: 10.5px; letter-spacing: 1.1px; text-transform: uppercase; color: var(--muted); font-weight: 700; }
+.wb-master-head .search { max-width: none; }
+.wb-plist { overflow-y: auto; flex: 1; }
+.wb-pitem { padding: 12px 14px; border-bottom: 1px solid var(--border); cursor: pointer; transition: background .12s; }
+.wb-pitem:hover { background: var(--surface-3); }
+.wb-pitem.on { background: linear-gradient(90deg, rgba(var(--accent-rgb), 0.16), transparent); border-left: 3px solid var(--accent); padding-left: 11px; }
+.wb-pitem .cl { font-size: 10px; letter-spacing: .6px; text-transform: uppercase; color: var(--muted); }
+.wb-pitem .pj { font-size: 13.5px; font-weight: 600; margin: 2px 0 6px; }
+.wb-pitem .mt { font-size: 11px; color: var(--muted); display: flex; gap: 10px; flex-wrap: wrap; }
+.wb-pitem .over { color: var(--red); font-weight: 700; }
+.wb-detail { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.wb-legend { display: flex; gap: 16px; font-size: 10.5px; color: var(--muted); flex-wrap: wrap; padding: 0 2px 8px; }
+.wb-legend .sw { display: inline-block; width: 11px; height: 11px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+.wb-legend .sw.booked { background: var(--accent); }
+.wb-legend .sw.warn { background: var(--amber); }
+.wb-legend .sw.hot { background: var(--red); }
+.wb-legend .sw.free { background: var(--surface-4); border: 1px solid var(--border); }
+
+/* load rail */
+.wb-loadlist { display: flex; flex-direction: column; gap: 10px; max-height: 420px; overflow-y: auto; padding: 2px; }
+.wb-load { border: 1px solid var(--border); border-radius: 11px; padding: 11px 13px; background: var(--surface-1); }
+.wb-load .h { display: flex; align-items: center; gap: 10px; justify-content: space-between; margin-bottom: 7px; flex-wrap: wrap; }
+.wb-load .h b { font-size: 13px; }
+.wb-load .sub { font-size: 11px; color: var(--muted); }
+.wb-strip { display: flex; gap: 2px; margin-top: 7px; }
+.wb-strip i { flex: 1 1 0; height: 16px; border-radius: 3px; background: var(--surface-4); display: block; min-width: 2px; }
+.wb-strip i.booked { background: var(--accent); }
+.wb-strip i.warn { background: var(--amber); }
+.wb-strip i.hot { background: var(--red); }
+.wb-pill-over { background: var(--pill-red-bg); color: var(--red); }
+.wb-pill-warn { background: var(--pill-amber-bg); color: var(--amber); }
+.wb-pill-ok { background: var(--pill-green-bg); color: var(--green); }
+.wb-pill-free { background: var(--surface-3); color: var(--muted); }
+
+/* the assignment dialog's live verdict */
+.wb-verdict { border-radius: 11px; padding: 11px 13px; font-size: 12.5px; line-height: 1.55; }
+.wb-verdict.ok { background: rgba(var(--green-rgb), 0.10); border: 1px solid rgba(var(--green-rgb), 0.42); color: var(--text); }
+.wb-verdict.bad { background: var(--pill-red-bg); border: 1px solid rgba(var(--red-rgb), 0.46); color: var(--text); }
+.wb-verdict b { color: #fff; }
+.wb-verdict ul { margin: 6px 0 0; padding-left: 18px; }
+.wb-verdict li { margin: 2px 0; }
+.wb-chips { display: flex; gap: 7px; flex-wrap: wrap; }
+.wb-chip { font-size: 11.5px; padding: 7px 13px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface-4); color: var(--muted); cursor: pointer; }
+.wb-chip.on { background: rgba(var(--accent-rgb), 0.15); border-color: rgba(var(--accent-rgb), 0.52); color: var(--text); font-weight: 600; }
+.wb-chip.bad.on { background: rgba(var(--red-rgb), 0.15); border-color: rgba(var(--red-rgb), 0.52); }
+.wb-slide { display: flex; align-items: center; gap: 13px; }
+.wb-slide input[type=range] { -webkit-appearance: none; appearance: none; background: transparent; padding: 0; height: 20px; flex: 1; }
+.wb-slide input[type=range]::-webkit-slider-runnable-track { height: 6px; border-radius: 99px; background: var(--surface-3); border: 1px solid var(--border); }
+.wb-slide input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%; background: var(--accent); margin-top: -7px; cursor: pointer; }
+.wb-pctval { font-size: 19px; font-weight: 700; color: var(--accent); min-width: 64px; text-align: right; font-variant-numeric: tabular-nums; }
+.muted-note { font-size: 11px; color: var(--muted); line-height: 1.55; }
+.wb-empty { padding: 26px 16px; text-align: center; color: var(--muted); font-size: 12.5px; }
+@media (max-width: 1000px) {
+  .wb-grid { grid-template-columns: 1fr; }
+  .wb-master { max-height: 320px; }
+}

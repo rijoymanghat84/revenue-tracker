@@ -97,12 +97,31 @@ function toast(msg, isErr = false) {
   toastTimer = setTimeout(() => t.classList.remove("show"), 2600);
 }
 
+/* Info-only modal (plain text body). For a modal that renders HTML AND needs a
+   real OK action, use showModalHTML + setModalOk (see workbench.js) — this one
+   deliberately holds no callback. */
 function showModal(title, body) {
+  setModalOk(null);
   $("#modalTitle").textContent = title;
   $("#modalBody").textContent = body;
   $("#modal").classList.remove("hidden");
 }
-$("#modalOk").addEventListener("click", () => $("#modal").classList.add("hidden"));
+
+/* The OK button is the ONLY close path that can be hijacked, so the handler is
+   held in a single variable and always cleared on open. Without the
+   clear-on-open, a later informational modal would silently re-run the previous
+   screen's save action. */
+let modalOkHandler = null;
+function setModalOk(fn) { modalOkHandler = fn; }
+function closeModal() { modalOkHandler = null; $("#modal").classList.add("hidden"); }
+$("#modalOk").addEventListener("click", async () => {
+  if (modalOkHandler) {
+    const fn = modalOkHandler;
+    try { await fn(); } catch (e) { /* the modal reports its own errors */ }
+    return;   // the handler decides whether to close
+  }
+  $("#modal").classList.add("hidden");
+});
 
 /* ---------------- auth / boot ---------------- */
 async function boot() {
@@ -192,11 +211,19 @@ function showApp() {
   };
   const tabVisible = (t) => {
     const p = tabPerm[t.dataset.tab];
-    if (!isAdmin) return p === "actuals" || p === "utilization";
-    if (p == null) return true;
+    // A PM gets their OWN two tabs: the workbench (their projects + team load)
+    // and Actuals. They never see Dashboard/Planned/Rate Card/Team & Access.
+    if (!isAdmin) return t.dataset.tab === "workbench" || p === "actuals" || p === "utilization";
     return Array.isArray(p) ? p.some(can) : can(p);
   };
-  $$(".tab").forEach((t) => { t.style.display = tabVisible(t) ? "" : "none"; });
+  // `.hidden` is the class-based hide; `style.display` is the permission gate.
+  // Both must be cleared for a tab to appear, so clear .hidden for PM-only tabs
+  // here rather than leaving them stuck invisible.
+  $$(".tab").forEach((t) => {
+    const on = tabVisible(t);
+    if (on && t.classList.contains("pm-only") && !isAdmin) t.classList.remove("hidden");
+    t.style.display = on ? "" : "none";
+  });
   // Admin write actions gated by permissions (super-admin has all).
   $("#btnImport").style.display = (isAdmin && can("import_export")) ? "" : "none";
   $("#btnExport").style.display = (isAdmin && can("import_export")) ? "" : "none";
@@ -207,17 +234,17 @@ function showApp() {
   const names = visibleTabs.map((t) => t.textContent.trim()).join(" · ");
   $("#subLine").textContent = isAdmin
     ? (names ? names : "No permissions assigned")
-    : `Actuals · Utilization — signed in as ${esc(state.me.username)}`;
+    : `My Projects · Actuals — signed in as ${esc(state.me.username)}`;
   // PMs land on Actuals. Admins land on their first permitted tab so they
   // never see a view they lack permission for.
   if (!isAdmin) {
-    state.view = "actuals";
-    $$(".tab").forEach((x) => x.classList.toggle("active", x.dataset.tab === "actuals"));
-    // Hide every view, then show Actuals — a blanket hide avoids having to list
-    // each view id here every time a tab is added.
+    // A PM lands on the WORKBENCH (their projects + the load rail), which is the
+    // screen they live in. Actuals stays reachable from the nav.
+    state.view = "workbench";
+    $$(".tab").forEach((x) => x.classList.toggle("active", x.dataset.tab === "workbench"));
     $$(".view").forEach((v) => v.classList.add("hidden"));
-    $("#actualsView").classList.remove("hidden");
-    loadActuals();
+    $("#workbenchView").classList.remove("hidden");
+    loadWorkbench();
   } else {
     // Admins land on the first tab they actually have permission for. The
     // markup's default active tab is Dashboard, which an admin with no
@@ -1263,6 +1290,17 @@ function renderAccess() {
     renderPMs();
     renderAdmins();
   });
+  // People + OT approvals (2026-10-01). Each block is hidden individually by
+  // its own permission so a people-only or ot_approval-only admin still has a
+  // usable Team & Access page.
+  const showPeople = canPerm("people");
+  showBlock($("#peopleToolbar"), showPeople);
+  showBlock($("#peopleWrap"), showPeople);
+  if (showPeople) { loadPeople().then(() => { if (state.view === "access") renderPeople(); }); if (!WB.load.length) refreshLoadOnly(); }
+  const showOt = canPerm("ot_approval");
+  showBlock($("#otToolbar"), showOt);
+  showBlock($("#otWrap"), showOt);
+  if (showOt) loadOt();
   // Render immediately too (with whatever is cached) so the tab never flashes
   // empty on a slow /api/users round-trip.
   renderPMs();
@@ -1396,8 +1434,10 @@ function renderPMs() {
   // PM block is user management → `users` permission.
   const showUsers = canPerm("users");
   showBlock($("#pmWrap"), showUsers);
-  const pmToolbar = $("#pmWrap").previousElementSibling;
-  showBlock(pmToolbar && pmToolbar.classList.contains("pm-toolbar") ? pmToolbar : null, showUsers);
+  // Explicit id, NOT previousElementSibling: the People and OT toolbars carry
+  // the same `pm-toolbar` class, so a sibling lookup silently hijacks whichever
+  // block happens to sit above #pmWrap.
+  showBlock($("#pmToolbar"), showUsers);
   if (!showUsers) { editingUser = null; return; }
   $("#pmHead").innerHTML = `<tr><th>PM</th><th>Assigned Client / Project</th><th></th></tr>`;
   const pms = users.filter((u) => u.role !== "admin");
@@ -1494,10 +1534,8 @@ function renderDbSec() {
   // Team & Access tab unlocks on users OR db_security: an admin trusted only
   // with encryption still needs somewhere to land.
   const showDbSec = canPerm("db_security");
-  const wrap = $("#dbSecWrap");
-  const tb = wrap && wrap.previousElementSibling;
-  showBlock(wrap, showDbSec);
-  showBlock(tb && tb.classList.contains("pm-toolbar") ? tb : null, showDbSec);
+  showBlock($("#dbSecWrap"), showDbSec);
+  showBlock($("#dbSecToolbar"), showDbSec);
   if (!showDbSec) return;
   api("/api/db-security").then((s) => {
     const status = s.encrypted
@@ -3446,6 +3484,7 @@ function renderView() {
   $("#accessView").classList.toggle("hidden", state.view !== "access");
   $("#utilView").classList.toggle("hidden", state.view !== "util");
   $("#actualsView").classList.toggle("hidden", state.view !== "actuals");
+  $("#workbenchView").classList.toggle("hidden", state.view !== "workbench");
   // Feature #12: the top strip reports which section you're in, since the nav
   // now lives in the rail and the title is no longer attached to the tabs.
   const title = $("#pageTitle"), sub = $("#pageSub");
@@ -3455,7 +3494,8 @@ function renderView() {
     actuals: ["Actuals", "PM reconciliation — recorded hours vs plan"],
     rates: ["Rate Card", "Client rate vs offshore rate, per title"],
     util: ["Utilization", "Booked hours ÷ capacity (40 hrs/week = 100%)"],
-    access: ["Team & Access", "PMs, admins, permissions & database security"],
+    access: ["Team & Access", "People, PMs, admins, permissions & database security"],
+    workbench: ["My Projects", "Your projects, your team, and their week-by-week load"],
   };
   if (title && META[state.view]) {
     title.textContent = META[state.view][0];
@@ -3474,10 +3514,20 @@ function renderView() {
   else if (state.view === "actuals") renderActuals();
   else if (state.view === "rates") renderPricing();
   else if (state.view === "access") renderAccess();
+  else if (state.view === "workbench") loadWorkbench();
 }
 
 $$(".tab").forEach((t) => t.addEventListener("click", () => switchView(t.dataset.tab)));
 bindPasswordModal();
+/* Guarded calls: these live in workbench.js. An unguarded call threw
+   "bindWorkbench is not defined" when that file loaded late, and because this
+   runs at top level it aborted the rest of the file — boot() included — leaving
+   the app completely dead. A missing/unloaded feature file must degrade, never
+   brick the app. */
+if (typeof bindWorkbench === "function") bindWorkbench();
+else console.warn("workbench.js not loaded — My Projects will be unavailable");
+if (typeof bindPeopleAndOt === "function") bindPeopleAndOt();
+else console.warn("workbench.js not loaded — People/OT controls unavailable");
 /* Feature #10.2: dashboard resource popup close (button + backdrop + Escape).
    Targets #dashResModal — it must NOT touch #resModal (Add/Edit Resource). */
 $("#dashResModalClose").addEventListener("click", () => $("#dashResModal").classList.add("hidden"));

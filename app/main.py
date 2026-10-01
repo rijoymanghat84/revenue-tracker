@@ -334,6 +334,8 @@ ADMIN_PERMISSIONS = [
     "import_export",  # Import / Export Excel
     "db_security",    # Database encryption management
     "theming",        # Change own UI theme (feature #8)
+    "people",         # PM access: People master list + project team assignment
+    "ot_approval",    # Approve billable OT before it reaches the Dashboard
 ]
 
 
@@ -831,6 +833,28 @@ def init_db() -> None:
             project TEXT NOT NULL,
             PRIMARY KEY (user_id, client, project)
         );
+        -- People master list (2026-10-01, PM access redesign). A person exists
+        -- ONCE; projects attach to them via resources.person_id. This is what
+        -- makes "already assigned" and the 100% rule detectable by ID rather
+        -- than by name spelling.
+        CREATE TABLE IF NOT EXISTS people (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            country TEXT NOT NULL DEFAULT '',
+            home_title TEXT NOT NULL DEFAULT '',
+            capacity REAL NOT NULL DEFAULT 40,
+            active INTEGER NOT NULL DEFAULT 1,
+            notes TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        -- Titles a person is APPROVED to be booked under. The PM's dropdown
+        -- only ever shows these, so a PM cannot invent a rate. Normally one
+        -- (the home title); more only when admin explicitly allows it.
+        CREATE TABLE IF NOT EXISTS person_titles (
+            person_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            PRIMARY KEY (person_id, title)
+        );
         """
     )
     # Migration: add client column to user_projects if it predates it
@@ -859,6 +883,44 @@ def init_db() -> None:
     pcols = {r[1] for r in conn.execute("PRAGMA table_info(pricing)").fetchall()}
     if "currency" not in pcols:
         conn.execute("ALTER TABLE pricing ADD COLUMN currency TEXT NOT NULL DEFAULT 'USD'")
+    # ---- PM access redesign (2026-10-01) ----
+    # resources becomes the ASSIGNMENT link: person_id + allocation window.
+    rcols2 = {r[1] for r in conn.execute("PRAGMA table_info(resources)").fetchall()}
+    for col, ddl in (
+        ("person_id", "ALTER TABLE resources ADD COLUMN person_id INTEGER"),
+        ("allocation_pct", "ALTER TABLE resources ADD COLUMN allocation_pct REAL"),
+        ("start_date", "ALTER TABLE resources ADD COLUMN start_date TEXT NOT NULL DEFAULT ''"),
+        ("end_date", "ALTER TABLE resources ADD COLUMN end_date TEXT NOT NULL DEFAULT ''"),
+        ("title_exception", "ALTER TABLE resources ADD COLUMN title_exception TEXT NOT NULL DEFAULT ''"),
+    ):
+        if col not in rcols2:
+            conn.execute(ddl)
+    # actual_notes gains the under-delivery reason ('why not billed') and the
+    # billing decision for shortfalls. The old code COLLECTED and VALIDATED a
+    # 'reason' but never persisted it — there was no column to write it to.
+    acols = {r[1] for r in conn.execute("PRAGMA table_info(actual_notes)").fetchall()}
+    for col, ddl in (
+        ("reason", "ALTER TABLE actual_notes ADD COLUMN reason TEXT NOT NULL DEFAULT ''"),
+        ("under_billed", "ALTER TABLE actual_notes ADD COLUMN under_billed INTEGER"),
+    ):
+        if col not in acols:
+            conn.execute(ddl)
+    # pricing gains the optional OT multiplier (admin-set per title).
+    pcols2 = {r[1] for r in conn.execute("PRAGMA table_info(pricing)").fetchall()}
+    if "ot_multiplier" not in pcols2:
+        conn.execute("ALTER TABLE pricing ADD COLUMN ot_multiplier REAL")
+    # Seed the People master list ONCE from the distinct resource (name, role).
+    # Idempotent: only runs while people is empty, so a restart never duplicates.
+    if conn.execute("SELECT COUNT(*) FROM people").fetchone()[0] == 0:
+        seed_people_from_resources(conn)
+    # Repair folded/duplicate rows a previous seed may have left, then fold the
+    # known name variants of the SAME human into one record so the 100% rule
+    # cannot be defeated by a spelling difference.
+    _reseat_people(conn)
+    for _keep, _drops in KNOWN_DUPLICATES:
+        _merge_people(conn, _keep, _drops)
+    # Link any resource that has a person_id still unset / dangling.
+    backfill_person_links(conn)
     # Seed the pricing library once from distinct resource roles
     if conn.execute("SELECT COUNT(*) FROM pricing").fetchone()[0] == 0:
         seed_pricing_from_roles(conn)
@@ -898,7 +960,9 @@ def seed_pricing_from_roles(conn: sqlite3.Connection) -> None:
     )
 
 
-init_db()
+# NOTE: init_db() is invoked at the very END of this module. It used to run
+# here, which broke as soon as the People seeding helpers were defined further
+# down the file (NameError at import — the definitions did not exist yet).
 
 
 # ---------------- helpers ----------------
@@ -922,11 +986,17 @@ def _actual_hours_map(resource_id: int, conn: sqlite3.Connection) -> dict[int, f
 
 def _actual_notes_map(resource_id: int, conn: sqlite3.Connection) -> dict[int, dict]:
     rows = conn.execute(
-        "SELECT week, pm, overage, comment, is_ot, approved, billed FROM actual_notes "
-        "WHERE resource_id=? ORDER BY week",
+        "SELECT week, pm, overage, comment, reason, is_ot, approved, billed, "
+        "under_billed FROM actual_notes WHERE resource_id=? ORDER BY week",
         (resource_id,),
     ).fetchall()
-    return {r["week"]: dict(r) for r in rows}
+    out = {r["week"]: dict(r) for r in rows}
+    for w, n in out.items():
+        # Rijoy's rule: billable OT reaches the Dashboard ONLY after he approves.
+        # Expose that as a derived flag so every money path shares one definition
+        # instead of re-deriving the gate in three places.
+        n["ot_billable_approved"] = bool(n.get("is_ot") and n.get("approved") and n.get("billed"))
+    return out
 
 
 def _load_layout() -> tuple[list[str], list[dict]]:
@@ -976,11 +1046,31 @@ def _all_resources(conn: sqlite3.Connection, weeks: list[str]) -> list[dict]:
     rows = conn.execute(
         "SELECT * FROM resources ORDER BY sort_order, id"
     ).fetchall()
-    return [
-        _resource_dict(r, _hours_map(r["id"], conn), weeks,
-                       _actual_hours_map(r["id"], conn), _actual_notes_map(r["id"], conn))
-        for r in rows
-    ]
+    # OT settings, resolved once per call (not per row).
+    ot_by_title = {
+        r["title"]: (r["ot_multiplier"] or 1.0)
+        for r in conn.execute("SELECT title, ot_multiplier FROM pricing").fetchall()
+    }
+    gate = _ot_requires_approval(conn)
+    out = []
+    for r in rows:
+        d = _resource_dict(r, _hours_map(r["id"], conn), weeks,
+                           _actual_hours_map(r["id"], conn), _actual_notes_map(r["id"], conn))
+        # `ot_multiplier` multiplies the OT *portion* only; `ot_requires_approval`
+        # is the admin gate that decides whether unapproved billable OT is held
+        # out of the Dashboard. Both are read by _actuals_financials.
+        d["ot_multiplier"] = ot_by_title.get((r["role"] or "").strip(), 1.0)
+        d["ot_requires_approval"] = gate
+        out.append(d)
+    return out
+
+
+def _ot_requires_approval(conn: sqlite3.Connection) -> bool:
+    """meta['ot_requires_approval'] — '0' disables the admin gate. Default on."""
+    row = conn.execute("SELECT value FROM meta WHERE key='ot_requires_approval'").fetchone()
+    if not row:
+        return True
+    return str(row["value"]).strip() not in ("0", "false", "False", "")
 
 
 # ---------------- Pydantic models ----------------
@@ -1000,6 +1090,10 @@ class PricingUpdate(BaseModel):
     rate: float | None = None
     offshore_rate: float | None = None
     currency: str | None = None
+    # Optional admin-set OT multiplier for this title (1.25 = time-and-a-quarter).
+    # None leaves it unchanged / unset (= 1.0).
+    ot_multiplier: float | None = None
+    clear_ot_multiplier: bool | None = False
 
 
 CURRENCY_CODES = {"USD": "USD", "GBP": "GBP", "CAD": "CAD"}
@@ -1215,12 +1309,21 @@ def _validate_actual_week(planned: float, actual: float, capacity: float,
     if actual > 0 and planned <= 0:
         return {"status": "no_planned", "overage": actual}
     if abs(overage) < 1e-9:
-        return {"status": "ok", "overage": 0.0}
+        # On target still carries the under/OT decision forward if one was set,
+        # so a PM who corrects a week back to plan doesn't silently lose the
+        # billing verdict he already recorded.
+        return {"status": "ok", "overage": 0.0,
+                "under_billed": note.get("under_billed")}
     if overage < 0:
-        # under-delivery: mandatory comment
+        # under-delivery: mandatory comment + a billing decision
         if not (note.get("comment") or "").strip():
             return {"status": "needs_comment", "overage": overage}
-        return {"status": "ok", "overage": overage}
+        ub = note.get("under_billed")
+        if ub is None:
+            # Rijoy's rule: the PM must say whether the client still pays the
+            # planned hours (recovered) or the shortfall is a real revenue loss.
+            return {"status": "needs_under_billing", "overage": overage}
+        return {"status": "ok", "overage": overage, "under_billed": bool(ub)}
     # overage -> OT flow (any overage)
     is_ot = note.get("is_ot")
     if is_ot is None:
@@ -1229,15 +1332,15 @@ def _validate_actual_week(planned: float, actual: float, capacity: float,
     if not is_ot:
         # explicitly declined OT: record overage, no approval/billing questions
         return {"status": "ok", "overage": overage, "is_ot": False}
-    approved = bool(note.get("approved"))
-    if not approved:
-        return {"status": "needs_approval", "overage": overage, "is_ot": True}
     billed = bool(note.get("billed"))
     if not billed:
         if not (note.get("reason") or "").strip():
-            return {"status": "needs_billing_reason", "overage": overage, "is_ot": True, "approved": True}
-        return {"status": "ok", "overage": overage, "is_ot": True, "approved": True, "billed": False}
-    return {"status": "ok", "overage": overage, "is_ot": True, "approved": True, "billed": True}
+            return {"status": "needs_billing_reason", "overage": overage, "is_ot": True}
+        return {"status": "ok", "overage": overage, "is_ot": True, "billed": False}
+    # Billable OT no longer self-approves. `approved` is an ADMIN decision
+    # (Team & Access → OT approvals); the PM records the intent and the money
+    # waits. Rijoy's spec: it must not reach the Dashboard until he approves.
+    return {"status": "ok", "overage": overage, "is_ot": True, "billed": True}
 
 
 @app.put("/api/resources/{rid}/actuals")
@@ -1289,14 +1392,27 @@ def api_update_actuals(rid: int, body: ActualsUpdate, request: Request):
                 continue
             v = _validate_actual_week(planned.get(i, 0.0), h, capacity, notes.get(i))
             note = notes.get(i) or {}
+            # Preserve an admin's existing OT approval when the PM re-saves the
+            # week. Without this, every re-save would wipe the approval and the
+            # billable money would bounce out of the Dashboard. A changed
+            # overage (different quantity of OT) legitimately invalidates it.
+            prev = conn.execute(
+                "SELECT approved, overage FROM actual_notes WHERE resource_id=? AND week=?",
+                (rid, i)).fetchone()
+            same_ot = bool(prev) and abs((prev["overage"] or 0.0) - float(v["overage"])) < 1e-9
+            keep_approved = 1 if (same_ot and v.get("is_ot") and prev["approved"]) else 0
             conn.execute(
-                "INSERT INTO actual_notes (resource_id, week, pm, overage, comment, is_ot, approved, billed) "
-                "VALUES (?,?,?,?,?,?,?,?) "
+                "INSERT INTO actual_notes (resource_id, week, pm, overage, comment, reason, "
+                "under_billed, is_ot, approved, billed) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(resource_id, week) DO UPDATE SET "
                 "pm=excluded.pm, overage=excluded.overage, comment=excluded.comment, "
+                "reason=excluded.reason, under_billed=excluded.under_billed, "
                 "is_ot=excluded.is_ot, approved=excluded.approved, billed=excluded.billed",
                 (rid, i, user["u"], v["overage"], (note.get("comment") or "").strip(),
-                 int(v.get("is_ot", False)), int(v.get("approved", False)), int(v.get("billed", False))),
+                 (note.get("reason") or "").strip(),
+                 (None if v.get("under_billed") is None else int(bool(v["under_billed"]))),
+                 int(v.get("is_ot", False)), keep_approved, int(v.get("billed", False))),
             )
         conn.commit()
         return {"status": "ok", "saved": True}
@@ -1416,6 +1532,8 @@ def api_permissions(request: Request):
         "import_export": "Import / Export Excel",
         "db_security": "Manage database security",
         "theming": "Change own UI theme",
+        "people": "Manage People & project team assignment",
+        "ot_approval": "Approve billable OT",
     }
     return {"permissions": [
         {"key": k, "label": labels.get(k, k)} for k in ADMIN_PERMISSIONS
@@ -1882,8 +2000,19 @@ def _actuals_financials(r: dict, week_range: tuple[int, int] | None = None,
     """
     add_rev = add_exp = adj_rev = adj_exp = 0.0
     actual_rev = actual_exp = 0.0
+    # Billable-OT approval gate (2026-10-01, Rijoy's spec): an overage only
+    # reaches the Dashboard as "additional work" once is_ot=1 AND approved=1
+    # AND billed=1. Before this, `billed` alone (set by the PM who entered it)
+    # moved the money — a PM could approve his own revenue. Admin approval
+    # happens on Team & Access and flips `approved`.
+    admin_gate = bool(r.get("ot_requires_approval", True))
+    ot_rev = ot_exp = 0.0
+    pending_ot_rev = pending_ot_exp = 0.0
     rate = r["rate"] or 0.0
     off = r["offshore_rate"] or 0.0
+    # Optional per-title OT multiplier (admin-set on the Rate Card). Applies to
+    # the OT portion only, never to the planned hours.
+    ot_mult = r.get("ot_multiplier") or 1.0
     planned = r["hours"] or []
     actual = r.get("actual_hours") or []
     notes = r.get("actual_notes") or {}
@@ -1902,20 +2031,41 @@ def _actuals_financials(r: dict, week_range: tuple[int, int] | None = None,
         if over > 0:
             add_exp += over * off
             if note.get("billed"):
-                actual_rev += a * rate
-                add_rev += over * rate
+                if (not admin_gate) or note.get("approved"):
+                    # approved (or ungated): overage bills at the OT rate
+                    actual_rev += a * rate
+                    add_rev += over * rate * ot_mult
+                    ot_exp += over * off
+                    ot_rev += over * rate * ot_mult
+                else:
+                    # billable-flagged but NOT yet approved by admin: the money
+                    # is withheld from the Dashboard and surfaced as pending.
+                    actual_rev += p * rate
+                    pending_ot_rev += over * rate * ot_mult
+                    pending_ot_exp += over * off
             else:
                 actual_rev += p * rate  # only the planned portion is billable
         elif over < 0:
             actual_rev += a * rate      # under-delivery: bill actual hours
             adj_rev += over * rate
             adj_exp += over * off
+            # Under-delivery billing decision (Rijoy's rule): if the PM said
+            # "not billed", the client still pays the FULL planned hours, so the
+            # shortfall is NOT a revenue loss — it shows as a schedule variance
+            # with recovered money. Default (unset) keeps the historic
+            # behaviour: bill actual hours only.
+            if note.get("under_billed") == 0:
+                actual_rev += (-over) * rate
+                adj_rev += (-over) * rate
         else:
             actual_rev += p * rate      # equal to plan
     return {
         "add_rev": round(add_rev, 2), "add_exp": round(add_exp, 2),
         "adj_rev": round(adj_rev, 2), "adj_exp": round(adj_exp, 2),
         "actual_rev": round(actual_rev, 2), "actual_exp": round(actual_exp, 2),
+        "ot_rev": round(ot_rev, 2), "ot_exp": round(ot_exp, 2),
+        "pending_ot_rev": round(pending_ot_rev, 2),
+        "pending_ot_exp": round(pending_ot_exp, 2),
     }
 
 
@@ -2239,13 +2389,14 @@ def api_pricing_create(body: PricingUpdate, request: Request):
         if conn.execute("SELECT 1 FROM pricing WHERE title=?", (title,)).fetchone():
             raise HTTPException(409, f"Title '{title}' already exists")
         cur = conn.execute(
-            "INSERT INTO pricing (title, rate, offshore_rate, currency, sort_order) VALUES (?,?,?,?,"
-            " COALESCE((SELECT MAX(sort_order)+1 FROM pricing),0))",
-            (title, body.rate, body.offshore_rate, norm_currency(body.currency)),
+            "INSERT INTO pricing (title, rate, offshore_rate, currency, ot_multiplier, sort_order) "
+            "VALUES (?,?,?,?,?, COALESCE((SELECT MAX(sort_order)+1 FROM pricing),0))",
+            (title, body.rate, body.offshore_rate, norm_currency(body.currency),
+             body.ot_multiplier),
         )
         conn.commit()
-        row = conn.execute("SELECT id, title, rate, offshore_rate, currency FROM pricing WHERE id=?",
-                           (cur.lastrowid,)).fetchone()
+        row = conn.execute("SELECT id, title, rate, offshore_rate, currency, ot_multiplier "
+                           "FROM pricing WHERE id=?", (cur.lastrowid,)).fetchone()
         return _pricing_dict(row, conn)
     finally:
         conn.close()
@@ -2271,9 +2422,16 @@ def api_pricing_update(pid: int, body: PricingUpdate, request: Request):
         rate = body.rate if body.rate is not None else row["rate"]
         off = body.offshore_rate if body.offshore_rate is not None else row["offshore_rate"]
         currency = norm_currency(body.currency) if body.currency else row["currency"]
+        # OT multiplier: explicit clear wins, else set, else leave alone.
+        if body.clear_ot_multiplier:
+            ot_mult = None
+        elif body.ot_multiplier is not None:
+            ot_mult = body.ot_multiplier
+        else:
+            ot_mult = row["ot_multiplier"]
         conn.execute(
-            "UPDATE pricing SET title=?, rate=?, offshore_rate=?, currency=? WHERE id=?",
-            (new_title, rate, off, currency, pid),
+            "UPDATE pricing SET title=?, rate=?, offshore_rate=?, currency=?, ot_multiplier=? WHERE id=?",
+            (new_title, rate, off, currency, ot_mult, pid),
         )
         conn.commit()
         row = conn.execute("SELECT id, title, rate, offshore_rate, currency FROM pricing WHERE id=?",
@@ -2814,4 +2972,925 @@ def index_page(request: Request):
     return HTMLResponse(html)
 
 
+# ============================================================================
+# People master list + project assignment + the 100% weekly rule
+# (2026-10-01, PM access redesign — Rijoy's spec)
+#
+# Model: a PERSON exists once (people table) with a capacity (40 h/wk default).
+# A project attaches to them through an EXISTING resources row, which becomes
+# the assignment link (person_id + allocation_pct + start/end date). Keeping
+# the link on `resources` is deliberate: weekly_hours, actual_hours, the
+# Dashboard, Utilization and the Excel round-trip are all keyed on resource_id,
+# so nothing downstream had to be rebuilt.
+#
+# The rule (decided with Rijoy): a PM assigns a % of the person's WEEKLY
+# capacity. If the summed allocation across ALL of that person's projects would
+# exceed 100% in ANY overlapping week, the save is REFUSED and the response
+# names the exact weeks plus which competing project caused it. Hard block, no
+# override. People already over 100% stay in the data (we never retro-break
+# existing bookings) but cannot take new work until the load comes down.
+# ============================================================================
+
+
+def _norm_person_name(s: str | None) -> str:
+    """Fold a person name for matching: trim + collapse inner whitespace + upper."""
+    return " ".join((s or "").split()).strip().upper()
+
+
+def _iso_date(s: str | None):
+    """Parse an ISO date, or None. Accepts 'YYYY-MM-DD' only."""
+    if not s:
+        return None
+    try:
+        return dt.date.fromisoformat(str(s).strip())
+    except ValueError:
+        return None
+
+
+def _weeks_between(weeks: list[str], start_date: str, end_date: str) -> set[int]:
+    """Week indices whose Monday falls inside [start_date, end_date].
+
+    An empty bound on either side means "unbounded" — so a project with no
+    dates (which is every project today, verified) covers the whole year
+    rather than collapsing to an empty set.
+    """
+    sd, ed = _iso_date(start_date), _iso_date(end_date)
+    out: set[int] = set()
+    for i, wl in enumerate(weeks):
+        d = _week_date(wl)
+        if d is None:
+            continue
+        if sd is not None and d < sd:
+            continue
+        if ed is not None and d > ed:
+            continue
+        out.add(i)
+    return out
+
+
+def _approved_titles(conn: sqlite3.Connection, person_id: int) -> list[str]:
+    """The EFFECTIVE approved-title set for a person: explicit approvals ∪ home
+    title. Single definition shared by create, update and the API, so the PM's
+    dropdown and the server-side refusal can never disagree."""
+    out: list[str] = []
+    for r in conn.execute("SELECT title FROM person_titles WHERE person_id=? ORDER BY title",
+                          (person_id,)).fetchall():
+        t = (r["title"] or "").strip()
+        if t and t not in out:
+            out.append(t)
+    p = conn.execute("SELECT home_title FROM people WHERE id=?", (person_id,)).fetchone()
+    home = (p["home_title"] or "").strip() if p else ""
+    if home and home not in out:
+        out.insert(0, home)
+    return out
+
+
+def _pricing_row(conn: sqlite3.Connection, title: str | None):
+    return conn.execute(
+        "SELECT title, rate, offshore_rate, currency, ot_multiplier "
+        "FROM pricing WHERE title = ?", ((title or "").strip(),)
+    ).fetchone()
+
+
+def _reseat_people(conn: sqlite3.Connection) -> None:
+    """Repair the People list if a seed produced folded (ALL-CAPS) names.
+
+    Runs on every init but does nothing once names look human. Also merges the
+    known name-variant duplicates of the SAME human (Bajrang / Bajrang Lal,
+    Harsh Kumar / Harsh Kumar Gautam, Premal / Premal Jhaveri) — these are the
+    exact data-quality problem the master list exists to fix, and leaving them
+    split would let the 100% rule be defeated by a typo.
+    """
+    # 1. Un-fold any name that a previous run stored in caps.
+    for p in conn.execute("SELECT id, name FROM people").fetchall():
+        if p["name"] and p["name"] == p["name"].upper() and p["name"] != p["name"].lower():
+            row = conn.execute(
+                "SELECT name FROM resources WHERE person_id=? ORDER BY id LIMIT 1",
+                (p["id"],)).fetchone()
+            if row and row["name"] and row["name"] != row["name"].upper():
+                conn.execute("UPDATE people SET name=? WHERE id=?", (row["name"], p["id"]))
+        # 2. Keep the denormalized resource name in step with the person record.
+    for p in conn.execute("SELECT id, name FROM people").fetchall():
+        conn.execute(
+            "UPDATE resources SET name=? WHERE person_id=? AND TRIM(name)!=TRIM(?)",
+            (p["name"], p["id"], p["name"]))
+    conn.commit()
+
+
+def _merge_people(conn: sqlite3.Connection, keep_name: str, drop_names: list[str]) -> None:
+    """Fold several person records into one (admin data-quality fix).
+
+    Their project assignments all move to the survivor, so the 100% rule sees a
+    single human. Refuses if it would put the same person on one project twice.
+    """
+    keep = conn.execute("SELECT * FROM people WHERE TRIM(UPPER(name))=?",
+                        (_norm_person_name(keep_name),)).fetchone()
+    if not keep:
+        return
+    for dn in drop_names:
+        d = conn.execute("SELECT * FROM people WHERE TRIM(UPPER(name))=?",
+                         (_norm_person_name(dn),)).fetchone()
+        if not d or d["id"] == keep["id"]:
+            continue
+        # A collision here means both records sit on the same project — that is
+        # a genuine double-booking of one person and must NOT be silently merged.
+        clash = conn.execute(
+            "SELECT a.project FROM resources a JOIN resources b "
+            "ON TRIM(UPPER(a.client))=TRIM(UPPER(b.client)) "
+            "AND TRIM(UPPER(a.project))=TRIM(UPPER(b.project)) "
+            "WHERE a.person_id=? AND b.person_id=?", (keep["id"], d["id"])).fetchone()
+        if clash:
+            continue  # leave both; a human has to decide
+        conn.execute("UPDATE resources SET person_id=? WHERE person_id=?", (keep["id"], d["id"]))
+        for t in conn.execute("SELECT title FROM person_titles WHERE person_id=?", (d["id"],)).fetchall():
+            conn.execute("INSERT OR IGNORE INTO person_titles (person_id, title) VALUES (?,?)",
+                         (keep["id"], t["title"]))
+        conn.execute("DELETE FROM person_titles WHERE person_id=?", (d["id"],))
+        conn.execute("DELETE FROM people WHERE id=?", (d["id"],))
+    conn.commit()
+
+
+KNOWN_DUPLICATES: list[tuple[str, list[str]]] = [
+    ("Bajrang Lal", ["Bajrang"]),
+    ("Harsh Kumar Gautam", ["Harsh Kumar"]),
+    ("Premal Jhaveri", ["Premal"]),
+]
+
+
+def seed_people_from_resources(conn: sqlite3.Connection) -> None:
+    """Build the People master list from the distinct resource (name, home title).
+
+    A person's home title is the one used by their EARLIEST resource row (ties
+    broken by lowest id), and their approved-title set starts as just that home
+    title. Idempotent by construction: init_db only calls this while `people`
+    is empty.
+
+    DISPLAY CASING MATTERS: matching happens on a folded (trimmed + upper) key,
+    but the STORED name is the human-typed one from the earliest row. Storing
+    the folded form turned every name into SHOUTING CAPS on the first run —
+    the fix is to keep `key` for lookup and `display` for writing.
+    """
+    rows = conn.execute(
+        "SELECT id, name, role FROM resources WHERE TRIM(name) != '' ORDER BY id"
+    ).fetchall()
+    titles: dict[str, dict[str, int]] = {}   # key -> {title: earliest id}
+    display: dict[str, str] = {}             # key -> human name
+    order: list[str] = []
+    for r in rows:
+        key = _norm_person_name(r["name"])
+        if not key:
+            continue
+        if key not in titles:
+            titles[key] = {}
+            display[key] = " ".join((r["name"] or "").split())
+            order.append(key)
+        role = (r["role"] or "").strip()
+        if role and role not in titles[key]:
+            titles[key][role] = r["id"]
+    for key in order:
+        home = ""
+        if titles[key]:
+            home = sorted(titles[key].items(), key=lambda kv: kv[1])[0][0]
+        cur = conn.execute(
+            "INSERT INTO people (name, country, home_title, capacity) VALUES (?,?,?,?)",
+            (display[key], "", home, CAP_WEEK_HOURS),
+        )
+        pid = int(cur.lastrowid or 0)
+        if home:
+            conn.execute("INSERT OR IGNORE INTO person_titles (person_id, title) VALUES (?,?)",
+                         (pid, home))
+    conn.commit()
+
+
+def backfill_person_links(conn: sqlite3.Connection) -> None:
+    """Attach every resource row to its person by normalized name, and default a
+    legacy row's allocation from its own weekly hours (hours ÷ capacity).
+
+    Idempotent: only touches rows whose person_id is NULL or points nowhere.
+    """
+    people = {_norm_person_name(r["name"]): r["id"] for r in
+              conn.execute("SELECT id, name FROM people").fetchall()}
+    if not people:
+        return
+    orphans = conn.execute(
+        "SELECT id, name, capacity FROM resources WHERE person_id IS NULL"
+    ).fetchall()
+    for r in orphans:
+        pid = people.get(_norm_person_name(r["name"]))
+        if pid is None:
+            continue
+        conn.execute("UPDATE resources SET person_id=? WHERE id=?", (pid, r["id"]))
+    conn.commit()
+
+
+def _people_rows(conn: sqlite3.Connection) -> list[dict]:
+    out = []
+    for p in conn.execute(
+        "SELECT * FROM people ORDER BY TRIM(UPPER(name))"
+    ).fetchall():
+        titles = [r["title"] for r in conn.execute(
+            "SELECT title FROM person_titles WHERE person_id=? ORDER BY title", (p["id"],)
+        ).fetchall()]
+        assigns = conn.execute(
+            "SELECT r.id, r.client, r.project, r.role, r.allocation_pct, "
+            "r.start_date, r.end_date FROM resources r WHERE r.person_id=? "
+            "ORDER BY r.client, r.project", (p["id"],)
+        ).fetchall()
+        out.append({
+            "id": p["id"], "name": p["name"], "country": p["country"],
+            "home_title": p["home_title"], "capacity": p["capacity"],
+            "active": p["active"], "notes": p["notes"],
+            "titles": titles,
+            "assignments": [dict(a) for a in assigns],
+            "project_count": len(assigns),
+        })
+    return out
+
+
+def person_week_load(conn: sqlite3.Connection, person_id: int,
+                     exclude_resource_id: int | None = None,
+                     weeks: list[str] | None = None) -> dict:
+    """Per-week booked % of capacity for ONE person across ALL their projects.
+
+    Derived from each assignment's ACTUAL weekly hours ÷ that row's capacity, so
+    it is correct for legacy rows too (which have no allocation_pct). This is
+    the single source of truth for both the load rail and the hard block — the
+    two can never disagree.
+    """
+    # `weeks` is passed in by callers that already have it. Without this the
+    # function re-read the layout (and its own SQLCipher connection) on EVERY
+    # call — /api/pm/load calls it once per person, which measured 6.2s.
+    if weeks is None:
+        weeks, _ = _load_layout()
+    cap_default = CAP_WEEK_HOURS
+    rows = conn.execute(
+        "SELECT id, capacity, client, project, role FROM resources "
+        "WHERE person_id=?", (person_id,)
+    ).fetchall()
+    pct = [0.0] * len(weeks)
+    contrib: dict[int, list[str]] = {}
+    capacity_week = cap_default
+    for r in rows:
+        if exclude_resource_id is not None and r["id"] == exclude_resource_id:
+            continue
+        cap = r["capacity"] or cap_default
+        capacity_week = cap
+        hrs = _hours_map(r["id"], conn)
+        label = "/".join(x for x in ((r["client"] or "").strip(), (r["project"] or "").strip()) if x) or "—"
+        for i in range(len(weeks)):
+            h = hrs.get(i, 0.0)
+            if not h:
+                continue
+            p = h / cap * 100.0
+            pct[i] += p
+            contrib.setdefault(i, []).append(f"{label} ({round(p)}%)")
+    return {"weeks": weeks, "pct": pct, "contrib": contrib,
+            "capacity_week": capacity_week,
+            "total_pct": round(sum(pct) / len(weeks), 1) if weeks else 0.0,
+            "peak_pct": round(max(pct), 1) if pct else 0.0,
+            "peak_week": (weeks[pct.index(max(pct))] if pct else ""),
+            "projects": [dict(r) for r in rows]}
+
+
+def validate_assignment(conn: sqlite3.Connection, person_id: int, alloc_pct: float,
+                        start_date: str, end_date: str,
+                        exclude_resource_id: int | None = None,
+                        max_conflicts: int = 12) -> dict:
+    """Apply the 100% weekly hard block.
+
+    Returns {ok, conflicts:[{week,label,total_pct,existing_pct,existing:[...]}],
+    conflict_count, peak_pct, weeks_in_window}. `ok` is False the moment any
+    overlapping week would exceed 100% — the caller refuses the save.
+    """
+    load = person_week_load(conn, person_id, exclude_resource_id)
+    weeks = load["weeks"]
+    window = _weeks_between(weeks, start_date, end_date)
+    conflicts = []
+    for i in sorted(window):
+        total = load["pct"][i] + float(alloc_pct or 0.0)
+        if total > 100.0 + 1e-9:
+            conflicts.append({
+                "week": i, "label": weeks[i],
+                "total_pct": round(total, 1),
+                "existing_pct": round(load["pct"][i], 1),
+                "existing": load["contrib"].get(i, []),
+            })
+    return {
+        "ok": not conflicts,
+        "conflicts": conflicts[:max_conflicts],
+        "conflict_count": len(conflicts),
+        "peak_pct": load["peak_pct"],
+        "current_weekly_pct": load["total_pct"],
+        "weeks_in_window": len(window),
+    }
+
+
+class PersonBody(BaseModel):
+    name: str
+    country: str | None = ""
+    home_title: str | None = ""
+    capacity: float | None = None
+    active: int | None = 1
+    notes: str | None = ""
+    titles: list[str] | None = None
+
+
+class AssignmentBody(BaseModel):
+    person_id: int
+    client: str
+    project: str
+    title: str | None = None
+    allocation_pct: float = 0.0
+    start_date: str | None = ""
+    end_date: str | None = ""
+    title_exception: str | None = ""
+
+
+def _require_people(request):
+    """PMs always pass (scoped to their own projects); admins need 'people'."""
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(401, "Unauthorized")
+    if user.get("r") == "pm":
+        return user
+    _require_perm(request, "people")
+    return user
+
+
+def _pm_may_touch(conn, user, client: str, project: str) -> None:
+    """Raise 403 unless this PM owns (client, project). Admins pass."""
+    if user.get("r") != "pm":
+        return
+    projs = _pm_projects(user["u"], conn)
+    if not _pm_owns(projs, (client or "").strip(), (project or "").strip()):
+        raise HTTPException(403, "Not assigned to this project")
+
+
+@app.get("/api/people")
+def api_people(request: Request):
+    """People master list. PMs get the same list (they must pick from it) but
+    WITHOUT the money side — rates are never included here."""
+    _require_people(request)
+    conn = get_db()
+    try:
+        return {"people": _people_rows(conn)}
+    finally:
+        conn.close()
+
+
+@app.post("/api/people")
+def api_person_create(body: PersonBody, request: Request):
+    """Create a person. Admin-only (PMs cannot mint new people)."""
+    _require_admin(request)
+    _require_perm(request, "people")
+    name = " ".join((body.name or "").split())
+    if not name:
+        raise HTTPException(400, "Name is required")
+    conn = get_db()
+    try:
+        dup = conn.execute("SELECT id FROM people WHERE TRIM(UPPER(name))=?",
+                           (_norm_person_name(name),)).fetchone()
+        if dup:
+            raise HTTPException(409, f"A person named '{name}' already exists")
+        cur = conn.execute(
+            "INSERT INTO people (name, country, home_title, capacity, active, notes) "
+            "VALUES (?,?,?,?,?,?)",
+            (name, (body.country or "").strip(), (body.home_title or "").strip(),
+             float(body.capacity or CAP_WEEK_HOURS), int(body.active if body.active is not None else 1),
+             (body.notes or "").strip()),
+        )
+        pid = cur.lastrowid
+        titles = [t.strip() for t in (body.titles or []) if (t or "").strip()]
+        if not titles and (body.home_title or "").strip():
+            titles = [(body.home_title or "").strip()]
+        for t in titles:
+            conn.execute("INSERT OR IGNORE INTO person_titles (person_id, title) VALUES (?,?)", (pid, t))
+        conn.commit()
+        return {"ok": True, "id": pid}
+    finally:
+        conn.close()
+
+
+@app.put("/api/people/{pid}")
+def api_person_update(pid: int, body: PersonBody, request: Request):
+    """Edit a person's identity/capacity and their APPROVED title set.
+
+    Changing the home title or the approved set is exactly the admin control
+    that stops a PM drifting a billing rate (decision: restricted title list).
+    """
+    _require_admin(request)
+    _require_perm(request, "people")
+    conn = get_db()
+    try:
+        row = conn.execute("SELECT * FROM people WHERE id=?", (pid,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Person not found")
+        name = " ".join((body.name or "").split()) or row["name"]
+        conn.execute(
+            "UPDATE people SET name=?, country=?, home_title=?, capacity=?, active=?, notes=? WHERE id=?",
+            (name, (body.country or "").strip(), (body.home_title or "").strip(),
+             float(body.capacity if body.capacity is not None else row["capacity"] or CAP_WEEK_HOURS),
+             int(body.active if body.active is not None else row["active"]),
+             (body.notes or "").strip(), pid),
+        )
+        if body.titles is not None:
+            keep = [t.strip() for t in body.titles if (t or "").strip()]
+            if (body.home_title or "").strip() and (body.home_title or "").strip() not in keep:
+                keep.append((body.home_title or "").strip())
+            conn.execute("DELETE FROM person_titles WHERE person_id=?", (pid,))
+            for t in keep:
+                conn.execute("INSERT OR IGNORE INTO person_titles (person_id, title) VALUES (?,?)", (pid, t))
+        # Keep the denormalized name/role on the resource rows in step so grids,
+        # exports and reports never show a stale name.
+        if name != row["name"]:
+            conn.execute("UPDATE resources SET name=? WHERE person_id=?", (name, pid))
+        conn.commit()
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+class MergeBody(BaseModel):
+    merge_from: int
+
+
+@app.post("/api/people/{pid}/merge")
+def api_person_merge(pid: int, body: MergeBody, request: Request):
+    """Merge another person record INTO this one (admin data-quality fix).
+
+    Exists because the same human was entered twice under different spellings
+    (Bajrang / Bajrang Lal). Left split, a typo would defeat the 100% rule — the
+    two records would each look half-loaded.
+    """
+    _require_admin(request)
+    _require_perm(request, "people")
+    conn = get_db()
+    try:
+        keep = conn.execute("SELECT * FROM people WHERE id=?", (pid,)).fetchone()
+        src = conn.execute("SELECT * FROM people WHERE id=?", (body.merge_from,)).fetchone()
+        if not keep or not src:
+            raise HTTPException(404, "Person not found")
+        if keep["id"] == src["id"]:
+            raise HTTPException(400, "Cannot merge a person into themselves")
+        clash = conn.execute(
+            "SELECT a.client, a.project FROM resources a JOIN resources b "
+            "ON TRIM(UPPER(a.client))=TRIM(UPPER(b.client)) "
+            "AND TRIM(UPPER(a.project))=TRIM(UPPER(b.project)) "
+            "WHERE a.person_id=? AND b.person_id=?", (keep["id"], src["id"])).fetchone()
+        if clash:
+            raise HTTPException(
+                409, f"Both records are on {clash['client']} · {clash['project']}. "
+                     f"That is a real double-booking — resolve the assignment first.")
+        conn.execute("UPDATE resources SET person_id=? WHERE person_id=?", (keep["id"], src["id"]))
+        for t in conn.execute("SELECT title FROM person_titles WHERE person_id=?", (src["id"],)).fetchall():
+            conn.execute("INSERT OR IGNORE INTO person_titles (person_id, title) VALUES (?,?)",
+                         (keep["id"], t["title"]))
+        conn.execute("DELETE FROM person_titles WHERE person_id=?", (src["id"],))
+        conn.execute("DELETE FROM people WHERE id=?", (src["id"],))
+        conn.commit()
+        return {"ok": True, "merged": src["name"], "into": keep["name"]}
+    finally:
+        conn.close()
+
+
+@app.delete("/api/people/{pid}")
+def api_person_delete(pid: int, request: Request):
+    """Delete a person — refused while they still hold project assignments."""
+    _require_admin(request)
+    _require_perm(request, "people")
+    conn = get_db()
+    try:
+        n = conn.execute("SELECT COUNT(*) FROM resources WHERE person_id=?", (pid,)).fetchone()[0]
+        if n:
+            raise HTTPException(409, f"This person is still on {n} project(s). Remove those assignments first.")
+        conn.execute("DELETE FROM person_titles WHERE person_id=?", (pid,))
+        conn.execute("DELETE FROM people WHERE id=?", (pid,))
+        conn.commit()
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@app.get("/api/assignment/check")
+def api_assignment_check(person_id: int, allocation_pct: float = 0.0,
+                         start_date: str = "", end_date: str = "",
+                         exclude_resource_id: int | None = None, request: Request = None):
+    """Dry-run the 100% rule so the UI can warn BEFORE the PM commits."""
+    _require_people(request)
+    conn = get_db()
+    try:
+        p = conn.execute("SELECT * FROM people WHERE id=?", (person_id,)).fetchone()
+        if not p:
+            raise HTTPException(404, "Person not found")
+        v = validate_assignment(conn, person_id, allocation_pct, start_date, end_date,
+                                exclude_resource_id)
+        cap = p["capacity"] or CAP_WEEK_HOURS
+        v["person"] = {"id": p["id"], "name": p["name"], "capacity": cap}
+        v["proposed_weekly_hours"] = round(float(allocation_pct or 0.0) / 100.0 * cap, 2)
+        v["existing_weekly_hours"] = round(v["peak_pct"] / 100.0 * cap, 2)
+        return v
+    finally:
+        conn.close()
+
+
+@app.post("/api/assignments")
+def api_assignment_create(body: AssignmentBody, request: Request):
+    """PM adds a person to one of THEIR projects.
+
+    Enforces, in order: project ownership, person exists, title is on the
+    person's approved list, non-home titles carry a mandatory reason, the person
+    is not already on this project, and the 100% weekly hard block.
+    """
+    user = _require_people(request)
+    conn = get_db()
+    try:
+        client = (body.client or "").strip()
+        project = (body.project or "").strip()
+        if not project:
+            raise HTTPException(400, "Project is required")
+        _pm_may_touch(conn, user, client, project)
+
+        p = conn.execute("SELECT * FROM people WHERE id=?", (body.person_id,)).fetchone()
+        if not p:
+            raise HTTPException(404, "Person not found")
+
+        # The approved-title set is the security boundary that stops a PM
+        # drifting a billing rate. Effective set = explicit approvals ∪ home
+        # title. If BOTH are empty the person cannot be priced at all, so refuse
+        # rather than letting a PM mint a title (the old check silently allowed
+        # anything when the person had no titles — a real hole).
+        title = (body.title or "").strip() or (p["home_title"] or "").strip()
+        approved = _approved_titles(conn, body.person_id)
+        if not approved:
+            raise HTTPException(
+                400, f"{p['name']} has no title set. Ask an admin to set their "
+                     f"home title on the People page before assigning them.")
+        if title not in approved:
+            raise HTTPException(
+                400, f"'{title}' is not an approved title for {p['name']}. "
+                     f"Approved: {', '.join(approved)}")
+
+        # A title that differs from the home title is the case Rijoy wants
+        # eyes on (a PM doing BA work, a developer testing), so require the why.
+        # A person with NO home title counts as an exception for ANY title.
+        exception = ""
+        home = (p["home_title"] or "").strip()
+        if title and (not home or title != home):
+            exception = (body.title_exception or "").strip()
+            if not exception:
+                raise HTTPException(
+                    400, f"A reason is required when booking {p['name']} as '{title}'"
+                         + (f" (home title: '{home}')." if home
+                            else " — this person has no home title yet."))
+
+        dup = conn.execute(
+            "SELECT id FROM resources WHERE person_id=? AND TRIM(UPPER(client))=? "
+            "AND TRIM(UPPER(project))=?", (body.person_id, client.upper(), project.upper())
+        ).fetchone()
+        if dup:
+            raise HTTPException(409, f"{p['name']} is already assigned to {client} · {project}.")
+
+        alloc = float(body.allocation_pct or 0.0)
+        if alloc < 0 or alloc > 100:
+            raise HTTPException(400, "Allocation must be between 0 and 100%")
+        sd = (body.start_date or "").strip()
+        ed = (body.end_date or "").strip()
+        sd_d, ed_d = _iso_date(sd), _iso_date(ed)
+        if sd_d and ed_d and ed_d < sd_d:
+            raise HTTPException(400, "End date cannot be before the start date")
+
+        v = validate_assignment(conn, body.person_id, alloc, sd, ed)
+        if not v["ok"]:
+            raise HTTPException(409, _clash_message(p["name"], alloc, v))
+
+        pr = _pricing_row(conn, title)
+        cap = p["capacity"] or CAP_WEEK_HOURS
+        cur = conn.execute(
+            "INSERT INTO resources (country, client, project, name, role, rate, "
+            "offshore_rate, sort_order, capacity, person_id, allocation_pct, "
+            "start_date, end_date, title_exception) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            ((p["country"] or ""), client, project, p["name"], title,
+             (pr["rate"] if pr else None), (pr["offshore_rate"] if pr else None),
+             (conn.execute("SELECT COALESCE(MAX(sort_order),0)+1 FROM resources").fetchone()[0]),
+             cap, body.person_id, alloc, sd, ed, exception),
+        )
+        rid = int(cur.lastrowid or 0)
+        _write_allocation_hours(conn, rid, alloc, cap, sd, ed)
+        conn.commit()
+        return {"ok": True, "resource_id": rid,
+                "weeks_booked": v["weeks_in_window"],
+                "weekly_hours": round(alloc / 100.0 * cap, 2)}
+    finally:
+        conn.close()
+
+
+def _clash_message(name: str, alloc: float, v: dict) -> str:
+    """Human-readable refusal naming the week(s) and the competing project."""
+    n = v["conflict_count"]
+    c0 = v["conflicts"][0] if v["conflicts"] else {}
+    others = "; ".join(c0.get("existing", [])[:3]) or "existing assignments"
+    return (
+        f"Cannot assign {name} at {round(alloc, 1)}% — it would exceed 100% of capacity "
+        f"in {n} week(s). First clash: week {c0.get('label','?')} would reach "
+        f"{c0.get('total_pct','?')}% ({c0.get('existing_pct',0)}% already booked on "
+        f"{others}). Reduce the allocation or shorten the date range."
+    )
+
+
+def _write_allocation_hours(conn: sqlite3.Connection, rid: int, alloc_pct: float,
+                            capacity: float, start_date: str, end_date: str) -> None:
+    """Spread allocation_pct × capacity across the weeks in the project window.
+
+    Only the in-window weeks are written, and existing hours outside the window
+    are left alone — so re-running this can never silently wipe a hand-tuned
+    week that sits outside the assignment's dates.
+    """
+    weeks, _ = _load_layout()
+    window = _weeks_between(weeks, start_date, end_date)
+    weekly = float(alloc_pct or 0.0) / 100.0 * float(capacity or CAP_WEEK_HOURS)
+    existing = _hours_map(rid, conn)
+    for i in window:
+        if abs(weekly) < 1e-9:
+            conn.execute("DELETE FROM weekly_hours WHERE resource_id=? AND week=?", (rid, i))
+        else:
+            conn.execute(
+                "INSERT INTO weekly_hours (resource_id, week, hours) VALUES (?,?,?) "
+                "ON CONFLICT(resource_id, week) DO UPDATE SET hours=excluded.hours",
+                (rid, i, weekly))
+    for i, h in existing.items():
+        if i not in window and h:
+            conn.execute(
+                "INSERT INTO weekly_hours (resource_id, week, hours) VALUES (?,?,?) "
+                "ON CONFLICT(resource_id, week) DO UPDATE SET hours=excluded.hours",
+                (rid, i, h))
+
+
+@app.put("/api/assignments/{rid}")
+def api_assignment_update(rid: int, body: AssignmentBody, request: Request):
+    """Change an existing assignment's %, window or title (with the same rules)."""
+    user = _require_people(request)
+    conn = get_db()
+    try:
+        row = conn.execute("SELECT * FROM resources WHERE id=?", (rid,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Assignment not found")
+        _pm_may_touch(conn, user, row["client"], row["project"])
+        pid = body.person_id or row["person_id"]
+        p = conn.execute("SELECT * FROM people WHERE id=?", (pid,)).fetchone()
+        if not p:
+            raise HTTPException(404, "Person not found")
+        approved = _approved_titles(conn, pid)
+        title = (body.title or row["role"] or p["home_title"] or "").strip()
+        if not approved:
+            raise HTTPException(400, f"{p['name']} has no title set. Set their home title first.")
+        if title not in approved:
+            raise HTTPException(
+                400, f"'{title}' is not an approved title for {p['name']}. "
+                     f"Approved: {', '.join(approved)}")
+        exception = (body.title_exception or "").strip()
+        home = (p["home_title"] or "").strip()
+        if title and (not home or title != home) and not exception:
+            raise HTTPException(400, f"A reason is required when booking {p['name']} as '{title}'.")
+        alloc = float(body.allocation_pct if body.allocation_pct is not None else (row["allocation_pct"] or 0.0))
+        sd = (body.start_date if body.start_date is not None else row["start_date"]) or ""
+        ed = (body.end_date if body.end_date is not None else row["end_date"]) or ""
+        v = validate_assignment(conn, pid, alloc, sd, ed, exclude_resource_id=rid)
+        if not v["ok"]:
+            raise HTTPException(409, _clash_message(p["name"], alloc, v))
+        pr = _pricing_row(conn, title)
+        cap = p["capacity"] or CAP_WEEK_HOURS
+        conn.execute(
+            "UPDATE resources SET person_id=?, role=?, rate=?, offshore_rate=?, "
+            "capacity=?, allocation_pct=?, start_date=?, end_date=?, title_exception=? WHERE id=?",
+            (pid, title, (pr["rate"] if pr else row["rate"]),
+             (pr["offshore_rate"] if pr else row["offshore_rate"]),
+             cap, alloc, sd, ed, exception, rid))
+        _write_allocation_hours(conn, rid, alloc, cap, sd, ed)
+        conn.commit()
+        return {"ok": True, "weeks_booked": v["weeks_in_window"]}
+    finally:
+        conn.close()
+
+
+@app.delete("/api/assignments/{rid}")
+def api_assignment_delete(rid: int, request: Request):
+    """Remove a person from a project (PM-scoped). Deletes its hours + actuals."""
+    user = _require_people(request)
+    conn = get_db()
+    try:
+        row = conn.execute("SELECT * FROM resources WHERE id=?", (rid,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Assignment not found")
+        _pm_may_touch(conn, user, row["client"], row["project"])
+        conn.execute("DELETE FROM weekly_hours WHERE resource_id=?", (rid,))
+        conn.execute("DELETE FROM actual_hours WHERE resource_id=?", (rid,))
+        conn.execute("DELETE FROM actual_notes WHERE resource_id=?", (rid,))
+        conn.execute("DELETE FROM resources WHERE id=?", (rid,))
+        conn.commit()
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@app.get("/api/my-projects")
+def api_my_projects(request: Request):
+    """Projects this PM owns, with team counts/hours — the workbench's left list."""
+    user = _require_people(request)
+    conn = get_db()
+    try:
+        weeks, _ = _load_layout()
+        projs = _pm_projects(user["u"], conn) if user.get("r") == "pm" else None
+        rows = conn.execute(
+            "SELECT TRIM(client) client, TRIM(project) project, COUNT(*) n, "
+            "COALESCE(SUM(h.h),0) hrs FROM resources r "
+            "LEFT JOIN (SELECT resource_id, SUM(hours) h FROM weekly_hours GROUP BY resource_id) h "
+            "ON h.resource_id=r.id WHERE TRIM(r.project)!='' GROUP BY TRIM(r.client), TRIM(r.project) "
+            "ORDER BY TRIM(r.client), TRIM(r.project)").fetchall()
+        out = []
+        for r in rows:
+            if projs is not None and not _pm_owns(projs, r["client"], r["project"]):
+                continue
+            meta = conn.execute(
+                "SELECT start_date, end_date FROM projects WHERE TRIM(UPPER(client))=? AND TRIM(UPPER(project))=?",
+                ((r["client"] or "").upper(), (r["project"] or "").upper())).fetchone()
+            team = conn.execute(
+                "SELECT id, name, role, allocation_pct, start_date, end_date, capacity, title_exception "
+                "FROM resources WHERE TRIM(UPPER(client))=? AND TRIM(UPPER(project))=? ORDER BY name",
+                ((r["client"] or "").upper(), (r["project"] or "").upper())).fetchall()
+            out.append({
+                "client": r["client"], "project": r["project"],
+                "people": r["n"], "booked_hours": round(r["hrs"] or 0, 1),
+                "start_date": (meta["start_date"] if meta else "") or "",
+                "end_date": (meta["end_date"] if meta else "") or "",
+                "team": [dict(t) for t in team],
+            })
+        return {"projects": out, "role": user.get("r"), "weeks": len(weeks)}
+    finally:
+        conn.close()
+
+
+def person_loads_bulk(conn: sqlite3.Connection, weeks: list[str]):
+    """Per-week booked % for EVERY person in ONE database pass.
+
+    The rail needs all ~50 people at once; calling person_week_load() in a loop
+    did one connection + one hours query per person (N+1 through SQLCipher) and
+    took 6.2s. This batches both. Deliberately mirrors person_week_load's maths
+    (each row's hours ÷ that row's capacity, summed per person) so the rail and
+    the 100% validator can never disagree.
+    """
+    rows = conn.execute(
+        "SELECT id, person_id, capacity, client, project FROM resources "
+        "WHERE person_id IS NOT NULL").fetchall()
+    by_rid: dict[int, list[tuple[int, float]]] = {}
+    for h in conn.execute("SELECT resource_id, week, hours FROM weekly_hours WHERE hours > 0").fetchall():
+        by_rid.setdefault(h["resource_id"], []).append((h["week"], h["hours"]))
+    n = len(weeks)
+    acc: dict[int, list[float]] = {}
+    contrib: dict[int, dict[int, list[str]]] = {}
+    for r in rows:
+        pid = r["person_id"]
+        cap = r["capacity"] or CAP_WEEK_HOURS
+        a = acc.setdefault(pid, [0.0] * n)
+        cmap = contrib.setdefault(pid, {})
+        label = "/".join(x for x in ((r["client"] or "").strip(), (r["project"] or "").strip()) if x) or "—"
+        for wk, h in by_rid.get(r["id"], []):
+            if wk < n and h:
+                p = h / cap * 100.0
+                a[wk] += p
+                cmap.setdefault(wk, []).append(f"{label} ({round(p)}%)")
+    return acc, contrib
+
+
+@app.get("/api/pm/load")
+def api_pm_load(request: Request):
+    """Every person's week-by-week load — powers the workbench load rail.
+
+    PMs see the full roster (they need to know who is free to ask for someone),
+    but only booked %, never rates or money.
+    """
+    _require_people(request)
+    conn = get_db()
+    try:
+        weeks, _ = _load_layout()
+        people = conn.execute(
+            "SELECT id, name, home_title, capacity FROM people ORDER BY TRIM(UPPER(name))").fetchall()
+        projrows = conn.execute(
+            "SELECT person_id, client, project FROM resources WHERE person_id IS NOT NULL").fetchall()
+        projs: dict[int, list[str]] = {}
+        for r in projrows:
+            lab = " · ".join(x for x in ((r["client"] or "").strip(), (r["project"] or "").strip()) if x)
+            if lab and lab not in projs.setdefault(r["person_id"], []):
+                projs[r["person_id"]].append(lab)
+        acc, _contrib = person_loads_bulk(conn, weeks)
+        out = []
+        for p in people:
+            pct = acc.get(p["id"], [0.0] * len(weeks))
+            peak = max(pct) if pct else 0.0
+            out.append({
+                "id": p["id"], "name": p["name"], "home_title": p["home_title"],
+                "capacity": p["capacity"],
+                "peak_pct": round(peak, 1),
+                "peak_week": (weeks[pct.index(peak)] if pct else ""),
+                "avg_pct": round(sum(pct) / len(pct), 1) if pct else 0.0,
+                "projects": projs.get(p["id"], []),
+                "weeks": [round(v, 1) for v in pct],
+            })
+        return {"people": out, "week_labels": weeks}
+    finally:
+        conn.close()
+
+
+# ---------------- OT approvals (admin gate, Rijoy's spec) ----------------
+# A PM flags an overage as billable OT; the money stays OUT of the Dashboard
+# until the admin approves it here. Approval is what flips actual_notes.approved,
+# which _actuals_financials reads to release the "Additional work (OT)" revenue.
+@app.get("/api/ot/pending")
+def api_ot_pending(request: Request):
+    """Billable OT awaiting admin approval (plus a short recently-approved tail)."""
+    _require_perm(request, "ot_approval")
+    conn = get_db()
+    try:
+        weeks, _ = _load_layout()
+        rows = conn.execute(
+            "SELECT n.id, n.resource_id, n.week, n.pm, n.overage, n.reason, n.comment, "
+            "n.approved, n.billed, n.created_at, r.name, r.role, r.client, r.project, "
+            "r.rate, r.offshore_rate, r.capacity "
+            "FROM actual_notes n JOIN resources r ON r.id = n.resource_id "
+            "WHERE n.is_ot=1 AND n.billed=1 ORDER BY n.approved, n.created_at DESC"
+        ).fetchall()
+        ot_by_title = {
+            x["title"]: (x["ot_multiplier"] or 1.0)
+            for x in conn.execute("SELECT title, ot_multiplier FROM pricing").fetchall()
+        }
+        out = []
+        for r in rows:
+            mult = ot_by_title.get((r["role"] or "").strip(), 1.0)
+            out.append({
+                "id": r["id"], "resource_id": r["resource_id"],
+                "week": r["week"],
+                "week_label": weeks[r["week"]] if 0 <= r["week"] < len(weeks) else str(r["week"]),
+                "person": r["name"], "title": r["role"],
+                "client": r["client"], "project": r["project"],
+                "pm": r["pm"], "ot_hours": round(r["overage"] or 0, 1),
+                "reason": r["reason"] or r["comment"] or "",
+                "approved": bool(r["approved"]),
+                "ot_multiplier": mult,
+                "ot_revenue": round((r["overage"] or 0) * (r["rate"] or 0) * mult, 2),
+                "ot_cost": round((r["overage"] or 0) * (r["offshore_rate"] or 0), 2),
+                "created_at": r["created_at"],
+            })
+        pending = [x for x in out if not x["approved"]]
+        return {
+            "pending": pending, "approved": [x for x in out if x["approved"]],
+            "pending_revenue": round(sum(x["ot_revenue"] for x in pending), 2),
+            "pending_cost": round(sum(x["ot_cost"] for x in pending), 2),
+            "gate_enabled": _ot_requires_approval(conn),
+        }
+    finally:
+        conn.close()
+
+
+class OtDecision(BaseModel):
+    approve: bool
+    note: str | None = ""
+
+
+@app.post("/api/ot/{note_id}/decision")
+def api_ot_decision(note_id: int, body: OtDecision, request: Request):
+    """Approve or revoke one billable-OT entry (admin only)."""
+    _require_perm(request, "ot_approval")
+    conn = get_db()
+    try:
+        row = conn.execute("SELECT * FROM actual_notes WHERE id=?", (note_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "OT entry not found")
+        conn.execute("UPDATE actual_notes SET approved=? WHERE id=?",
+                     (1 if body.approve else 0, note_id))
+        conn.commit()
+        return {"ok": True, "approved": bool(body.approve)}
+    finally:
+        conn.close()
+
+
+@app.post("/api/ot/gate")
+def api_ot_gate(request: Request, enabled: int = 1):
+    """Turn the admin OT gate on/off. Off = billable OT hits the Dashboard immediately."""
+    _require_perm(request, "ot_approval")
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT INTO meta (key, value) VALUES ('ot_requires_approval', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            ("1" if enabled else "0",))
+        conn.commit()
+        return {"ok": True, "gate_enabled": bool(enabled)}
+    finally:
+        conn.close()
+
+
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
+
+# Schema init runs LAST so every table-creation helper and the People seeding
+# functions are already defined. Keep this at the bottom of the file.
+init_db()
