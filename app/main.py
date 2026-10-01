@@ -715,17 +715,17 @@ def api_themes(request: Request):
 
 
 def _can_change_theme(user) -> bool:
+    """Who may switch their own UI theme.
+
+    Rijoy's call (2026-10-01): EVERY signed-in user gets this, PMs included. A
+    theme is a local display preference that exposes no data, so gating it
+    behind an admin permission only made PMs squint at a dark screen. The
+    `theming` permission stays in the list (harmless) rather than being ripped
+    out of existing admin records.
+    """
     if not user:
         return False
-    if _super_admin(user):
-        return True
-    if user.get("r") != "admin":
-        return False
-    conn = get_db()
-    try:
-        return "theming" in _user_permissions(user, conn)
-    finally:
-        conn.close()
+    return True
 
 
 @app.post("/api/themes")
@@ -934,6 +934,7 @@ def init_db() -> None:
     # known name variants of the SAME human into one record so the 100% rule
     # cannot be defeated by a spelling difference.
     _reseat_people(conn)
+    _dedupe_person_titles(conn)
     for _keep, _drops in KNOWN_DUPLICATES:
         _merge_people(conn, _keep, _drops)
     # Link any resource that has a person_id still unset / dangling.
@@ -3165,6 +3166,33 @@ def _reseat_people(conn: sqlite3.Connection) -> None:
             "UPDATE resources SET name=? WHERE person_id=? AND TRIM(name)!=TRIM(?)",
             (p["name"], p["id"], p["name"]))
     conn.commit()
+
+
+def _dedupe_person_titles(conn: sqlite3.Connection) -> None:
+    """Collapse titles differing only by whitespace/case for the same person.
+
+    The seed took titles straight from `resources.role`, so a row whose role was
+    stored as "Project manager " produced a second, visually identical entry next
+    to "Project manager" — a duplicated line in the People table and a doubled
+    option in the PM's title dropdown. Keeps the first spelling seen. Idempotent.
+    """
+    try:
+        rows = conn.execute(
+            "SELECT person_id, title FROM person_titles ORDER BY person_id, rowid").fetchall()
+        seen: dict[tuple[int, str], str] = {}
+        drop: list[tuple[int, str]] = []
+        for r in rows:
+            k = (r["person_id"], " ".join((r["title"] or "").split()).upper())
+            if k in seen:
+                drop.append((r["person_id"], r["title"]))
+            else:
+                seen[k] = r["title"]
+        for pid, title in drop:
+            conn.execute("DELETE FROM person_titles WHERE person_id=? AND title=?", (pid, title))
+        if drop:
+            conn.commit()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _merge_people(conn: sqlite3.Connection, keep_name: str, drop_names: list[str]) -> None:

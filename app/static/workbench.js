@@ -437,8 +437,16 @@ function renderPeople() {
     const titles = (p.titles || []).length
       ? p.titles.map((t) => esc(t)).join("<br>")
       : `<span class="muted-note">none</span>`;
+    // Flag anyone sitting on a project with no PM — same signal as the PM table,
+    // so the gap is visible from either page.
+    const unowned = (typeof unassignedProjects === "function") ? unassignedProjects() : [];
+    const myOrphans = unowned.filter((u) => (p.assignments || []).some((a) =>
+      `${(a.client || "").trim().toUpperCase()}|${(a.project || "").trim().toUpperCase()}` === u.key));
+    const ownerFlag = myOrphans.length
+      ? `<div class="noowner-chip" title="No PM owns this project">⚠ ${esc(myOrphans.map((m) => m.project).join(", "))}</div>`
+      : "";
     return `<tr data-pid="${p.id}">
-      <td><b>${esc(p.name)}</b>${p.country ? `<div class="muted-note">${esc(p.country)}</div>` : ""}</td>
+      <td><b>${esc(p.name)}</b>${p.country ? `<div class="muted-note">${esc(p.country)}</div>` : ""}${ownerFlag}</td>
       <td>${esc(p.home_title || "—")}</td>
       <td>${titles}</td>
       <td class="num">${fmtH(p.capacity)}</td>
