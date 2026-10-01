@@ -458,10 +458,14 @@ function renderPeople() {
     tr.querySelectorAll("button[data-act]").forEach((b) => b.addEventListener("click", async () => {
       if (b.dataset.act === "edit") return openPersonModal(p);
       if (b.dataset.act === "merge") return openMergeModal(p);
-      if (!confirm(`Delete ${p.name}? Only possible when they hold no project assignments.`)) return;
+      // Names the person AND what is lost. A bare "Delete X?" hid the fact that
+      // their planned + actual hours go too.
+      const lost = (p.assignments || []).map((a) => `${a.client} · ${a.project}`).join(", ") || "no assignments";
+      if (!confirm(`Delete ${p.name}?\n\nOnly possible when they hold no project assignments.\nCurrently: ${lost}\n\nThis cannot be undone.`)) return;
       try {
         await api(`/api/people/${pid}`, { method: "DELETE" });
         toast(`${p.name} deleted`);
+        loadActivity();   // reflect the freshly-logged row
         await loadPeople(); await refreshLoadOnly();
       } catch (e) { toast(e.message || "Delete failed", true); }
     }));
@@ -532,9 +536,30 @@ function openMergeModal(p) {
     <label class="f">Merge these INTO ${esc(p.name)}</label>
     <select id="mSrc">${others.map((x) => `<option value="${x.id}">${esc(x.name)} (${x.project_count} project(s))</option>`).join("")}</select>
     <div class="muted-note" style="margin-top:8px">Refused automatically if the two records are both on the same project — that is a real double-booking and needs your decision.</div>
+    <!-- Names the exact damage BEFORE it happens. Rijoy could not tell what a
+         merge had done after the fact (2026-10-01); saying it up front, in the
+         dialog he actually reads, is the fix. -->
+    <div id="mWarn" class="merge-warn"></div>
   `;
   showModalHTML(`Merge into ${p.name}`, body);
   const okBtn = $("#modalOk");
+  okBtn.textContent = "Merge";
+  // Live preview: spell out what merging the currently-selected record does.
+  const warn = () => {
+    const src = others.find((x) => x.id === +$("#mSrc").value);
+    const el = $("#mWarn");
+    if (!src || !el) return;
+    const moves = (src.assignments || []).map((a) => `${a.client} · ${a.project}`);
+    el.innerHTML =
+      `<b>⚠ This will permanently:</b><ul>` +
+      `<li>move <b>${moves.length}</b> project${moves.length === 1 ? "" : "s"} off <b>${esc(src.name)}</b>` +
+      (moves.length ? ` (${moves.map(esc).join(", ")})` : "") + `</li>` +
+      `<li>delete <b>${esc(src.name)}</b> as a person, and</li>` +
+      `<li>record their hours against <b>${esc(p.name)}</b> on those projects</li></ul>` +
+      `Neither the merge nor its undo is possible from the UI. Cancel if you are not sure.`;
+  };
+  $("#mSrc").addEventListener("change", warn);
+  warn();
   setModalOk(async () => {
     const src = +$("#mSrc").value;
     okBtn.disabled = true;
@@ -543,6 +568,7 @@ function openMergeModal(p) {
       closeModal();
       toast("Merged");
       await loadPeople(); await refreshLoadOnly();
+      loadActivity();   // show exactly what this merge did, immediately
       if (state.view === "workbench") await loadWorkbench();
     } catch (e) { toast(e.message || "Merge failed", true); }
     finally { okBtn.disabled = false; }

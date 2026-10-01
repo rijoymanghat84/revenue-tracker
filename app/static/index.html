@@ -10,7 +10,7 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icons/icon-192.png">
 <title>Revenue Recon</title>
-<link rel="stylesheet" href="/styles.css?v=69">
+<link rel="stylesheet" href="/styles.css?v=70">
 </head>
 <body>
 <div class="bg-glow"></div>
@@ -340,6 +340,24 @@
       </table>
     </div>
 
+    <!-- ============ RECENT ACTIVITY (2026-10-01) ============
+         Rijoy accidentally confirmed a person merge and had no way to find out
+         what it did — the merge is irreversible and left no trace. Every
+         destructive / money-affecting action now writes a server-side row and
+         shows up here, newest first. Admin-only (it names who did what). -->
+    <div class="toolbar glass pm-toolbar" id="activityToolbar">
+      <div class="sheet-note" id="activityNote"><span class="dot on"></span><b>Recent activity</b> — merges, deletes and rate pushes, newest first. Recorded on the server, so nothing is missed even if the browser is closed.</div>
+      <div class="toolbar-right">
+        <button class="btn mini" id="btnActivityRefresh">↻ Refresh</button>
+      </div>
+    </div>
+    <div class="table-wrap glass narrow" id="activityWrap">
+      <table id="activityTable">
+        <thead id="activityHead"></thead>
+        <tbody id="activityBody"></tbody>
+      </table>
+    </div>
+
     <!-- OT approval queue: billable OT is invisible to the Dashboard until
          approved here (the gate Rijoy asked for). -->
     <div class="toolbar glass pm-toolbar" id="otToolbar">
@@ -412,7 +430,10 @@
   <div class="modal-box glass">
     <h3 id="modalTitle"></h3>
     <div id="modalBody" class="modal-body"></div>
-    <div class="modal-actions"><button class="btn primary" id="modalOk">OK</button></div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="modalCancel">Cancel</button>
+      <button class="btn primary" id="modalOk">OK</button>
+    </div>
   </div>
 </div>
 
@@ -537,8 +558,8 @@
      not executed yet. Getting this order wrong threw a ReferenceError that
      aborted the REST of app.js — including boot() — so the entire app failed to
      initialise. -->
-<script src="/workbench.js?v=3"></script>
-<script src="/app.js?v=96"></script>
+<script src="/workbench.js?v=4"></script>
+<script src="/app.js?v=97"></script>
 <script>
   // PWA: register the service worker (only after load; skip on failure)
   if ("serviceWorker" in navigator) {

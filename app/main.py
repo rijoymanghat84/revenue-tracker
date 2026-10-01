@@ -855,6 +855,22 @@ def init_db() -> None:
             title TEXT NOT NULL,
             PRIMARY KEY (person_id, title)
         );
+        -- Activity log (2026-10-01). Rijoy accidentally confirmed a person merge
+        -- and there was NO WAY to find out afterwards what it had done — the
+        -- merge is irreversible in the UI and left no trace. Every destructive
+        -- or money-affecting action now writes a row here, and Team & Access
+        -- renders them, so "what did I just do?" is always answerable.
+        -- Written from the SERVER (never the client) so it cannot be skipped.
+        CREATE TABLE IF NOT EXISTS activity (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL DEFAULT (datetime('now')),
+            actor TEXT NOT NULL DEFAULT '',
+            action TEXT NOT NULL,
+            target TEXT NOT NULL DEFAULT '',
+            details TEXT NOT NULL DEFAULT '',
+            project TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_activity_ts ON activity (id DESC);
         """
     )
     # Migration: add client column to user_projects if it predates it
@@ -1660,8 +1676,11 @@ def api_user_delete(uid: int, request: Request):
             n_admin = conn.execute("SELECT COUNT(*) FROM users WHERE role='admin' AND id!=?", (uid,)).fetchone()[0]
             if n_admin == 0:
                 raise HTTPException(400, "Cannot delete the last admin account")
+        role_row = conn.execute("SELECT role FROM users WHERE id=?", (uid,)).fetchone()
         conn.execute("DELETE FROM user_projects WHERE user_id=?", (uid,))
         conn.execute("DELETE FROM users WHERE id=?", (uid,))
+        _log_activity(conn, request, "user.delete", target=row["username"],
+                      details=f"Removed {(role_row['role'] if role_row else 'user')} account and its project scope.")
         conn.commit()
         return {"ok": True}
     finally:
@@ -2515,6 +2534,9 @@ def api_pricing_delete(pid: int, request: Request):
         if not row:
             raise HTTPException(404, "pricing title not found")
         conn.execute("DELETE FROM pricing WHERE id=?", (pid,))
+        _log_activity(conn, request, "pricing.delete", target=row["title"],
+                      details=f"Rate card row removed (was rate {row['rate']} / offshore {row['offshore_rate']}). "
+                              f"Existing resource rates are NOT recalculated.")
         conn.commit()
         return {"ok": True, "title": row["title"]}
     finally:
@@ -2582,6 +2604,9 @@ def api_pricing_apply_all(request: Request):
             if cur.rowcount:
                 per_title.append({"title": r["title"], "updated": cur.rowcount})
                 total += cur.rowcount
+        _log_activity(conn, request, "pricing.apply_all", target=f"{total} resource row(s)",
+                      details="Pushed every title's rates onto all matching resources"
+                              + (f": {', '.join(t['title'] + ' (' + str(t['updated']) + ')' for t in per_title)}" if per_title else " (nothing to update)") + ".")
         conn.commit()
         return {"ok": True, "updated": total, "per_title": per_title}
     finally:
@@ -3248,6 +3273,24 @@ def backfill_person_links(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _log_activity(conn: sqlite3.Connection, request: Request, action: str,
+                  target: str = "", details: str = "", project: str = "") -> None:
+    """Record one user-visible action. Called from the SERVER, inside the same
+    transaction as the change, so an action can never happen unlogged.
+
+    Deliberately never raises: a broken log row must not roll back or 500 a
+    real piece of work. If it fails, the action still succeeds."""
+    try:
+        user = _current_user(request)
+        actor = (user or {}).get("u", "") or "unknown"
+        conn.execute(
+            "INSERT INTO activity (actor, action, target, details, project) VALUES (?,?,?,?,?)",
+            (str(actor), str(action), str(target), str(details), str(project)),
+        )
+    except Exception:  # noqa: BLE001 — logging must never break the action
+        pass
+
+
 def _people_rows(conn: sqlite3.Connection) -> list[dict]:
     out = []
     for p in conn.execute(
@@ -3430,6 +3473,8 @@ def api_person_create(body: PersonBody, request: Request):
             titles = [(body.home_title or "").strip()]
         for t in titles:
             conn.execute("INSERT OR IGNORE INTO person_titles (person_id, title) VALUES (?,?)", (pid, t))
+        _log_activity(conn, request, "person.create", target=name,
+                      details=f"Title(s): {', '.join(titles) or '—'}. Capacity {float(body.capacity or CAP_WEEK_HOURS)}h/wk.")
         conn.commit()
         return {"ok": True, "id": pid}
     finally:
@@ -3506,14 +3551,47 @@ def api_person_merge(pid: int, body: MergeBody, request: Request):
             raise HTTPException(
                 409, f"Both records are on {clash['client']} · {clash['project']}. "
                      f"That is a real double-booking — resolve the assignment first.")
+        # Read what is about to move BEFORE the UPDATE repoints the rows, so the
+        # activity log can name the projects that changed hands.
+        moved = [f"{r['client']} · {r['project']}" for r in conn.execute(
+            "SELECT client, project FROM resources WHERE person_id=? ORDER BY client, project",
+            (src["id"],)).fetchall()]
         conn.execute("UPDATE resources SET person_id=? WHERE person_id=?", (keep["id"], src["id"]))
         for t in conn.execute("SELECT title FROM person_titles WHERE person_id=?", (src["id"],)).fetchall():
             conn.execute("INSERT OR IGNORE INTO person_titles (person_id, title) VALUES (?,?)",
                          (keep["id"], t["title"]))
         conn.execute("DELETE FROM person_titles WHERE person_id=?", (src["id"],))
         conn.execute("DELETE FROM people WHERE id=?", (src["id"],))
+        # IRREVERSIBLE from the UI → always logged. Without this row there is no
+        # way to find out afterwards what a merge did (Rijoy, 2026-10-01).
+        _log_activity(
+            conn, request, "person.merge", target=f"{src['name']} → {keep['name']}",
+            details=(f"{len(moved)} project(s) moved onto {keep['name']}"
+                     + (f": {', '.join(moved)}" if moved else " (had no assignments)")
+                     + f". Person '{src['name']}' deleted. Not reversible from the UI."),
+            project=", ".join(moved),
+        )
         conn.commit()
-        return {"ok": True, "merged": src["name"], "into": keep["name"]}
+        return {"ok": True, "merged": src["name"], "into": keep["name"], "moved": moved}
+    finally:
+        conn.close()
+
+
+@app.get("/api/activity")
+def api_activity(request: Request, limit: int = 60):
+    """Recent actions, newest first — the answer to 'what did I just do?'.
+
+    Admin-only: it exposes who changed what, so PMs do not get it. One indexed
+    query, rendered on the Team & Access tab."""
+    _require_admin(request)
+    lim = max(1, min(int(limit or 60), 500))
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT id, ts, actor, action, target, details, project "
+            "FROM activity ORDER BY id DESC LIMIT ?", (lim,)
+        ).fetchall()
+        return {"activity": [dict(r) for r in rows]}
     finally:
         conn.close()
 
@@ -3528,8 +3606,11 @@ def api_person_delete(pid: int, request: Request):
         n = conn.execute("SELECT COUNT(*) FROM resources WHERE person_id=?", (pid,)).fetchone()[0]
         if n:
             raise HTTPException(409, f"This person is still on {n} project(s). Remove those assignments first.")
+        gone = conn.execute("SELECT name FROM people WHERE id=?", (pid,)).fetchone()
         conn.execute("DELETE FROM person_titles WHERE person_id=?", (pid,))
         conn.execute("DELETE FROM people WHERE id=?", (pid,))
+        _log_activity(conn, request, "person.delete", target=(gone["name"] if gone else f"#{pid}"),
+                      details="Person record deleted (held no assignments).")
         conn.commit()
         return {"ok": True}
     finally:
@@ -3748,10 +3829,16 @@ def api_assignment_delete(rid: int, request: Request):
         if not row:
             raise HTTPException(404, "Assignment not found")
         _pm_may_touch(conn, user, row["client"], row["project"])
+        nh = conn.execute("SELECT COUNT(*) FROM weekly_hours WHERE resource_id=?", (rid,)).fetchone()[0]
+        na = conn.execute("SELECT COUNT(*) FROM actual_hours WHERE resource_id=?", (rid,)).fetchone()[0]
         conn.execute("DELETE FROM weekly_hours WHERE resource_id=?", (rid,))
         conn.execute("DELETE FROM actual_hours WHERE resource_id=?", (rid,))
         conn.execute("DELETE FROM actual_notes WHERE resource_id=?", (rid,))
         conn.execute("DELETE FROM resources WHERE id=?", (rid,))
+        # Names the hours that went with it — the dialog warns, this records it.
+        _log_activity(conn, request, "assignment.delete", target=f"{row['name']} — {row['client']} · {row['project']}",
+                      details=f"Removed from project. Deleted {nh} planned-hour row(s) and {na} actual-hour row(s).",
+                      project=f"{row['client']} · {row['project']}")
         conn.commit()
         return {"ok": True}
     finally:
