@@ -10,7 +10,7 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icons/icon-192.png">
 <title>Revenue Recon</title>
-<link rel="stylesheet" href="/styles.css?v=79">
+<link rel="stylesheet" href="/styles.css?v=80">
 </head>
 <body>
 <div class="bg-glow"></div>
@@ -174,6 +174,13 @@
   <section id="utilView" class="view hidden">
     <div class="toolbar glass">
       <div class="sheet-note" id="utilNote"><span class="dot on"></span>Booked hours ÷ capacity (<b>40 hrs/week = 100%</b>) — 🔴 &gt;100% · 🟢 80–100% · 🟡 50–80% · 🟠 &lt;50%. Auto-calculated; never editable.</div>
+      <div class="util-mode glass" id="utilModeSeg" role="group" aria-label="Utilization granularity">
+        <!-- Month = the year at a glance (default). Week drills into each month's
+             weeks. Hidden on the single-month drill-down, where there is only one
+             month to show. -->
+        <button type="button" class="seg-btn on" data-util-mode="month" aria-pressed="true" title="One column pair per month — the year at a glance">Month</button>
+        <button type="button" class="seg-btn" data-util-mode="week" aria-pressed="false" title="Each month's weeks, planned vs actual — more granular">Week</button>
+      </div>
       <div class="toolbar-right">
         <!-- 2026-10-01: the capacity editor moved here from the old Pricing tab.
              Capacity is the DENOMINATOR of every % on this page, so it now lives
@@ -596,7 +603,7 @@
 <script src="/workbench.js?v=9"></script>
 <!-- weeksheet.js also loads BEFORE app.js, for the same reason as workbench.js. -->
 <script src="/weeksheet.js?v=7"></script>
-<script src="/app.js?v=104"></script>
+<script src="/app.js?v=106"></script>
 <script>
   // PWA: register the service worker (only after load; skip on failure)
   if ("serviceWorker" in navigator) {
