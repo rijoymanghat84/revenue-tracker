@@ -20,7 +20,7 @@
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
-const state = { resources: [], weeks: [], months: [], pricing: [], view: "dash", gridEdit: { planned: false }, me: null, globalMonth: "all" };
+const state = { resources: [], weeks: [], months: [], pricing: [], view: "dash", gridEdit: { planned: false }, me: null, globalMonth: "all", utilMonth: "" };
 
 /* Full admin permission key set — mirrors ADMIN_PERMISSIONS in app/main.py.
    Used only as a defensive fallback when /api/login omits `permissions`. */
@@ -754,6 +754,7 @@ function syncGridHeight(wrap) {
 function syncAllGridHeights() {
   syncGridHeight(document.getElementById("gridWrap"));
   syncGridHeight(document.getElementById("actualsWrap"));
+  syncGridHeight(document.getElementById("utilWrap"));
 }
 window.addEventListener("resize", syncAllGridHeights);
 
@@ -1918,7 +1919,7 @@ function renderUtilization() {
   api(`/api/utilization?month=${encodeURIComponent(m)}`).then((data) => {
     const months = data.months;
     const chosen = state.globalMonth;
-    const sub = (lbl) => `<th class="u-sub">${lbl}</th>`;
+    const sub = (lbl, mi) => `<th class="u-sub${typeof mi === "number" && state.globalMonth === months[mi] ? " u-month-active" : ""}"${typeof mi === "number" ? ` data-month-idx="${mi}"` : ""}>${lbl}</th>`;
 
     if (chosen !== "all") {
       // ---- MONTH-WISE drill-down: one month, per-resource detail ----
@@ -1947,22 +1948,33 @@ function renderUtilization() {
     }
 
     // ---- ALL months: full-year P/A grid ----
+    // #utilView has no month dropdown of its own; the rail's global month drives
+    // it, so the drill-down branch above never fires. Each month header is
+    // therefore CLICKABLE (feature #15) and highlights that month's P/A column
+    // pair down every resource row — the grid is far too wide to track a month
+    // across 24 columns by eye.
     let head = `<tr><th class="u-th-name" rowspan="2">Resource</th><th rowspan="2">Projects</th><th rowspan="2" class="num">Cap/wk</th>`;
-    head += months.map((m) => `<th class="num" colspan="2">${esc(m)}</th>`).join("");
-    head += `<th class="num" colspan="2">Overall</th></tr>`;
-    head += `<tr>${months.map(() => sub("P") + sub("A")).join("")}${sub("P") + sub("A")}</tr>`;
+    head += months.map((m, mi) => {
+      const on = state.globalMonth === m ? " u-month-active" : "";
+      return `<th class="num u-month-head${on}" data-month-idx="${mi}" title="Highlight ${esc(m)} for every resource">${esc(m)}</th>`;
+    }).join("") + `<th class="num" colspan="2">Overall</th></tr>`;
+    // sub-header cells carry the month index too, so the highlight spans BOTH the
+    // P and A sub-columns of the selected month.
+    head += `<tr>${months.map((m, mi) =>
+      sub("P", mi) + sub("A", mi)).join("")}${sub("P") + sub("A")}</tr>`;
     let rows = "";
     for (const row of data.rows) {
       rows += `<tr>
         <td class="u-name-td"><div class="u-name">${esc(row.name)}</div></td>
         <td class="u-proj">${esc(row.projects.join(", ") || "—")}</td>
         <td class="u-cell num">${row.capacity_week || 40}</td>`;
-      for (const mo of row.months) {
+      row.months.forEach((mo, mi) => {
         const pc = utilClass(mo.planned_pct);
         const ac = utilClass(mo.actual_pct);
-        rows += `<td class="u-cell ${pc}" title="planned ${(mo.planned_hours||0).toLocaleString()}h / ${mo.capacity}h">${fmt(mo.planned_pct, 0)}%</td>`;
-        rows += `<td class="u-cell ${ac}" title="actual ${(mo.actual_hours||0).toLocaleString()}h / ${mo.capacity}h">${fmt(mo.actual_pct, 0)}%</td>`;
-      }
+        const on = state.globalMonth === months[mi] ? " u-month-active" : "";
+        rows += `<td class="u-cell ${pc}${on}" data-month-idx="${mi}" title="planned ${(mo.planned_hours||0).toLocaleString()}h / ${mo.capacity}h">${fmt(mo.planned_pct, 0)}%</td>`;
+        rows += `<td class="u-cell ${ac}${on}" data-month-idx="${mi}" title="actual ${(mo.actual_hours||0).toLocaleString()}h / ${mo.capacity}h">${fmt(mo.actual_pct, 0)}%</td>`;
+      });
       const poc = utilClass(row.planned_overall);
       const aoc = utilClass(row.actual_overall);
       rows += `<td class="u-cell ${poc}" title="planned ${(row.total_planned||0).toLocaleString()}h total">${fmt(row.planned_overall, 0)}%</td>`;
@@ -1970,6 +1982,7 @@ function renderUtilization() {
     }
     $("#utilHead").innerHTML = head;
     $("#utilBody").innerHTML = rows;
+    bindUtilMonthHeaders(months);
     // sticky alignment for the new 3-column frozen block (Resource + Projects + Cap/wk)
     alignUtilSticky();
   }).catch((e) => toast(`Utilization failed: ${e.message}`, true));
@@ -1978,12 +1991,43 @@ function renderUtilization() {
   renderCapacity();
 }
 
+/* Feature #15: month header cells on the Utilization grid are clickable — the
+   whole P/A column pair for that month lights up down every row. Purely a
+   highlight (client-side), so nothing about the numbers changes: the grid stays
+   the read-only full-year board. Clicking the same month again clears it.
+   `state.utilMonth` is deliberately separate from `state.globalMonth` — the
+   global one filters tabs server-side, this one only tints a column pair. */
+function bindUtilMonthHeaders(months) {
+  $$("#utilHead th[data-month-idx]").forEach((th) => {
+    th.addEventListener("click", () => {
+      const name = months[Number(th.dataset.monthIdx)];
+      state.utilMonth = state.utilMonth === name ? "" : name;
+      applyUtilMonthHighlight();
+    });
+  });
+  applyUtilMonthHighlight();
+}
+function applyUtilMonthHighlight() {
+  const active = state.utilMonth || "";
+  const months = state.months || [];
+  const idx = months.findIndex((m) => (m.name || m) === active);
+  $$("#utilHead [data-month-idx], #utilBody [data-month-idx]").forEach((el) => {
+    el.classList.toggle("u-month-active", active !== "" && Number(el.dataset.monthIdx) === idx);
+  });
+  // Header cells need an extra class so the sticky/blended backgrounds are
+  // overridden without fighting the existing th colours.
+  $$("#utilHead [data-month-idx]").forEach((el) => {
+    el.classList.toggle("u-month-head-on", active !== "" && Number(el.dataset.monthIdx) === idx);
+  });
+}
+
 /* Pin Resource + Projects + Cap/wk; the "Resource" header cell also pins to
    the left. Projects & Cap/wk are intentionally NOT sticky (they scroll). */
 function alignUtilSticky() {
   const table = document.getElementById("utilTable");
   const probe = document.querySelector("#utilBody tr");
   if (!table || !probe) return;
+  syncGridHeight(document.getElementById("utilWrap"));
   const tLeft = table.getBoundingClientRect().left;
   // Resource column stays pinned at left:0 (CSS handles it).
   // Just ensure the name header and body align after render.
