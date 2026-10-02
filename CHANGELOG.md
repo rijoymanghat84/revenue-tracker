@@ -9,6 +9,63 @@ wasn't one) and the commit.
 
 ---
 
+## 2026-10-02 — Dashboard: click a project to open its PM's My Projects screen, and show the PM (GH-56)
+
+**the owner:** *"I want those projects to be clickable and clicking it should show me
+the my project screen that the PM see for those projects. and that will also tell
+me who the PM is."*
+
+Asked and answered before building (the standing preference): the preview should
+be **read-only** — "a look, not a takeover" — landing on My Projects with that
+project selected and the PM named, with no add/edit/remove controls.
+
+**1. The Dashboard now names the PM.** `api_dashboard` stamps `pm` on every row
+(live, `no team`, and archived) from `_project_owners()`. A **PM** column sits
+between Project and Resource(s); an unowned row says `no PM` rather than showing
+a blank that reads as a bug. Live: 16 of 17 rows have a PM (`Internal · Bench`
+is the only unowned one).
+
+**2. The project name is a button.** `#dashTable .proj-link` — a real `<button>`
+(so it is keyboard-reachable), bound in `bindDashProjectLinks()` **after** the
+rows render. Bound-not-`onclick` deliberately: two earlier handlers in that
+function were called before the table existed and were silently dead, and a
+`data-*` binding also survives project names containing an apostrophe.
+
+**3. `?as_pm=<username>` on `/api/my-projects`.** The admin path for viewing one
+PM's workbench. It is a **view**, not impersonation: no session is handed over,
+values come from the DB through the same `_pm_scoping` a PM gets, an admin cannot
+use a PM's write path, and the caller must be an admin holding `people` (the
+existing `_require_people` gate). A non-PM `as_pm` (e.g. an admin username) owns
+nothing and returns an honestly EMPTY list — it must not fall back to the
+unscoped list a bare admin call returns, which would silently show every project
+as if it were that PM's.
+
+**4. `WB_VIEW_AS` mode in the workbench (read-only).** `openProjectWorkbench()`
+sets the mode and switches to the My Projects tab; `loadWorkbench()` sends
+`as_pm`; the server echoes `as_pm` back so the banner can name the PM even before
+`/api/project-owners` loads. Read-only is enforced by **not rendering** the write
+controls — `+ New project`, the project 🗑, and the per-member Edit / Remove
+buttons (which show `view only`) — so there are no dead buttons to press, and
+`+ Add team member` is disabled.
+
+**5. The banner, and getting out.** An amber `.wb-viewas` strip above the grid:
+`Viewing as PM · <pm> — <client · project>, N people. This is the screen <pm>
+sees; it is read-only.` plus **← Back to Dashboard**. `switchView()` calls
+`wbExitViewAs()` for any view other than `workbench`, so clicking another tab
+cannot strand the admin inside someone else's screen (the state a later bug would
+otherwise have to unpick).
+
+**6. The workbench tab is reachable by an admin holding `people`** — a one-line
+`tabVisible` early-return (`logs` is the precedent). Without it the tab stays
+`pm-only`, the click would switch to an invisible view, and a *visible* tab plus
+an *invisible* view is the worst pair: it looks like the click did nothing.
+
+Cache: `app.js ?v=114→115`, `workbench.js ?v=13→14`, `styles.css ?v=84→85`, and
+`sw.js` CACHE `recon-v1→recon-v2` (a `?v=` bump alone does not help an installed
+PWA).
+
+---
+
 ## 2026-10-02 — Resource master list: Team split from Resource, admin controls on the shared card (GH-55)
 
 **the owner:** *"split the Teams and Access section for admin to team and Resource,
