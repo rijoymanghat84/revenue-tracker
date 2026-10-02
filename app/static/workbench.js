@@ -158,14 +158,28 @@ function renderWbViewAs() {
   const sel = wbSel();
   const label = sel ? `${sel.client} · ${sel.project}` : `${WB_VIEW_AS.client} · ${WB_VIEW_AS.project}`;
   box.classList.remove("hidden");
-  box.innerHTML = `<div class="wva-text">
-      <span class="wva-badge">Viewing as PM</span>
-      <b>${pm ? esc(pm) : "(no PM assigned)"}</b>
-      <span class="muted-note">— ${esc(label)}${sel ? `, ${sel.people} ${sel.people === 1 ? "person" : "people"}` : ""}. This is the screen ${pm ? esc(pm) : "the PM"} sees; it is read-only.</span>
-    </div>
-    <div class="wva-actions">
-      <button class="btn mini" id="wvaBack">← Back to Dashboard</button>
-    </div>`;
+  if (!pm) {
+    /* No PM: there is no PM's screen to show. Say so plainly rather than heading
+       an empty page "Viewing as PM" — the contradiction is what a reader would
+       report as a bug. (Hit live clicking the unowned `Internal · Bench` row.) */
+    box.innerHTML = `<div class="wva-text">
+        <span class="wva-badge wva-none">No PM</span>
+        <b>${esc(label)}</b>
+        <span class="muted-note">has no project manager yet, so there is no My Projects screen to show. Assign one from <b>Team</b> to give it a PM.</span>
+      </div>
+      <div class="wva-actions">
+        <button class="btn mini" id="wvaBack">← Back to Dashboard</button>
+      </div>`;
+  } else {
+    box.innerHTML = `<div class="wva-text">
+        <span class="wva-badge">Viewing as PM</span>
+        <b>${esc(pm)}</b>
+        <span class="muted-note">— ${esc(label)}${sel ? `, ${sel.people} ${sel.people === 1 ? "person" : "people"}` : ""}. This is the screen ${esc(pm)} sees; it is read-only.</span>
+      </div>
+      <div class="wva-actions">
+        <button class="btn mini" id="wvaBack">← Back to Dashboard</button>
+      </div>`;
+  }
   const back = $("#wvaBack");
   if (back) back.addEventListener("click", () => {
     WB_VIEW_AS = null; WB.projects = []; WB.selKey = null; WB.progCache = {};
@@ -497,7 +511,12 @@ function renderWbTeam() {
   if (!p) {
     head.innerHTML = ""; body.innerHTML = "";
     if (addBtn) addBtn.disabled = true;
-    $("#wbHead").innerHTML = `<span class="dot off"></span>Pick a project on the left.`;
+    // In view-as mode with no PM, the "no PM" banner above already explains
+    // there is nothing to show — don't repeat "Pick a project on the left"
+    // over an empty list that has no projects to pick.
+    $("#wbHead").innerHTML = (WB_VIEW_AS && !WB_VIEW_AS.pm)
+      ? `<span class="dot off"></span>No project manager for <b>${esc(WB_VIEW_AS.client)} · ${esc(WB_VIEW_AS.project)}</b>.`
+      : `<span class="dot off"></span>Pick a project on the left.`;
     return;
   }
   if (addBtn) addBtn.disabled = wbReadOnly();

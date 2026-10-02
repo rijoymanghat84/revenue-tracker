@@ -1488,6 +1488,12 @@ td.week .a-inp { text-align: center; }
   color: #f0c05a; background: rgba(217, 161, 43, 0.16);
   border: 1px solid rgba(217, 161, 43, 0.5); border-radius: 999px; padding: 3px 9px;
 }
+/* No PM to view: say it in a neutral badge, not the amber "mode" one — there is
+   no PM's screen being shown, so it must not read as an active preview. */
+.wb-viewas .wva-badge.wva-none {
+  color: var(--muted); background: rgba(255, 255, 255, 0.06);
+  border-color: var(--border);
+}
 .wb-viewas .wva-actions { display: flex; gap: 8px; }
 .wb-master { overflow: hidden; display: flex; flex-direction: column; max-height: calc(100vh - 190px); }
 .wb-master-head { padding: 12px 13px 10px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 9px; }
