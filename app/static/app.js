@@ -3503,6 +3503,8 @@ async function actualsPrompt(rid, w, hours) {
   const weekLabel = esc(actualsData.weeks[w] || `week ${w + 1}`);
   const who = esc(r ? r.name : "");
 
+  if (overage === 0) return true;      // on target -> nothing to ask
+
   if (overage < 0) {
     // under-delivery: mandatory comment
     const comment = await askOt(
