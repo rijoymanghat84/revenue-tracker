@@ -9,6 +9,94 @@ wasn't one) and the commit.
 
 ---
 
+## 2026-10-02 — Bug form offers every real control, read off the live screen (GH-44)
+
+**GH-44**, raised by Rijoy from a PM login: *"there are options on the left side
+then there are options at the beginning like select week, different buttons etc
+and on the left the option to export and import — currently lots of these options
+are missing ... if any new button comes in future then that should be listed."*
+
+### Why they were missing
+
+`FB_MODULES` was a **hand-written list** of four "screens" per area — concepts, not
+controls — so real buttons were never in it, and because nothing derived it,
+**every future button would be missing too**. The fix had to change where the list
+comes from, not add four entries to it.
+
+### What it is now
+
+Options are **discovered from the live DOM** (`fbScanControls`): sections carry
+`data-view`, controls are found by semantics rather than an inventory, labels
+prefer visible text then `aria-label`/title then id then class, and ids are the
+stable key so a rename reads as a change.
+
+**54 controls across 11 areas**, including everything he named — Import, Export,
+the week selector, This week, Bench, Save week, Columns, Expand/Collapse, Update
+All Pricing, Add Person/PM/Admin.
+
+**The test that matters:** injecting a brand-new button into the Planned DOM is
+picked up with no code change (`newButtonKey: "#btnFutureThing"`). That is the
+requirement — a new button lists itself.
+
+Also added: multi-select (one report often covers several controls), a free-text
+"Something else" escape hatch, a *whole screen* option, and a *Not sure / whole
+app* area. Picked controls appear in the issue body under `### Control(s)`.
+
+### Three things this took to get right
+
+- **A hidden section measures as zero.** Scanning only the visible tab reported
+  Dashboard as 1 control and Logs as 0. Each section is now measured with its
+  `hidden` class lifted and positioned off-screen, then restored — off-screen
+  `position:absolute`, *not* `visibility:hidden`, which would make the scanner's own
+  visibility check reject everything it was hunting for.
+- **Import / Export are in the left rail, outside every view section** — scanning
+  sections alone could never find them. The rail is its own area now; its nav tabs
+  are excluded, since "Planned" as a *control* is meaningless when it is already an
+  area chip.
+- **A `<select>` reported its concatenated options** ("Last 60 Last 150 Last 400")
+  because `textContent` includes every `<option>`. Selects and inputs now use their
+  own label.
+
+### A second bug found by testing: the form was unreadable on light themes
+
+Written dark-only. Measured on Paper / Ledger / Sepia:
+
+| element | before | after |
+|---|---|---|
+| `.fb-notice` (privacy warning) | **1.0:1** — invisible | 4.60:1 |
+| `.fb-step.on`, `.fb-chip.on`, `.fb-path b`, `.fb-seg button.on` | 1.2:1 | 4.60:1 |
+| `.fb-step.on .n` | 2.5–3.1:1 | 4.60:1 |
+| `.fb-step.done .n` | 2.5–2.9:1 | 4.60:1 |
+| `.fb-preview` (review pane) | 1.3:1 | 4.60:1 |
+
+`#eafbff` / `#cdd8ea` / `#f6dd9a` / `#05202a` / `#062b1d` became themed tokens, plus
+one **new token `--on-green`** (ink on the green fill) which nothing covered —
+added to all 15 themes and to `:root` for midnight. `.fb-badge`'s white wash under
+muted text (4.23:1 on nord) became a themed surface.
+
+The irony is not lost: the unreadable thing was the form you use to report
+unreadable things.
+
+### Verification
+
+- Real `fbScanControls()` against the real shell: 11 areas, 54 controls.
+- Future-button injection test passes.
+- Real `fbStep1/2/3` rendered and measured for all 15 themes × 3 steps — AA on every
+  themed element.
+- Theme picker unchanged and still passing; swatch verifier clean.
+- All three test suites pass.
+
+### Not done
+
+- Controls that only exist AFTER an interaction (a row's Edit button, a popup's
+  Save) are not listed until the row/popup is on screen. The "Something else" field
+  and the whole-screen option cover that case; scanning inside every popup was not
+  built.
+- The scanner reads the DOM, so a control rendered from data the user has not loaded
+  yet (an empty project list) will not appear. Same fallbacks apply.
+
+---
+
 ## 2026-10-02 — Theme picker becomes a swatch list (GH-42)
 
 **GH-42**, follow-on from GH-41. The picker was a flat `<select>` of 15 names.

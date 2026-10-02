@@ -533,6 +533,7 @@ THEMES: dict[str, dict] = {
             "--accent2-rgb": "56, 189, 248", "--green-rgb": "52, 211, 153", "--red-rgb": "248, 113, 113",
             "--amber-rgb": "251, 191, 36",
             "--amber-ink": "#fbbf24",
+            "--on-green": "#020306",
         },
     },
     "apple": {
@@ -553,6 +554,7 @@ THEMES: dict[str, dict] = {
             "--accent2-rgb": "191, 90, 242", "--green-rgb": "48, 209, 88", "--red-rgb": "255, 69, 58",
             "--amber-rgb": "255, 214, 10",
             "--amber-ink": "#ffd60a",
+            "--on-green": "#000000",
         },
     },
     "paper": {
@@ -573,6 +575,7 @@ THEMES: dict[str, dict] = {
             "--accent2-rgb": "109, 79, 216", "--green-rgb": "15, 122, 74", "--red-rgb": "192, 54, 43",
             "--amber-rgb": "145, 95, 15",
             "--amber-ink": "#84560e",
+            "--on-green": "#ffffff",
         },
     },
     "nord": {
@@ -593,6 +596,7 @@ THEMES: dict[str, dict] = {
             "--accent2-rgb": "191, 161, 187", "--green-rgb": "163, 190, 140", "--red-rgb": "215, 154, 161",
             "--amber-rgb": "235, 203, 139",
             "--amber-ink": "#ebcb8b",
+            "--on-green": "#0c0d10",
         },
     },
     "solarized": {
@@ -613,6 +617,7 @@ THEMES: dict[str, dict] = {
             "--accent2-rgb": "148, 150, 201", "--green-rgb": "146, 163, 26", "--red-rgb": "229, 124, 117",
             "--amber-rgb": "188, 149, 26",
             "--amber-ink": "#caac4b",
+            "--on-green": "#000b0e",
         },
     },
     "forest": {
@@ -633,6 +638,7 @@ THEMES: dict[str, dict] = {
             "--accent2-rgb": "163, 230, 53", "--green-rgb": "74, 222, 128", "--red-rgb": "248, 113, 113",
             "--amber-rgb": "252, 211, 77",
             "--amber-ink": "#fcd34d",
+            "--on-green": "#030604",
         },
     },
     "sunset": {
@@ -653,6 +659,7 @@ THEMES: dict[str, dict] = {
             "--accent2-rgb": "251, 191, 36", "--green-rgb": "74, 222, 128", "--red-rgb": "251, 113, 133",
             "--amber-rgb": "251, 191, 36",
             "--amber-ink": "#fbbf24",
+            "--on-green": "#060408",
         },
     },
     "contrast": {
@@ -673,6 +680,7 @@ THEMES: dict[str, dict] = {
             "--accent2-rgb": "255, 92, 244", "--green-rgb": "0, 255, 136", "--red-rgb": "255, 77, 77",
             "--amber-rgb": "255, 212, 0",
             "--amber-ink": "#ffd400",
+            "--on-green": "#000000",
         },
     },
     "ember": {
@@ -693,6 +701,7 @@ THEMES: dict[str, dict] = {
             "--accent2-rgb": "211, 134, 155", "--green-rgb": "169, 182, 101", "--red-rgb": "234, 105, 98",
             "--amber-rgb": "216, 166, 87",
             "--amber-ink": "#d8a657",
+            "--on-green": "#070808",
         },
     },
     "fog": {
@@ -713,6 +722,7 @@ THEMES: dict[str, dict] = {
             "--accent2-rgb": "203, 166, 247", "--green-rgb": "166, 227, 161", "--red-rgb": "243, 139, 168",
             "--amber-rgb": "249, 226, 175",
             "--amber-ink": "#f9e2af",
+            "--on-green": "#08080c",
         },
     },
     "night": {
@@ -733,6 +743,7 @@ THEMES: dict[str, dict] = {
             "--accent2-rgb": "187, 154, 247", "--green-rgb": "158, 206, 106", "--red-rgb": "247, 118, 142",
             "--amber-rgb": "224, 175, 104",
             "--amber-ink": "#e0af68",
+            "--on-green": "#06070a",
         },
     },
     "drift": {
@@ -753,6 +764,7 @@ THEMES: dict[str, dict] = {
             "--accent2-rgb": "158, 139, 184", "--green-rgb": "152, 187, 108", "--red-rgb": "228, 110, 121",
             "--amber-rgb": "230, 195, 132",
             "--amber-ink": "#e6c384",
+            "--on-green": "#08080a",
         },
     },
     "ledger": {
@@ -773,6 +785,7 @@ THEMES: dict[str, dict] = {
             "--accent2-rgb": "87, 93, 190", "--green-rgb": "52, 116, 45", "--red-rgb": "193, 28, 56",
             "--amber-rgb": "139, 94, 24",
             "--amber-ink": "#7e5615",
+            "--on-green": "#ffffff",
         },
     },
     "sepia": {
@@ -793,6 +806,7 @@ THEMES: dict[str, dict] = {
             "--accent2-rgb": "103, 100, 46", "--green-rgb": "91, 104, 19", "--red-rgb": "157, 43, 30",
             "--amber-rgb": "135, 88, 8",
             "--amber-ink": "#7b5007",
+            "--on-green": "#ffffff",
         },
     },
 }
