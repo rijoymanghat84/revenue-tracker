@@ -720,40 +720,47 @@ function openAssignModal(project, pid, rid) {
 
   // Snap an ISO date to the Monday of the week that contains it. The server sends
   // the week labels, so we snap against the same calendar the app writes with.
+  /* Format a Date as YYYY-MM-DD using LOCAL calendar fields.
+     toISOString() converts to UTC first, so in any timezone AHEAD of UTC
+     (e.g. Europe) a local-midnight Date serialises to the PREVIOUS day and the
+     picker would show a date one day off. This app is used from different
+     machines, so never round-trip a calendar date through UTC. */
+  function isoLocal(d) {
+    const p = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  }
+
+  /* Snap a picked date to the week that CONTAINS it.
+
+     Weeks run Monday->Sunday and an assignment is allocated per WEEK, so the
+     phase takes the whole week the PM pointed at:
+       start -> the Monday of that week  (never LATER than the picked date)
+       end   -> the Sunday of that week  (never EARLIER than the picked date)
+
+     GH-45 follow-up (Rijoy, 2026-10-02: "i tried selecting 30oct as end date and
+     it select nov 11 instead"). The previous version did NOT do this. For a
+     start it searched backwards only when the date was not already a Monday, and
+     for an end it searched FORWARD to the first Sunday on or after the date.
+     Measured in the live app: picking Fri 2026-10-02 as a start showed Sep-28
+     (-4 days) and picking Fri 2026-10-30 as an end showed Nov-08 (+9 days) —
+     up to +12 days, which is why the two dates looked unrelated to what was
+     typed. Worse, the forward-only end search could land AFTER a start that had
+     snapped backwards, giving end < start for adjacent picks.
+
+     Containing-week snapping is symmetric (max 6 days), keeps start <= end for
+     any pair of picks, and matches the server: _weeks_between() owns a week when
+     its Monday falls inside [start,end], so these boundaries tile the span
+     exactly. */
   function snapToWeek(iso, which) {
     if (!iso || !(WB.weekLabels || []).length) return iso;
     const d = new Date(iso + "T00:00:00");
     if (isNaN(d)) return iso;
-    // If the date is ALREADY a valid week boundary (Monday for a start, Sunday
-    // for an end) leave it exactly as typed. Snapping a correct boundary used to
-    // push an end date forward a full week (typing Sun Mar-29 became Sun Apr-05),
-    // silently stretching the phase.
-    const dow = d.getDay();                      // 0=Sun, 1=Mon
-    if (which === "end" && dow === 0) return iso;
-    if (which === "start" && dow === 1) return iso;
-
-    let best = "", bestDiff = Infinity;
-    for (const lbl of WB.weekLabels) {
-      const mon = weekLabelToDate(lbl);
-      if (!mon) continue;
-      const diff = which === "end" ? (mon.getTime() - d.getTime()) : (d.getTime() - mon.getTime());
-      // For a start we want the latest Monday <= d; for an end the earliest
-      // Monday >= d. Falling back to nearest keeps a mid-year date usable.
-      if (diff >= 0 && diff < bestDiff) { bestDiff = diff; best = lbl; }
+    const monday = new Date(d.getTime() - ((d.getDay() + 6) % 7) * 86400000);
+    if (which === "end") {
+      // `monday` is midnight local; +6 days lands on Sunday of the same week.
+      return isoLocal(new Date(monday.getTime() + 6 * 86400000));
     }
-    if (!best) {   // outside the year — fall back to nearest either side
-      for (const lbl of WB.weekLabels) {
-        const mon = weekLabelToDate(lbl); if (!mon) continue;
-        const diff = Math.abs(mon.getTime() - d.getTime());
-        if (diff < bestDiff) { bestDiff = diff; best = lbl; }
-      }
-    }
-    const mon = weekLabelToDate(best);
-    if (!mon) return iso;
-    // The week runs Mon..Sun; its END is the Sunday, which is what an inclusive
-    // end_date should carry so the whole week is owned.
-    const out = which === "end" ? new Date(mon.getTime() + 6 * 86400000) : mon;
-    return out.toISOString().slice(0, 10);
+    return isoLocal(monday);
   }
 
   function renderPhaseRows() {
@@ -835,15 +842,25 @@ function openAssignModal(project, pid, rid) {
                      start_date: snapToWeek($("#wbStart").value || "", "start"),
                      end_date: snapToWeek($("#wbEnd").value || "", "end") }];
     } else {
-      // Split the last phase at its midpoint: same span, halved % on each side.
+      // Split the last phase at the midpoint WEEK boundary: same span, halved %
+      // on each side. Midpoint is computed from the dates themselves, not a
+      // timestamp, so a long phase cannot drift by a day. The boundary is a
+      // Sunday (the last day of a week) so the two halves tile without a gap or
+      // an overlap — week N ends Sunday and week N+1 starts the next Monday.
       const sd = new Date((last.start_date || "") + "T00:00:00");
       const ed = new Date((last.end_date || "") + "T00:00:00");
       if (isNaN(sd) || isNaN(ed) || ed <= sd) { toast("Give the last phase both dates before splitting it", true); return; }
-      const mid = new Date(sd.getTime() + Math.floor((ed - sd) / 2 / 86400000) * 86400000);
-      last.end_date = mid.toISOString().slice(0, 10);
+      const days = Math.round((ed.getTime() - sd.getTime()) / 86400000);
+      const weeks = Math.floor((days + 1) / 7);
+      if (weeks < 2) { toast("This phase is only one week long — nothing to split", true); return; }
+      const firstWeeks = Math.max(1, Math.round(weeks / 2));
+      // Sunday ending the first half: Monday + (7*firstWeeks - 1) days.
+      const cut = new Date(sd.getTime() + (7 * firstWeeks - 1) * 86400000);
+      last.end_date = isoLocal(cut);
+      // The second half starts the NEXT day (a Monday) and keeps the old end.
       phaseRows.push({ allocation_pct: last.allocation_pct,
-                       start_date: new Date(mid.getTime() + 86400000).toISOString().slice(0, 10),
-                       end_date: ed.toISOString().slice(0, 10) });
+                       start_date: isoLocal(new Date(cut.getTime() + 86400000)),
+                       end_date: isoLocal(ed) });
     }
     renderPhaseRows(); check();
   });
