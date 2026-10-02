@@ -9,6 +9,114 @@ wasn't one) and the commit.
 
 ---
 
+## 2026-10-02 — Six new themes, and the text that went unreadable (GH-41)
+
+**GH-41**, reported by the owner: *"they all look mediocre and then have issues where
+I cant read the text when I change the theme."*
+
+### The readability bug was a hardcoded ink on a themed fill
+
+`styles.css` painted a near-black literal onto `var(--accent)` / `var(--amber)` /
+`var(--red)`:
+
+```css
+.wb-modetab.on { background: var(--accent); color: #04202a; }
+```
+
+That is only correct while the accent is bright. On any theme with a dark accent
+— every light theme — it failed, and two of those rules (`th.u-month-head-on` /
+`u-wk-now`, and `.wb-modetab.on`) had **no light-theme override at all**, so they
+were broken in every light theme, not just Paper.
+
+Measured before → after, on the element's real backdrop:
+
+| element | before | after |
+|---|---|---|
+| `th.u-month-head-on` / `u-wk-now` | 3.95:1 | 4.83:1 |
+| `.wb-modetab.on` (Hours / %) | 3.49:1 | 4.83:1 |
+| `.wb-wk.booked / .warn / .hot` | 3.35–3.50:1 | 4.58–5.52:1 |
+
+16 literals → three solved tokens (`--on-accent`, `--on-warn`, `--on-hot`), so a
+theme added later inherits the fix instead of re-introducing the bug.
+
+### `.cur-chip` / `.cur-tag` were self-referential
+
+Amber text on its **own** amber tint (`rgba(var(--amber-rgb), 0.12)`). Lightening
+`--amber` lightens the tint too, so the ratio barely moves — Solarized sat at
+3.95:1 however the hue was tuned. Now `--amber-ink`, solved per theme against the
+composited backdrop; the hardcoded `#7a4d00` light-theme override is gone.
+
+### The nine pre-existing themes had never been measured properly
+
+The earlier audit compared ink against `--bg` / `--surface-1`, but most label and
+metadata text sits on a `.glass` panel — a **translucent wash over the page**, a
+different colour from both. Measured correctly:
+
+| theme | token | before | after |
+|---|---|---|---|
+| paper | `--orange` | 1.91:1 | 4.62:1 |
+| solarized | `--accent2` | 2.96:1 | 4.61:1 |
+| nord | `--red` | 3.46:1 | 4.61:1 |
+| solarized | `--red` | 3.69:1 | 4.62:1 |
+| nord | `--accent2` | 3.79:1 | 4.62:1 |
+| paper | `--amber` | 3.88:1 | 4.62:1 |
+| solarized | `--green` / `--amber` | 4.05 / 4.04:1 | 4.62 / 4.60:1 |
+| paper | `--muted` / `--accent` | 4.21 / 4.09:1 | 4.60 / 4.60:1 |
+| paper | `--pill-amber-bg` / `--pill-orange-bg` | 4.35 / 4.25:1 | 4.60 / 4.62:1 |
+
+`--accent` needed care: it is used as a **fill** and as **text** (`.card .v.cyan`,
+`.ts-on`, `.update-banner a`), which pull opposite ways. It is now solved against
+the panel and the ink on top of it re-derived, so both roles clear.
+
+**BelWo and Apple** set `--text` / `--muted` / `--bg` without their `-rgb`
+triplets, so every translucent overlay rendered in Midnight's hue. All triplets
+are now derived from each theme's own colour, which also stops the drift
+re-appearing when a theme is edited.
+
+### Six themes added ALONGSIDE the existing nine (15 total)
+
+the owner chose "add them" over "replace". Each is built on a published palette with
+a real designer, so none reads as machine-generated:
+
+| key | label | source |
+|---|---|---|
+| `ember` | Ember Dusk | Gruvbox Material |
+| `fog` | Harbor Fog | Catppuccin Mocha |
+| `night` | Night Shift | Tokyo Night |
+| `drift` | Indigo Drift | Kanagawa |
+| `ledger` | Daylight Ledger | Catppuccin Latte |
+| `sepia` | Archive Sepia | Gruvbox Light, warmed to sepia |
+
+### A CSS comment is not nestable — and this nearly shipped broken
+
+The first attempt inserted a comment containing `*/`, which **closed the comment
+early**; the remaining text became top-level CSS and the parser discarded the
+`--on-accent` / `--on-warn` / `--on-hot` declarations along with it. Midnight
+then measured **1.52:1** on the accent-filled table headers. Caught by reading
+`getComputedStyle().getPropertyValue('--on-accent')` in the browser, which
+returned an empty string — the token was not defined at all, despite being
+plainly present in the file. A nested-comment scan is now part of the check.
+
+### Verification
+
+- All **15 themes pass WCAG AA 4.5:1 on 26 sampled components**, measured in a
+  real browser against the served stylesheet with full alpha compositing — not
+  modelled offline. An offline model was ~5 units off on the green/blue channels
+  and produced inks that still failed at 4.38:1.
+- `midnight` keeps an empty override set on purpose and resolves to `:root` for
+  every token; its ink values therefore live in `:root` (it injects nothing inline).
+- No regression: the worst case across the nine original themes improved.
+- All three suites pass (`scripts/run-tests.sh`).
+
+### Not done
+
+- Divider (`--hairline`), focus rings and scrollbars were **not** audited to 3:1;
+  dividers are a deliberate low-contrast aesthetic here and were left alone.
+- The theme picker still lists all 15 in one dropdown. Grouping them (dark /
+  light) or previewing on hover was not part of this change.
+
+---
+
 ## 2026-10-02 — "Why the shortfall?" asked for hours that were not short (GH-40)
 
 Commits `654a8e1`, `6d00a99` — **GH-40**, reported live by the owner on the PM
