@@ -404,7 +404,10 @@ function renderWbTeam() {
   $("#wbHead").innerHTML = `<span class="dot on"></span><b>${esc(p.client)} · ${esc(p.project)}</b>
     — ${p.people} ${p.people === 1 ? "person" : "people"}, ${fmtH(p.booked_hours)} h booked. Dates: ${esc(window_)}.`;
 
-  head.innerHTML = `<tr>
+  head.innerHTML = `<colgroup>
+      <col class="c-person"><col class="c-title"><col class="c-alloc">
+      <col class="c-period"><col class="c-hrs"><col class="c-load"><col class="c-act">
+    </colgroup><tr>
     <th>Person</th><th>Title</th><th class="num">Alloc</th>
     <th>Period</th><th class="num">Hrs/wk</th>
     <th>Load across all projects</th><th></th>
