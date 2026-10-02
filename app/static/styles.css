@@ -284,9 +284,27 @@ body {
   color: var(--accent); border: 1px solid rgba(var(--accent-rgb, 90,160,255), 0.45);
   border-radius: 999px; padding: 1px 6px; margin-left: 6px; white-space: nowrap;
 }
+/* GH-38: an archived (PM-deleted) project. Rijoy asked for "a red strip on it so
+   that if PM delete by accident the admin can revert". The row is tinted red, the
+   project cell carries a red left edge, and the badge names who deleted it. */
+#dashTable tr.dash-arch-row td { background: rgba(255, 80, 80, 0.09); }
+#dashTable tr.dash-arch-row td:nth-child(3) {
+  border-left: 3px solid #ff5a5a;
+  padding-left: 8px;
+}
+.dash-arch {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase;
+  color: #ff8b8b; background: rgba(255, 90, 90, 0.14);
+  border: 1px solid rgba(255, 90, 90, 0.5);
+  border-radius: 999px; padding: 1px 7px; margin-left: 6px; white-space: nowrap;
+}
+.dash-arch-actions { white-space: nowrap; display: flex; gap: 5px; justify-content: flex-end; }
+.dash-reactivate { color: var(--green); border-color: rgba(60, 200, 120, 0.45); }
+.dash-reactivate:hover { background: rgba(60, 200, 120, 0.14); }
 /* GH-37: the Dashboard delete column. Quiet until hovered — it must not compete
    with the numbers, but it has to be findable when wanted. */
 #dashTable th:last-child, #dashTable td.dash-actions { width: 46px; text-align: right; }
+.dash-arch-actions .dash-del { opacity: 1; }   /* the choice must be obvious here */
 .dash-del { opacity: 0.35; padding: 3px 7px; line-height: 1; }
 #dashTable tr:hover .dash-del { opacity: 1; }
 .dash-del:hover { color: #ff8b8b; border-color: rgba(255,139,139,0.5); }
@@ -1625,3 +1643,37 @@ html[data-theme-dark="0"] .wk-delta.under { color: #7a4d00; }
 .wk-imp-tbl td { padding: 7px 9px; border-bottom: 1px solid var(--border); vertical-align: top; }
 .wk-imp-tbl td.num { text-align: right; font-variant-numeric: tabular-nums; }
 html[data-theme-dark="0"] .wk-imp-bad { color: #a3241a; }
+
+/* ============================================================================
+   SORTABLE TABLE HEADERS (2026-10-02)
+   Applied by tablesort.js to every <th> that maps to exactly one column, so the
+   month-band rows of the weekly grids are correctly excluded (they span columns).
+   ========================================================================== */
+th.ts-sortable {
+  cursor: pointer;
+  user-select: none;
+  position: relative;
+  padding-right: 18px;              /* room for the arrow, so text never shifts */
+}
+th.ts-sortable:hover { color: var(--text); background: var(--surface-3); }
+th.ts-sortable::after {
+  /* A faint hint that the column is clickable, before any sort is active. */
+  content: "⇅";
+  position: absolute;
+  right: 5px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 8.5px;
+  opacity: .32;
+  pointer-events: none;
+}
+th.ts-sortable.ts-on::after { content: none; }
+th.ts-on { color: var(--accent); font-weight: 800; }
+.ts-ind {
+  margin-left: 4px;
+  font-size: 8.5px;
+  color: var(--accent);
+  pointer-events: none;
+}
+/* The indicator must stay visible on the light theme too. */
+html[data-theme-dark="0"] .ts-ind { color: #0d5462; }

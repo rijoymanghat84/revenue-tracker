@@ -1314,18 +1314,33 @@ function renderPricing() {
      is NOT applied here — the stored preference decides on load. */
   const collapsed = pricingCollapsed;
   const shown = collapsed ? [] : rows;
-  let html = `<div class="p-tools glass">
+  // The tools bar goes in its OWN container above the table: it cannot live
+  // inside <tbody> without corrupting the table (see the note at the end).
+  const tools = `<div class="p-tools glass">
       <span class="sheet-note">${rows.length} title${rows.length === 1 ? "" : "s"}${collapsed ? " · collapsed" : ""}</span>
       <span class="p-tools-right">
         <input type="search" id="pricingFilter" class="search" placeholder="Filter titles…" value="${esc(pricingFilter)}">
         <button class="btn mini" id="btnPricingExpand"${collapsed ? "" : " disabled"}>Expand all</button>
         <button class="btn mini" id="btnPricingCollapse"${collapsed ? " disabled" : ""}>Collapse all</button>
       </span>
-    </div>
-    <table class="p-table"><thead><tr>
-    <th>Title</th><th class="num">Rate</th><th class="num">Offshore Rate</th><th class="num">Margin</th><th class="p-cur">Currency</th>
-    <th class="num">Used By</th><th></th>
-  </tr></thead><tbody>`;
+    </div>`;
+  const pTools = $("#pricingTools");
+  if (pTools) pTools.innerHTML = tools;
+
+  // The column headings belong in the real <thead>. They used to be written into
+  // the tbody, where a <div>/<table> is invalid markup, so the browser relocated
+  // them and the table ended up with NO header row at all: unlabelled columns and
+  // nothing to sort by.
+  const pHead = $("#pricingHead");
+  if (pHead) {
+    pHead.innerHTML = `<tr>
+      <th>Title</th><th class="num">Rate</th><th class="num">Offshore Rate</th>
+      <th class="num">Margin</th><th class="p-cur">Currency</th>
+      <th class="num">Used By</th><th class="no-sort"></th>
+    </tr>`;
+  }
+
+  let html = ``;
   const filtered = rows.filter((p) =>
     !pricingFilter || (p.title || "").toLowerCase().includes(pricingFilter.toLowerCase()));
   if (!filtered.length && editingPid !== -1) {
@@ -1333,7 +1348,8 @@ function renderPricing() {
   }
   for (const p of filtered) html += pricingRowHTML(p);
   if (editingPid === -1) html += pricingRowHTML({ id: -1, title: "", rate: null, offshore_rate: null, currency: "USD", used_by: 0 });
-  html += "</tbody></table>";
+  // NO trailing tags: this string is the tbody's CONTENT. Emitting
+  // </tbody></table> into #pricingBody is what corrupted the structure.
   $("#pricingBody").innerHTML = html;
   const ex = $("#btnPricingExpand"), co = $("#btnPricingCollapse");
   if (ex) ex.addEventListener("click", () => { pricingCollapsed = false; renderPricing(); });
@@ -2920,7 +2936,6 @@ function renderDashboard() {
     bindDashFilters();
     syncExportLinks();
     initRefreshButtons();
-    bindDashDelete();
 
     let rows = `<thead><tr><th>Country</th><th>Client</th><th>Project</th><th>Resource(s)</th><th>Planned Revenue</th><th>Planned Expense</th><th>Planned Savings</th><th>Revenue till date</th><th>Expense till date</th><th>Savings till date</th><th></th></tr></thead><tbody>`;
     for (const g of groups) {
@@ -2939,23 +2954,38 @@ function renderDashboard() {
       const emptyTag = g.empty
         ? ` <span class="dash-empty" title="This project exists but has no resources assigned yet">no team</span>`
         : "";
-      /* GH-37: delete a project from the Dashboard. Rijoy: "there should be an
-         option to delete the project from the Admin login Dashboard."
-         The button only renders for someone who may actually act: renderDashboard
-         is admin-only, and `canDelete` narrows it to the projects permission.
-         Deleting is the only way to undo a project added by mistake, and it used
-         to be reachable only through the Planned tab. */
-      const delCell = canDelete
-        ? `<td class="dash-actions"><button class="btn mini dash-del"
-             data-del-client="${esc(g.client)}" data-del-project="${esc(g.project === "—" ? "" : g.project)}"
-             title="Delete this project (${esc(g.client)} · ${esc(g.project)})">🗑</button></td>`
-        : "<td></td>";
-      rows += `<tr${g.empty ? ' class="dash-empty-row"' : ""}>
-        <td>${esc(g.country)}</td><td>${esc(g.client)}</td><td>${esc(g.project)}${emptyTag}</td><td>${resCell}</td>
+      /* GH-38: an archived project — a PM "deleted" it, but nothing was destroyed.
+         Rijoy: "it should still be there for admin with a red strip on it so that
+         if PM delete by accident the admin can revert ... reactive will show it
+         back for the PM and delete will delete it from the app permanently".
+         So this row carries a red strip naming who deleted it, plus exactly the two
+         options: Reactivate (undo) or Delete (permanent). It contributes no money —
+         the totals above already exclude it. */
+      const archTag = g.archived
+        ? `<span class="dash-arch" title="Deleted by ${esc(g.archived_by || "a PM")} on ${esc(g.archived_at || "")} — still recoverable">deleted by ${esc(g.archived_by || "PM")}</span>`
+        : "";
+      const actions = g.archived
+        ? `<td class="dash-actions dash-arch-actions">
+             <button class="btn mini dash-reactivate" data-rid="${g.project_id}"
+               title="Reactivate — show it to the PM again, with its team and hours intact">↺ Reactivate</button>
+             <button class="btn mini dash-del" data-del-client="${esc(g.client)}"
+               data-del-project="${esc(g.project === "—" ? "" : g.project)}"
+               data-del-name="${esc(g.client)} · ${esc(g.project)}"
+               title="Delete permanently — this cannot be undone">🗑 Delete</button>
+           </td>`
+        : (canDelete
+          ? `<td class="dash-actions"><button class="btn mini dash-del"
+               data-del-client="${esc(g.client)}" data-del-project="${esc(g.project === "—" ? "" : g.project)}"
+               data-del-name="${esc(g.client)} · ${esc(g.project)}"
+               title="Delete this project (${esc(g.client)} · ${esc(g.project)})">🗑</button></td>`
+          : "<td></td>");
+      const rowCls = g.archived ? "dash-arch-row" : (g.empty ? "dash-empty-row" : "");
+      rows += `<tr${rowCls ? ` class="${rowCls}"` : ""}>
+        <td>${esc(g.country)}</td><td>${esc(g.client)}</td><td>${esc(g.project)}${emptyTag}${archTag}</td><td>${resCell}</td>
         <td>${money(g.revenue, cur)}</td><td>${money(g.expense, cur)}</td>
         <td style="color:${pSavings >= 0 ? "var(--green)" : "var(--red)"}">${money(pSavings, cur)}</td>
         <td>${money(g.actual_rev || 0, cur)}</td><td>${money(g.actual_exp || 0, cur)}</td>
-        <td style="color:${aSavings >= 0 ? "var(--green)" : "var(--red)"}">${money(aSavings, cur)}</td>${delCell}</tr>`;
+        <td style="color:${aSavings >= 0 ? "var(--green)" : "var(--red)"}">${money(aSavings, cur)}</td>${actions}</tr>`;
     }
     for (const t of totals) {
       const pSavings = t.revenue - t.expense;
@@ -2970,6 +3000,12 @@ function renderDashboard() {
     }
     rows += "</tbody>";
     $("#dashTable").innerHTML = rows;
+    // Bind AFTER the rows exist. These were called near the top of this handler,
+    // before the table was rendered, so querySelectorAll found nothing and the
+    // buttons were dead: Rijoy's delete/reactivate would have looked broken even
+    // though the API was correct. (Found by clicking one — `bound` was undefined.)
+    bindDashDelete();
+    bindDashReactivate();
     markUpdated("#dashUpdated");
   }).catch((e) => toast(`Dashboard failed: ${e.message}`, true));
 }
@@ -2990,22 +3026,25 @@ function bindDashDelete() {
       const client = b.dataset.delClient || "";
       const project = b.dataset.delProject || "";
       const label = `${client}${project ? " · " + project : ""}`;
-      // Find the id — the dashboard row carries names, not ids.
+      // Find the id — the dashboard row carries names, not ids. Ask for archived
+      // too, otherwise an archived row's Delete could not resolve its own id.
       let target = null;
       try {
-        const list = await api("/api/projects");
+        const list = await api("/api/projects?include_archived=1");
         target = (list || []).find((x) =>
           (x.client || "").toUpperCase() === client.toUpperCase() &&
           (x.project || "").toUpperCase() === project.toUpperCase());
       } catch (err) { toast(`Could not load projects: ${err.message}`, true); return; }
       if (!target) { toast(`${label} is not a Project entry (nothing to delete)`, true); return; }
 
+      const isArchived = !!target.archived;
       const doDelete = async (force) => {
         b.disabled = true;
         try {
-          const res = await api(`/api/projects/${target.id}${force ? "?force=true" : ""}`, { method: "DELETE" });
+          const res = await api(`/api/projects/${target.id}?force=${force ? "true" : "false"}&purge=true`,
+                                { method: "DELETE" });
           const d = (res && res.deleted) || {};
-          toast(`Deleted ${d.client || client} · ${d.project || project}` +
+          toast(`Permanently deleted ${d.client || client} · ${d.project || project}` +
                 (d.people ? ` — removed ${d.people} assignment(s), ${d.planned_weeks} planned week(s)` : ""));
           loadActivity();
           renderDashboard();
@@ -3020,8 +3059,38 @@ function bindDashDelete() {
           return false;
         } finally { b.disabled = false; }
       };
-      if (confirm(`Delete ${label}?\n\nThis removes the project and its assignments. It cannot be undone.`)) {
+      // Wording differs for an already-archived row: that data is still recoverable,
+      // so the confirm must not imply the same finality as a first-time delete.
+      const msg = isArchived
+        ? `Permanently delete ${label}?\n\nIt is currently deleted-but-recoverable. This removes it and its hours for good — Reactivate is the undo, so use that instead if you are unsure.`
+        : `Delete ${label}?\n\nThis removes the project and its assignments. It cannot be undone.`;
+      if (confirm(msg)) {
         await doDelete(false);
+      }
+    });
+  });
+}
+
+/* GH-38: undo a PM's deletion. Clears the archive stamp only, so the team and
+   every planned/actual hour reappear exactly as they were. */
+function bindDashReactivate() {
+  $$("#dashTable .dash-reactivate").forEach((b) => {
+    if (b.dataset.bound === "1") return;
+    b.dataset.bound = "1";
+    b.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const rid = b.dataset.rid;
+      b.disabled = true;
+      try {
+        const res = await api(`/api/projects/${rid}/reactivate`, { method: "POST" });
+        const p = (res && res.project) || {};
+        toast(`Reactivated ${p.client || ""}${p.project ? " · " + p.project : ""} — the PM can see it again`);
+        loadActivity();
+        renderDashboard();
+      } catch (err) {
+        const det = err && err.detail ? err.detail : null;
+        toast((det && det.message) || err.message || "Could not reactivate", true);
+        b.disabled = false;
       }
     });
   });
