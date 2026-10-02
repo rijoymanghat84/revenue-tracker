@@ -1997,13 +1997,26 @@ table.wb-cmp td.num { text-align: right; white-space: nowrap; }
   padding: 0 4px;
 }
 /* The bell panel hangs under the topbar. `right` keeps it on screen on mobile
-   where .actions wraps. */
+   where .actions wraps.
+   OPAQUE on purpose (2026-10-02): it originally used `.glass`, whose background
+   is `--panel: rgba(255,255,255,0.05)` — 5% white, i.e. practically see-through,
+   so the page content showed straight through the notification list. The account
+   dropdown beside it uses `--surface-7`, which is the proven opaque treatment
+   here; match that and drop the backdrop filter. */
 .bell-panel {
-  position: absolute; top: calc(100% + 8px); right: 12px; z-index: 60;
+  position: absolute; top: calc(100% + 8px); right: 12px; z-index: 400;
   width: min(560px, calc(100vw - 24px)); max-height: 70vh; overflow: hidden;
   display: flex; flex-direction: column; border-radius: 12px; padding: 0;
-  box-shadow: 0 18px 40px rgba(0,0,0,.35);
+  background: var(--surface-7);
+  border: 1px solid var(--border-strong);
+  backdrop-filter: none; -webkit-backdrop-filter: none;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
 }
+/* Nothing inside may be translucent either — a transparent child would let the
+   page show through the opaque parent. */
+.bell-panel .bl-req { background: var(--surface-1); }
+.bell-panel .bl-trail-in { background: transparent; }
+.bell-empty, .bl-sec { background: transparent; }
 .bell-head {
   display: flex; align-items: center; gap: 8px; padding: 10px 12px;
   border-bottom: 1px solid var(--border);
@@ -2032,6 +2045,15 @@ table.wb-cmp td.num { text-align: right; white-space: nowrap; }
 .mv-note.mv-warn { background: var(--pill-red-bg); color: var(--red); }
 .mv-actions { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
 .wb-cmp-act { display: flex; gap: 5px; white-space: nowrap; }
+/* GH-53: the self-explaining guide at the top of Resources. */
+.wb-guide { padding: 10px 14px; margin-bottom: 12px; }
+.wb-guide > summary { cursor: pointer; font-size: 13px; list-style: none; }
+.wb-guide > summary::-webkit-details-marker { display: none; }
+.wb-guide > summary::before { content: "▸ "; color: var(--muted); }
+.wb-guide[open] > summary::before { content: "▾ "; }
+.wb-guide-list { margin: 10px 0 6px; padding-left: 20px; font-size: 12.5px; line-height: 1.65; }
+.wb-guide-list li { margin-bottom: 6px; }
+.wb-guide-list b { color: var(--text); }
 
 
 
