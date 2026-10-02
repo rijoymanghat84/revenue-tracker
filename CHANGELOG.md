@@ -62,7 +62,60 @@ an *invisible* view is the worst pair: it looks like the click did nothing.
 
 Cache: `app.js ?v=114→115`, `workbench.js ?v=13→14`, `styles.css ?v=84→85`, and
 `sw.js` CACHE `recon-v1→recon-v2` (a `?v=` bump alone does not help an installed
-PWA).
+PWA). NB the server also serves these as content-hashed `?v=<sha>` on its own, so
+the manual numbers are belt-and-braces.
+
+### Verification — and the two bugs the click-through caught
+
+Driven in a real browser against the live tunnel (localhost, the app is public),
+not asserted from the source. Both defects below were found by CLICKING, which is
+the point: each one would have shipped silently on code inspection.
+
+1. **The PM was never passed, so the preview showed ALL projects.** The first cut
+   put client + project in the button but not the PM's username, so `as_pm` went
+   out empty and `/api/my-projects` fell back to an ADMIN's unscoped list: the
+   banner read `(no PM assigned)` over **16 projects** while claiming to be one
+   PM's screen. Fix: `data-ppmpm` on the button → `openProjectWorkbench(client,
+   project, pm)`, plus a hard guard in `loadWorkbench()` — in view-as mode with no
+   PM, render an **empty** list rather than calling the endpoint unscoped. The
+   tempting fallback is exactly the misleading state this mode exists to prevent.
+2. **An unowned project headed an empty page "Viewing as PM".** Clicking
+   `Internal · Bench` (the one project with no PM) showed the amber *Viewing as
+   PM* badge above "No projects match" — a self-contradiction. It now shows a
+   neutral **No PM** badge: *"Internal · Bench has no project manager yet, so
+   there is no My Projects screen to show. Assign one from Team."*
+
+Confirmed live, one press each:
+
+| Case | Result |
+|---|---|
+| Dashboard | PM column present; 17 clickable project buttons; every row 12 cells |
+| Apple · Support (paige) | `Viewing as PM paige`, her 5 projects, Support selected |
+| Apple · Regular (paige) | 6 people; **no** `+ New project`, 🗑 ×0, Edit/Remove ×0, Add disabled |
+| Re-select another project in the same PM's list | switches (Apple · PHP, 2 people) — the PM's own navigation still works |
+| Google · Support (Adam) | `Viewing as PM Adam`, his 5 projects |
+| Microsoft · Platform (Brandon) | `Viewing as PM Brandon`, his 1 project, 13 people |
+| Internal · Bench (no PM) | neutral `No PM` badge, **0** projects (not 16), no controls |
+| ← Back to Dashboard | returns to the Dashboard, mode cleared |
+| Switching to another tab | mode cleared; re-entering My Projects by tab = the admin's own unscoped view (16) with all write controls back |
+| **Real PM (paige logged in)** | banner **absent**, `+ New project` visible, 🗑 ×5, **Edit/Remove ×4**, zero "view only" — her screen is untouched |
+| Mobile 390px | table scrolls inside its wrapper (`scrollWidth` 1359 > `clientWidth` 340, `overflow-x:auto`); page body does not overflow |
+
+**Out of scope, found while clicking — PRE-EXISTING, not caused by this change:**
+the "A new version is available" banner is `position: fixed` at `top: 12px` with
+no reserved space, so it overlaps the topstrip's page title (visible in the
+screenshots: *"…available"* sits on *"Planned vs actual, by client and project"*).
+Reported, not fixed — it is unrelated to this issue and wants its own change.
+
+## Related — `?as_pm` is a VIEW, and two things that guard it
+
+- `_require_people` still gates the endpoint, so a PM never needs `as_pm` and an
+  admin without `people` cannot use it; on top of that `_require_admin` runs
+  inside the `as_pm` branch.
+- A non-PM `as_pm` (`admin`, `nosuchuser`) resolves to **0** projects — verified
+  live — because `_pm_projects` finds no `user_projects` rows. It must never fall
+  through to `None` (the "no filter" sentinel), or an admin's own name would show
+  every project as if it were that PM's.
 
 ---
 
