@@ -35,6 +35,7 @@ let WB = {
   loadTitle: "",         // GH-50: title selected in the Find-a-person dropdown
   loadWindow: "auto",    // GH-51: window selector — auto | 12w | 26w | year
   compare: [],           // GH-52: person ids ticked for comparison
+  move: null,            // GH-53: draft of the reallocation being proposed
 };
 const wbKey = (cl, pr) => `${cl}||${pr}`;
 
@@ -870,7 +871,10 @@ function renderWbCompare() {
       <td class="num">${r.avg}% avg <span class="muted-note">/ ${r.peak}% peak</span></td>
       <td>${allocHtml}</td>
       ${rates}
-      <td><button class="btn mini" data-act="unpick" data-pid="${x.id}" title="Remove from comparison">✕</button></td>
+      <td class="wb-cmp-act">
+        <button class="btn mini" data-act="move" data-pid="${x.id}" title="Propose moving part of this person to another project">Move…</button>
+        <button class="btn mini" data-act="unpick" data-pid="${x.id}" title="Remove from comparison">✕</button>
+      </td>
     </tr>`;
   }).join("");
 
@@ -887,12 +891,284 @@ function renderWbCompare() {
     WB.compare = WB.compare.filter((i) => i !== +b.dataset.pid);
     renderWbLoad(); renderWbCompare();
   }));
+  $$("#wbCompare button[data-act=move]").forEach((b) => b.addEventListener("click", () => {
+    openMoveModal(+b.dataset.pid);
+  }));
   const clr = $("#wbCmpClear");
   if (clr) clr.addEventListener("click", () => { WB.compare = []; renderWbLoad(); renderWbCompare(); });
 }
 
-/* The Resources tab's own bindings. Kept separate from bindWorkbench() so the
-   workbench can be hidden for a PM who only has Resources. */
+/* ============================================================================
+   GH-53 — reallocation requests, the bell, and the audit trail.
+   Rijoy: "the allocation happen once FOP PM approved, so there should be a
+   notification bell icon on the top right hand side ... I can approve or reject
+   and all these get tracked and noted. and the same option the admin should have
+   too and incase of admin he can do it for any client and project and resource
+   including PM".
+   ========================================================================== */
+
+/* All projects the person could move TO. For a PM that is their own projects
+   (a PM may only place work they own); for an admin, every project. */
+function moveTargetProjects() {
+  const own = (WB.projects || []).map((p) => ({ client: p.client, project: p.project }));
+  const isAdmin = !!(state.me && state.me.role === "admin");
+  if (!isAdmin) return own;
+  // Admins get the full project list from state (if loaded); fall back to own.
+  const all = ((state.projects || []).length ? state.projects
+    : (state.resources || []).map((r) => ({ client: r.client, project: r.project })));
+  const seen = new Set(own.map((p) => `${p.client}||${p.project}`));
+  all.forEach((p) => {
+    const k = `${p.client}||${p.project}`;
+    if (p.project && !seen.has(k)) { seen.add(k); own.push({ client: p.client, project: p.project }); }
+  });
+  return own.sort((a, b) => `${a.client}${a.project}`.localeCompare(`${b.client}${b.project}`));
+}
+
+function openMoveModal(pid) {
+  const x = WB.load.find((q) => q.id === pid);
+  if (!x) return;
+  const win = wbLoadWindow();
+  const allocs = wbAllocations(x, win);
+  const mine = wbAvailability(x, win);
+  if (!allocs.length) {
+    toast(`${x.name} has no current booking to move — assign them to a project first.`, true);
+    return;
+  }
+  const st = WB.move = { pid, from: allocs[0], pct: 50, until: "", reason: "" };
+  const fromOpts = allocs.map((a, i) =>
+    `<option value="${i}">${esc(a.label)} — ${a.peak}% (${a.weeks} wk)</option>`).join("");
+  const toOpts = moveTargetProjects().map((p) =>
+    `<option value="${esc(p.client)}||${esc(p.project)}">${esc(p.client)} · ${esc(p.project)}</option>`).join("");
+  const isAdmin = !!(state.me && state.me.role === "admin");
+
+  $("#moveTitle").textContent = `Move ${x.name}`;
+  $("#moveBody").innerHTML = `
+    <div class="mv-sum">
+      <b>${esc(x.name)}</b> <span class="muted-note">${esc(x.home_title || "")}</span>
+      — currently ${mine.free}% free over ${esc(win.label)}
+    </div>
+    <label class="f">Move OFF <span class="muted-note">(the project releasing capacity)</span></label>
+    <select id="mvFrom" class="cur-sel">${fromOpts}</select>
+
+    <label class="f">Take <span class="muted-note">% of capacity</span></label>
+    <select id="mvPct" class="cur-sel">
+      ${[25, 50, 75, 100].map((v) => `<option value="${v}"${v === 50 ? " selected" : ""}>${v}%</option>`).join("")}
+    </select>
+
+    <label class="f">Move TO <span class="muted-note">(the project taking the work)</span></label>
+    <select id="mvTo" class="cur-sel"><option value="">— pick a project —</option>${toOpts}</select>
+
+    <label class="f">For how long?</label>
+    <select id="mvKind" class="cur-sel">
+      <option value="">Permanent (no return date)</option>
+      <option value="loan">Loan — comes back on a date</option>
+    </select>
+    <div id="mvUntilWrap" class="hidden">
+      <label class="f">Return date</label>
+      <input type="date" id="mvUntil" class="inp">
+      <div class="muted-note" style="margin-top:4px">The releasing project gets the share back automatically on this date, with a 7-day heads-up to both PMs.</div>
+    </div>
+
+    <label class="f">Why? <span class="muted-note">(shown to the approving PM)</span></label>
+    <textarea id="mvReason" class="inp" rows="2" placeholder="e.g. covering the Quadient migration while Sunil is on leave"></textarea>
+
+    <div class="muted-note mv-note" id="mvNote"></div>
+    <div class="mv-actions">
+      <button class="btn primary" id="mvSubmit">${isAdmin ? "Move now (applies immediately)" : "Send request for approval"}</button>
+      <button class="btn ghost" id="mvCancel">Cancel</button>
+    </div>`;
+  $("#moveModal").classList.remove("hidden");
+  const upd = () => {
+    const a = allocs[+$("#mvFrom").value] || allocs[0];
+    const pct = +$("#mvPct").value;
+    const over = pct > a.peak;
+    $("#mvNote").innerHTML = over
+      ? `⚠ ${esc(x.name)} is only at <b>${a.peak}%</b> on ${esc(a.label)} — asking for ${pct}% takes more than that project currently holds.`
+      : `Takes ${pct}% off ${esc(a.label)}, leaving ${Math.max(0, a.peak - pct)}% there.`;
+    $("#mvNote").classList.toggle("mv-warn", over);
+  };
+  $("#mvFrom").addEventListener("change", upd);
+  $("#mvPct").addEventListener("change", upd);
+  $("#mvKind").addEventListener("change", (e) => {
+    $("#mvUntilWrap").classList.toggle("hidden", e.target.value !== "loan");
+  });
+  upd();
+  $("#mvClose").addEventListener("click", closeMoveModal);
+  $("#mvCancel").addEventListener("click", closeMoveModal);
+  $("#mvSubmit").addEventListener("click", submitMove);
+}
+
+function closeMoveModal() {
+  $("#moveModal").classList.add("hidden");
+  WB.move = null;
+}
+
+async function submitMove() {
+  const st = WB.move;
+  if (!st) return;
+  const a = wbAllocations(WB.load.find((q) => q.id === st.pid), wbLoadWindow())[+$("#mvFrom").value];
+  const toRaw = $("#mvTo").value;
+  if (!toRaw) { toast("Pick the project to move them to.", true); return; }
+  const toClient = toRaw.split("||")[0], toProject = toRaw.split("||")[1];
+  const kind = $("#mvKind").value;
+  const until = kind === "loan" ? ($("#mvUntil").value || "") : "";
+  if (kind === "loan" && !until) { toast("Pick the return date for the loan.", true); return; }
+  const pct = +$("#mvPct").value;
+  const body = {
+    person_id: st.pid,
+    from_client: a.client, from_project: a.project, from_pct: pct,
+    to_client: toClient, to_project: toProject, to_pct: pct,
+    until_date: until, reason: ($("#mvReason").value || "").trim(),
+  };
+  const btn = $("#mvSubmit");
+  btn.disabled = true; btn.textContent = "Working…";
+  try {
+    const res = await api("/api/allocation-requests", { method: "POST", body: JSON.stringify(body) });
+    closeMoveModal();
+    const applied = res.status === "applied";
+    toast(applied
+      ? `Moved ${pct}% of ${a.label} → ${toClient} · ${toProject}. Recorded in the bell.`
+      : `Request sent — ${toClient} · ${toProject} moves once ${res.request.from_owner || "an admin"} approves it.`);
+    await refreshBell();
+    await renderResources();
+  } catch (e) {
+    toast(e.message || "Could not raise the request", true);
+    btn.disabled = false; btn.textContent = "Try again";
+  }
+}
+
+/* ---------------- the bell ---------------- */
+let bellData = { needs_deciding: [], sent: [], decided: [], unread: 0 };
+
+async function refreshBell() {
+  const badge = $("#bellBadge");
+  try {
+    bellData = await api("/api/notifications");
+  } catch (e) {
+    return;                                   // silent: the bell is not critical
+  }
+  const n = bellData.unread || 0;
+  if (badge) {
+    badge.textContent = n > 99 ? "99+" : String(n);
+    badge.classList.toggle("hidden", n === 0);
+  }
+  const btn = $("#btnBell");
+  if (btn) btn.classList.toggle("bell-alert", n > 0);
+  if ($("#bellPanel") && !$("#bellPanel").classList.contains("hidden")) renderBell();
+}
+
+function reqRow(r, mode) {
+  const statusPill = {
+    pending: `<span class="pill wb-pill-warn">awaiting ${esc(r.from_owner || "an admin")}</span>`,
+    approved: `<span class="pill wb-pill-ok">approved by ${esc(r.decided_by)}</span>`,
+    applied: `<span class="pill wb-pill-ok">applied${r.decided_by ? " by " + esc(r.decided_by) : ""}</span>`,
+    rejected: `<span class="pill wb-pill-over">rejected by ${esc(r.decided_by)}</span>`,
+    cancelled: `<span class="pill wb-pill-free">cancelled</span>`,
+    expired: `<span class="pill wb-pill-over">expired</span>`,
+  }[r.status] || `<span class="pill">${esc(r.status)}</span>`;
+  const actions = mode === "needs"
+    ? `<div class="bl-acts">
+         <button class="btn mini primary" data-bl="approve" data-id="${r.id}">Approve</button>
+         <button class="btn mini" data-bl="reject" data-id="${r.id}">Reject</button>
+         <button class="btn mini" data-bl="trail" data-id="${r.id}">Details</button>
+       </div>`
+    : `<div class="bl-acts"><button class="btn mini" data-bl="trail" data-id="${r.id}">Details</button>
+       ${r.status === "pending" && r.mine ? `<button class="btn mini" data-bl="cancel" data-id="${r.id}">Withdraw</button>` : ""}</div>`;
+  return `<div class="bl-req" data-req="${r.id}">
+      <div class="bl-line1">${statusPill} <span class="muted-note">#${r.id} · ${esc(r.requester)} · ${esc(r.created_at)}</span></div>
+      <div class="bl-sum">${esc(r.summary)}</div>
+      ${r.reason ? `<div class="muted-note">“${esc(r.reason)}”</div>` : ""}
+      ${actions}
+      <div class="bl-trail hidden" id="blTrail${r.id}"></div>
+    </div>`;
+}
+
+function renderBell() {
+  const body = $("#bellBody");
+  if (!body) return;
+  const needs = bellData.needs_deciding || [], sent = bellData.sent || [], done = bellData.decided || [];
+  let html = "";
+  html += `<div class="bl-sec"><b>Needs my decision</b>${needs.length ? "" : ` <span class="muted-note">— nothing waiting</span>`}</div>`;
+  html += needs.length ? needs.map((r) => reqRow(r, "needs")).join("")
+    : `<div class="muted-note bl-empty">No reallocation requests are waiting on you.</div>`;
+  if (sent.length) {
+    html += `<div class="bl-sec"><b>Sent by me (${sent.length})</b></div>`;
+    html += sent.map((r) => reqRow(r, "sent")).join("");
+  }
+  if (done.length) {
+    html += `<div class="bl-sec"><b>Recently decided (${done.length})</b></div>`;
+    html += done.slice(0, 10).map((r) => reqRow(r, "done")).join("");
+  }
+  body.innerHTML = html;
+  $$("#bellBody button[data-bl]").forEach((b) => b.addEventListener("click", () => bellAction(b.dataset.bl, +b.dataset.id)));
+}
+
+async function bellAction(act, id) {
+  try {
+    if (act === "approve") {
+      const res = await api(`/api/allocation-requests/${id}/approve`, { method: "POST", body: "{}" });
+      toast("Approved — the allocation is applied.");
+      await refreshBell();
+      if (state.view === "resources") await renderResources();
+      return;
+    }
+    if (act === "reject") {
+      const note = prompt("Why are you rejecting this? (required)");
+      if (note === null) return;
+      if (!note.trim()) { toast("A reason is required.", true); return; }
+      await api(`/api/allocation-requests/${id}/reject`, { method: "POST", body: JSON.stringify({ note }) });
+      toast("Rejected — nothing was moved.");
+      await refreshBell(); return;
+    }
+    if (act === "cancel") {
+      await api(`/api/allocation-requests/${id}/cancel`, { method: "POST" });
+      toast("Request withdrawn.");
+      await refreshBell(); return;
+    }
+    if (act === "trail") {
+      const box = $(`#blTrail${id}`);
+      if (!box) return;
+      if (!box.classList.contains("hidden")) { box.classList.add("hidden"); return; }
+      const d = await api(`/api/allocation-requests/${id}/trail`);
+      box.innerHTML = `<div class="bl-trail-in">
+        <div><b>${esc(d.person)}</b> — ${int_(d.from_pct)}% of capacity moves ${esc(d.from_client)} · ${esc(d.from_project)} → ${esc(d.to_client)} · ${esc(d.to_project)}</div>
+        <div class="muted-note">${d.permanent ? "Permanent" : "Loan until " + esc(d.until_date)} · effective from ${esc(d.effective_label)}${d.from_owner ? " · releasing PM: " + esc(d.from_owner) : " · no PM on the source project (an admin decides)"}</div>
+        <div class="bl-events">${(d.events || []).map((e) =>
+          `<div><span class="muted-note">${esc(e.at)}</span> <b>${esc(e.actor)}</b> ${esc(e.action)}${e.detail ? " — " + esc(e.detail) : ""}</div>`).join("")}</div>
+      </div>`;
+      box.classList.remove("hidden");
+    }
+  } catch (e) {
+    toast(e.message || "That notification action failed", true);
+  }
+}
+
+const int_ = (v) => Math.round(Number(v) || 0);
+
+function bindBell() {
+  const btn = $("#btnBell"), panel = $("#bellPanel");
+  if (!btn || !panel) return;
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    panel.classList.toggle("hidden");
+    if (!panel.classList.contains("hidden")) { renderBell(); refreshBell(); }
+  });
+  const close = $("#bellClose");
+  if (close) close.addEventListener("click", () => panel.classList.add("hidden"));
+  const rf = $("#bellRefresh");
+  if (rf) rf.addEventListener("click", () => refreshBell());
+  // Click-away closes it, but never when the click is inside the panel.
+  document.addEventListener("click", (e) => {
+    if (panel.classList.contains("hidden")) return;
+    if (panel.contains(e.target) || btn.contains(e.target)) return;
+    panel.classList.add("hidden");
+  });
+  // A slow poll keeps the badge honest without a websocket. Paused when the tab
+  // is hidden so a backgrounded tab costs nothing.
+  setInterval(() => { if (!document.hidden) refreshBell(); }, 60000);
+  refreshBell();
+}
+
 function bindResources() {
   const lt = $("#wbLoadTitle");
   if (lt) lt.addEventListener("change", () => { WB.loadTitle = lt.value; renderResources(); });
@@ -1165,7 +1441,7 @@ function openAssignModal(project, pid, rid) {
   function check() {
     clearTimeout(wbCheckTimer);
     wbCheckTimer = setTimeout(async () => {
-      const pidv = +$p.value;
+      const pidv = $p ? +$p.value : selPid;
       try {
         let v;
         if (mode === "phased") {
@@ -1247,7 +1523,7 @@ function openAssignModal(project, pid, rid) {
     $("#modalOk").style.opacity = ok ? "" : ".45";
   }
 
-  $p.addEventListener("change", () => { fillTitles(); check(); });
+  if ($p) $p.addEventListener("change", () => { fillTitles(); check(); });
   $("#wbTitle").addEventListener("change", () => { syncException(); check(); });
   $("#wbPct").addEventListener("input", () => { syncChips(); check(); });
   $("#wbStart").addEventListener("change", check);
@@ -1292,9 +1568,9 @@ function openAssignModal(project, pid, rid) {
      start it searched backwards only when the date was not already a Monday, and
      for an end it searched FORWARD to the first Sunday on or after the date.
      Measured in the live app: picking Fri 2026-10-02 as a start showed Sep-28
-     (-4 days) and picking Fri 2026-10-30 as an end showed Nov-08 (+9 days) —
-     up to +12 days, which is why the two dates looked unrelated to what was
-     typed. Worse, the forward-only end search could land AFTER a start that had
+     (-4 days) and picking Fri 2026-10-30 as an end showed Nov-08 (+9 days) — up
+     to +12 days, which is why the two dates looked unrelated to what was typed.
+     Worse, the forward-only end search could land AFTER a start that had
      snapped backwards, giving end < start for adjacent picks.
 
      Containing-week snapping is symmetric (max 6 days), keeps start <= end for
@@ -1419,11 +1695,15 @@ function openAssignModal(project, pid, rid) {
   // The modal's OK button performs the save; closeModal() clears the handler.
   const okBtn = $("#modalOk");
   setModalOk(async () => {
-    const pidv = +$p.value;
+    const pidv = $p ? +$p.value : selPid;
+    const excNeeded = !$("#wbExcWrap").classList.contains("hidden");
     const payload = {
       person_id: pidv, client: project.client, project: project.project,
       title: $("#wbTitle").value,
-      title_exception: ($("#wbExc") && $("#wbExc").value) || "",
+      // Send the reason only while it is actually required, so switching the
+      // title back to the home title clears a stale exception instead of
+      // leaving one attached to a home-title booking.
+      title_exception: excNeeded ? (($("#wbExc") && $("#wbExc").value) || "") : "",
       // Flat fields stay populated even in phased mode so the headline % and
       // overall span are meaningful on the team table; the server prefers
       // `phases` when it is non-empty.

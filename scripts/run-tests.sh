@@ -29,6 +29,8 @@ SUITES=(
   tests/test_admin_mgmt.py
   tests/test_issue4_pm_admin_separation.py
   tests/test_actuals_save_scope.py
+  tests/test_gh54_panel.py
+  tests/test_allocation_requests.py
 )
 
 fail=0
