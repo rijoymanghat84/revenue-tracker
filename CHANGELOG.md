@@ -9,6 +9,83 @@ wasn't one) and the commit.
 
 ---
 
+## 2026-10-02 — Theme picker becomes a swatch list (GH-42)
+
+**GH-42**, follow-on from GH-41. The picker was a flat `<select>` of 15 names.
+A name cannot convey a palette — which was the original complaint — and the list
+had just grown from 9 to 15.
+
+Replaced with a **swatch list**: each theme is a row carrying its own page +
+accent colours, grouped **Dark (12) / Light (3)**, in a height-capped scrolling
+list. A quick swatch in the top strip makes switching one click.
+
+### The bug this surfaced: the menu fell off the bottom of the screen
+
+The account menu grew ~250px. On a narrow screen the rail collapses to a block
+**above** the topbar, so the menu's anchor can start well down the page — and the
+last items (Change password, Sign out) landed below the fold with no way to reach
+them. Measured: with the anchor 200px down, the menu ended **771px below a 437px
+viewport**.
+
+`max-height: 100vh` does **not** fix this. The problem is *where the menu starts*,
+not how tall it is. The menu is now clamped to the space actually available below
+its anchor (`innerHeight - menuTop - 12`) and scrolls when that is too little.
+
+Ordering mattered and cost a cycle: the clamp has to be measured **after** the
+`scrollIntoView` that reveals the current theme, because that call scrolls the
+page and moves the anchor. Measuring first left the menu overflowing at every low
+anchor position. Fixed, then verified at offsets 0 / 200 / 300 / 420 — all
+clamped, all with Sign out still reachable.
+
+### Selected-row contrast
+
+The picker sits in `--surface-7`, but a **selected row** is on `--surface-3` —
+a different surface, and one the GH-41 hardening pass never targeted because
+nothing muted used to sit there. Accent-as-text on `--surface-3` measured
+**2.66:1** (`drift`). The selected state therefore marks itself with an **accent
+bar** and keeps the label in `--text`, rather than colouring the text with the
+accent.
+
+Verified: all 15 themes clear WCAG AA on 41 text elements in the real markup,
+measured in a browser with full alpha compositing.
+
+### The swatch map is duplicated data — and it had already drifted
+
+`/api/themes` returns key/label/dark, not colours, so `THEME_SWATCH` in `app.js`
+mirrors them. That drifts silently when a theme is retuned, and it **already
+had**: sepia's accent moved `#a35a14` → `#915318` during the GH-41 hardening and
+the swatch still held the old value. `verify_swatches.py` now diffs the map
+against `THEMES` in `main.py` and fails on any mismatch, missing key, or orphan.
+
+### Deliberate choices
+
+- The quick button **delegates to `#btnUser`** rather than re-implementing the
+  open. One owner for the list and one for the open/fit logic; they cannot drift
+  apart. (The first attempt duplicated the open and would have skipped the clamp.)
+- `#themeSel` (the old standalone picker hook) is still hidden, not deleted, so
+  nothing that references it breaks.
+
+### Verification
+
+- The **real** `initThemeSwitcher()` and `initUserMenu()` run against the real
+  markup extracted from `index.html`, fed the live `/api/themes` payload: 15 rows,
+  both groups, 15 swatches painted, correct current row.
+- Clicking a row POSTs `{"theme":"<key>"}` — asserted with a spy — and disables
+  the rows during the save.
+- Served `app.js` cache-buster equals `sha1(app.js)[:10]`; zero stale
+  `themeSelMenu` references anywhere.
+- All three test suites pass.
+
+### Not done
+
+- Hover preview (painting the app in a theme before committing) was in the
+  variant C mock-up but is **not** implemented — choosing still reloads.
+- The swatch colours remain a hand-maintained mirror rather than coming from the
+  API. A `/api/themes?colors=1` field would remove the duplication; the verifier
+  is the guard until then.
+
+---
+
 ## 2026-10-02 — Six new themes, and the text that went unreadable (GH-41)
 
 **GH-41**, reported by the owner: *"they all look mediocre and then have issues where

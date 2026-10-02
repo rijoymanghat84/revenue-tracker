@@ -1238,6 +1238,12 @@ td.week .a-inp { text-align: center; }
   background: var(--surface-7); border: 1px solid var(--border-strong);
   border-radius: var(--radius);
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+  /* The theme list made this menu much taller (2026-10-02). On a short viewport
+     the last items — Change password / Sign out — would fall off-screen with no
+     way to reach them, so the menu itself can scroll as a last resort. */
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .user-menu-head { padding: 9px 11px 7px; }
 .user-menu-name { font-size: 13px; font-weight: 650; color: var(--text); }
@@ -1259,6 +1265,69 @@ td.week .a-inp { text-align: center; }
   border: 1px solid var(--border-strong); border-radius: 7px;
   padding: 3px 6px; font: inherit; font-size: 11.5px; max-width: 118px;
 }
+
+/* ============ THEME PICKER — swatch list (2026-10-02) ============
+   Replaces the flat 15-name <select>. Two constraints drove the styling:
+     1. The list must not make the account menu taller than the viewport, so it
+        is height-capped and scrolls itself.
+     2. Text must stay readable on EVERY one of the 15 themes. Muted ink is
+        solved against --surface-7, but a SELECTED row sits on --surface-3,
+        which is a different surface — so the selected state uses --text for
+        the label and marks itself with an accent BAR, not accent text.
+        (Accent-as-text on --surface-3 measured as low as 2.66:1 on `drift`.)
+   The swatch itself is drawn inline per row (two-tone page+accent), because a
+   theme's colours are runtime data, not something the stylesheet can know. */
+.theme-quick { padding: 5px 10px; gap: 7px; }
+.tq-sw {
+  width: 14px; height: 14px; border-radius: 4px; flex: 0 0 auto;
+  /* two halves: the theme's page colour, then its accent */
+  box-shadow: inset 0 0 0 1px rgba(127, 127, 127, 0.45);
+}
+.tq-name { font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+@media (max-width: 640px) { .tq-name { display: none; } }
+
+.tp-pick { padding: 3px 0 1px; }
+.tp-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 8px; padding: 7px 11px 5px;
+}
+.tp-head-lbl {
+  font-size: 9.5px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase;
+  color: var(--muted);
+}
+.tp-head-cur { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.tp-list {
+  max-height: 254px; overflow-y: auto; overflow-x: hidden;
+  scrollbar-width: thin; scrollbar-color: var(--hairline) transparent;
+  padding: 0 4px;
+}
+.tp-list::-webkit-scrollbar { width: 9px; }
+.tp-list::-webkit-scrollbar-track { background: transparent; }
+.tp-list::-webkit-scrollbar-thumb {
+  background: var(--hairline); border-radius: 4px; border: 2px solid transparent;
+  background-clip: content-box;
+}
+.tp-group {
+  font-size: 9.5px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase;
+  color: var(--muted); padding: 8px 7px 4px;
+}
+.tp-row {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  padding: 6px 7px; border: 0;
+  /* the selected marker is this bar — see the note above */
+  border-left: 3px solid transparent;
+  border-radius: 8px; background: transparent; color: var(--text);
+  font: inherit; font-size: 12.5px; text-align: left; cursor: pointer;
+}
+.tp-row:hover { background: var(--surface-3); }
+.tp-row.on { background: var(--surface-3); border-left-color: var(--accent); }
+.tp-row.on .tp-name { font-weight: 650; }
+.tp-sw {
+  width: 16px; height: 16px; border-radius: 4px; flex: 0 0 auto;
+  box-shadow: inset 0 0 0 1px rgba(127, 127, 127, 0.45);
+}
+.tp-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tp-ck { width: 11px; color: var(--text); font-weight: 800; flex: 0 0 auto; }
 .pw-modal { max-width: 380px; }
 .pw-row { margin-bottom: 12px; }
 .pw-row .inp { width: 100%; }

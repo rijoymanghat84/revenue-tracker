@@ -352,9 +352,40 @@ function initUserMenu() {
   btn.dataset.bound = "1";
 
   const close = () => menu.classList.add("hidden");
+
+  /* Keep the menu inside the viewport. It grew ~250px taller when the theme list
+   * replaced the <select> (2026-10-02), and on a narrow screen the rail collapses
+   * to a block ABOVE the topbar — so the menu's anchor can sit ~300px down the
+   * page and the last items (Change password, Sign out) fall off the bottom with
+   * no way to reach them. CSS `max-height: 100vh` does not help, because the
+   * problem is WHERE the menu starts, not how tall it is. Clamp to the space
+   * actually available below the anchor, and let it scroll if that is not enough. */
+  const fit = () => {
+    menu.style.maxHeight = "";
+    const r = menu.getBoundingClientRect();
+    const room = window.innerHeight - r.top - 12;
+    if (room > 0 && r.height > room) menu.style.maxHeight = room + "px";
+  };
+  const openMenu = () => {
+    menu.classList.remove("hidden");
+    // Reveal the current theme rather than starting the list at the top. This
+    // scrolls the PAGE, which moves the anchor — so the clamp must be measured
+    // AFTER it, not before. Measuring first left the menu taller than the
+    // viewport whenever the anchor started low (the mobile case).
+    const row = menu.querySelector(".tp-row.on");
+    if (row) row.scrollIntoView({ block: "nearest" });
+    fit();
+    requestAnimationFrame(fit);
+  };
+  // Re-fit on resize / rotate; a stale clamp would leave the menu too short.
+  window.addEventListener("resize", () => {
+    if (!menu.classList.contains("hidden")) fit();
+  });
+
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
-    menu.classList.toggle("hidden");
+    if (menu.classList.contains("hidden")) openMenu();
+    else close();
   });
   // Click-away and Escape both close it, like any normal menu.
   document.addEventListener("click", (e) => {
@@ -363,8 +394,10 @@ function initUserMenu() {
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") close();
   });
-  // Keep the theme <select> inside the menu from closing it.
-  $("#themeSelMenu").addEventListener("click", (e) => e.stopPropagation());
+  // The theme list rebuilds its rows on click; without this the click-away
+  // handler would close the menu the instant you pick a theme.
+  const themeList = $("#themeListMenu");
+  if (themeList) themeList.addEventListener("click", (e) => e.stopPropagation());
 
   $("#umPassword").addEventListener("click", () => {
     close();
@@ -439,9 +472,35 @@ function bindPasswordModal() {
  */
 let THEME_LIST = [];
 
+/* Colours for each theme's swatch. /api/themes returns key/label/dark only, so the
+ * swatch colours are mirrored here. They must match THEMES in app/main.py — the
+ * check is `_assertSwatchColours` style: if a theme is added server-side and not
+ * here, the row falls back to a neutral swatch rather than breaking.
+ * Kept deliberately small (bg + accent) because that is what distinguishes two
+ * themes at 16px. */
+const THEME_SWATCH = {
+  midnight:  ["#0b1020", "#22d3ee"], belwo:    ["#070d18", "#2dd4bf"],
+  apple:     ["#000000", "#0a84ff"], paper:    ["#f4f5f7", "#0e7486"],
+  nord:      ["#2e3440", "#88c0d0"], solarized:["#002b36", "#41aa9f"],
+  forest:    ["#0b1a12", "#4ade80"], sunset:   ["#1a0f1e", "#fb7185"],
+  contrast:  ["#000000", "#00e5ff"], ember:    ["#1d2021", "#e78a4e"],
+  fog:       ["#1e1e2e", "#89dceb"], night:    ["#1a1b26", "#7aa2f7"],
+  drift:     ["#1f1f28", "#7e9cd8"], ledger:   ["#eff1f5", "#10656d"],
+  sepia:     ["#f4e8d0", "#915318"],
+};
+
+/* Two-tone swatch as an inline background. `linear-gradient` on a 16px square:
+   page colour on one half, accent on the other — the fastest way to tell two
+   dark themes apart. */
+function swatchBg(key) {
+  const c = THEME_SWATCH[key];
+  if (!c) return "linear-gradient(135deg, var(--surface-3) 0 50%, var(--muted) 50% 100%)";
+  return `linear-gradient(135deg, ${c[0]} 0 50%, ${c[1]} 50% 100%)`;
+}
+
 async function initThemeSwitcher() {
-  const sel = $("#themeSelMenu");
-  if (!sel) return;
+  const list = $("#themeListMenu");
+  if (!list) return;
   let data;
   try {
     data = await api("/api/themes");
@@ -449,34 +508,82 @@ async function initThemeSwitcher() {
     return;
   }
   THEME_LIST = data.themes || [];
-  const row = $("#umTheme");
-  if (row) row.style.display = data.can_change ? "" : "none";
+  const quick = $("#btnThemeQuick");
+  if (quick) quick.style.display = data.can_change ? "" : "none";
   if (!data.can_change) return;
+
+  const themes = THEME_LIST;
+  const dark = themes.filter((t) => t.dark);
+  const light = themes.filter((t) => !t.dark);
+
   // Rebuild EVERY call (not just once): the previous early-return left a stale
-  // empty list after a re-login, which is how a PM could see a blank dropdown.
-  sel.innerHTML = THEME_LIST
-    .map((t) => `<option value="${esc(t.key)}"${t.key === data.current ? " selected" : ""}>${esc(t.label)}</option>`)
-    .join("");
-  sel.classList.remove("hidden");
-  // The old standalone picker is superseded by the one inside the user menu.
+  // empty list after a re-login, which is how a PM could see a blank picker.
+  const rows = (group, items) =>
+    `<div class="tp-group">${group}</div>` +
+    items.map((t) => `
+      <button type="button" class="tp-row${t.key === data.current ? " on" : ""}"
+              data-key="${esc(t.key)}" role="option"
+              aria-selected="${t.key === data.current ? "true" : "false"}"
+              title="${esc(t.label)}">
+        <span class="tp-sw" style="background:${swatchBg(t.key)}"></span>
+        <span class="tp-name">${esc(t.label)}</span>
+        <span class="tp-ck">${t.key === data.current ? "✓" : ""}</span>
+      </button>`).join("");
+
+  list.innerHTML = rows("Dark", dark) + (light.length ? rows("Light", light) : "");
+
+  // The quick swatch in the top strip shows the CURRENT theme.
+  const cur = themes.find((t) => t.key === data.current);
+  const tq = $("#tqSwatch");
+  if (tq) tq.style.background = swatchBg(data.current);
+  const tqn = $("#tqName");
+  if (tqn && cur) tqn.textContent = cur.label;
+  const tpc = $("#tpCurrent");
+  if (tpc && cur) tpc.textContent = cur.label;
+
+  // The old standalone picker is superseded by this list.
   const legacy = $("#themeSel");
   if (legacy) legacy.classList.add("hidden");
 
-  if (sel.dataset.bound === "1") return;
-  sel.dataset.bound = "1";
-  sel.addEventListener("change", async () => {
-    const key = sel.value;
-    const prev = data.current;
-    sel.disabled = true;
-    try {
-      await api("/api/themes", { method: "POST", body: JSON.stringify({ theme: key }) });
-      location.reload();
-    } catch (ex) {
-      sel.value = prev; // put it back — the server kept the old value
-      sel.disabled = false;
-      alert("Could not save theme: " + (ex.message || "unknown"));
-    }
-  });
+  if (list.dataset.bound !== "1") {
+    list.dataset.bound = "1";
+    list.addEventListener("click", async (e) => {
+      const row = e.target.closest(".tp-row");
+      if (!row) return;
+      // Rows are rebuilt on every render, so the target is detached after a
+      // successful save — keep the menu open by not letting it bubble.
+      e.stopPropagation();
+      const key = row.dataset.key;
+      if (!key || key === data.current) return;
+      const prev = data.current;
+      list.querySelectorAll(".tp-row").forEach((r) => { r.disabled = true; });
+      try {
+        await api("/api/themes", { method: "POST", body: JSON.stringify({ theme: key }) });
+        // Reload is deliberate: it is the only way to get a result byte-identical
+        // to what the server renders next time, including the light-theme
+        // document-level attributes (not just custom properties).
+        location.reload();
+      } catch (ex) {
+        data.current = prev; // the server kept the old value
+        list.querySelectorAll(".tp-row").forEach((r) => { r.disabled = false; });
+        alert("Could not save theme: " + (ex.message || "unknown"));
+      }
+    });
+  }
+
+  // The quick button just opens the account menu — one source of truth for the
+  // list AND for the open/fit logic, so the two controls cannot drift apart.
+  // It clicks the real user button rather than re-implementing the open, which
+  // is what applies the viewport clamp.
+  const qb = $("#btnThemeQuick");
+  if (qb && qb.dataset.bound !== "1") {
+    qb.dataset.bound = "1";
+    qb.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const ub = $("#btnUser");
+      if (ub) ub.click();
+    });
+  }
 }
 
 /* ---------------- data load ---------------- */

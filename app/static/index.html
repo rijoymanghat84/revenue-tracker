@@ -147,6 +147,17 @@
              2026-09-30 removed from the markup outright. They now live in the
              account dropdown as #umGitHub and #umIssue only. -->
         <div class="user-wrap">
+          <!-- Quick theme swatch (2026-10-02). The theme picker used to live only
+               inside the account dropdown — two clicks for something the owner tunes
+               often. This paints the CURRENT theme's page + accent colours; the
+               click just opens the account menu (where the full list lives), so
+               there is one source of truth for the list and no second menu to
+               keep in sync. -->
+          <button class="btn ghost theme-quick" id="btnThemeQuick" title="Theme — opens the theme list">
+            <span class="tq-sw" id="tqSwatch" aria-hidden="true"></span>
+            <span class="tq-name" id="tqName">Theme</span>
+            <span class="user-caret">▾</span>
+          </button>
           <button class="btn ghost user-btn" id="btnUser" title="Your account">
             <span class="user-avatar" id="userAvatar">?</span>
             <span class="user-name" id="userName">Account</span>
@@ -158,10 +169,20 @@
               <div class="user-menu-role" id="umRole">—</div>
             </div>
             <div class="user-menu-sep"></div>
-            <div class="user-menu-item" id="umTheme">
-              <span>🎨</span><span class="um-label">Theme</span>
-              <select id="themeSelMenu" class="user-menu-sel"></select>
+            <!-- Theme picker (2026-10-02). Was a native <select> listing 15 names
+                 with no colour information — the owner's complaint was that the themes
+                 "all look mediocre", and a name in a dropdown cannot convey a
+                 palette. Each row now carries the theme's real page + accent
+                 colours, grouped Dark / Light, in a height-capped scrolling list.
+                 The top strip also carries a quick swatch button (#btnThemeQuick);
+                 both controls render from the same initThemeSwitcher() so they can
+                 never disagree. -->
+            <div class="tp-pick">
+              <div class="tp-head"><span class="tp-head-lbl">Theme</span>
+                <span class="tp-head-cur" id="tpCurrent"></span></div>
+              <div class="tp-list" id="themeListMenu" role="listbox" aria-label="Theme"></div>
             </div>
+            <div class="user-menu-sep"></div>
             <button class="user-menu-item" id="umPassword"><span>🔑</span>Change password</button>
             <a class="user-menu-item" id="umGitHub" href="https://github.com/rijoymanghat84/revenue-tracker" target="_blank" rel="noopener"><span>💻</span>GitHub repo</a>
             <button class="user-menu-item" id="umIssue"><span>🐞</span>Raise a bug / feature</button>
