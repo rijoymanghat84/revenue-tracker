@@ -1781,6 +1781,14 @@ class ProjectBody(BaseModel):
     project: str = ""
     start_date: str = ""
     end_date: str = ""
+    # GH-34 (Rijoy): "While adding project, it asked the name and other details
+    # but it should also ask for the PM and then the percentage allocation phase
+    # or full time etc and then if it exceed the allocation it should error".
+    # All optional so the existing edit path is unaffected.
+    pm: str | None = None
+    capacity_mode: str | None = None          # "full" | "partial" | ""
+    allocation_pct: float | None = None       # used by PARTIAL
+    person_id: int | None = None              # who the allocation is for
 
 
 @app.get("/api/projects")
@@ -1799,6 +1807,19 @@ def api_projects(request: Request):
 
 @app.post("/api/projects")
 def api_project_create(body: ProjectBody, request: Request):
+    """Create a client/project, optionally assigning its PM in the same step.
+
+    GH-34: the create dialog asked only for the name/dates, so a new project
+    landed ownerless and with nobody on it, and then appeared nowhere the user
+    looked. It now takes the PM (writes user_projects, the single source of
+    truth for ownership) and, when a person is chosen, an allocation whose
+    over-100% case is REFUSED with the reason.
+
+    Order matters: create the project row FIRST so a refused allocation still
+    leaves the project defined (visible as a "no team" row) instead of losing the
+    whole submission. The refusal names the clashing weeks exactly as the
+    assignment endpoint does.
+    """
     _require_perm(request, "projects")
     conn = get_db()
     try:
@@ -1808,12 +1829,69 @@ def api_project_create(body: ProjectBody, request: Request):
             raise HTTPException(400, "client and project are required")
         if conn.execute("SELECT 1 FROM projects WHERE client=? AND project=?", (client, project)).fetchone():
             raise HTTPException(409, f"'{client}/{project}' already exists")
+
         cur = conn.execute(
             "INSERT INTO projects (client, project, start_date, end_date) VALUES (?,?,?,?)",
             (client, project, (body.start_date or "").strip(), (body.end_date or "").strip()),
         )
+        pid = cur.lastrowid
+        warnings: list[str] = []
+
+        # --- PM (ownership) ------------------------------------------------
+        pm_wanted = (body.pm or "").strip()
+        if pm_wanted:
+            urow = conn.execute("SELECT id, username FROM users WHERE username=?", (pm_wanted,)).fetchone()
+            if not urow:
+                # The project is already created; report the PM problem without
+                # discarding the work the user just did.
+                warnings.append(f"PM “{pm_wanted}” was not found, so the project has no owner yet.")
+            else:
+                clash = conn.execute(
+                    "SELECT u.username FROM user_projects up JOIN users u ON u.id=up.user_id "
+                    "WHERE TRIM(UPPER(up.client))=TRIM(UPPER(?)) AND TRIM(UPPER(up.project))=TRIM(UPPER(?)) "
+                    "AND u.username<>?",
+                    (client, project, pm_wanted)).fetchone()
+                if clash:
+                    warnings.append(f"“{clash['username']}” already owns {client} · {project}; left as-is.")
+                else:
+                    conn.execute("INSERT OR IGNORE INTO user_projects (user_id, client, project) VALUES (?,?,?)",
+                                 (urow["id"], client, project))
+
+        # --- allocation (the 100% rule) ------------------------------------
+        mode = (body.capacity_mode or "").strip().lower()
+        alloc = 100.0 if mode == "full" else float(body.allocation_pct or 0.0)
+        if body.person_id and alloc > 0:
+            p = conn.execute("SELECT * FROM people WHERE id=?", (body.person_id,)).fetchone()
+            if not p:
+                raise HTTPException(404, "Person not found")
+            sd, ed = (body.start_date or "").strip(), (body.end_date or "").strip()
+            v = validate_assignment(conn, int(body.person_id), alloc, sd, ed)
+            if not v["ok"]:
+                # ROLL BACK the just-created project: the user asked for both, and
+                # a half-created project would be more confusing than a clear
+                # refusal with the exact clashing weeks named.
+                conn.rollback()
+                c0 = (v["conflicts"] or [{}])[0]
+                raise HTTPException(409, {
+                    "message": (f"{alloc:g}% would push {p['name']} over 100% in "
+                                f"{v['conflict_count']} week(s). First clash: "
+                                f"{c0.get('label')} would reach {c0.get('total_pct')}%."),
+                    "code": "over_allocated",
+                    "conflicts": v["conflicts"],
+                    "conflict_count": v["conflict_count"],
+                })
+            cap = float(p["capacity"] or CAP_WEEK_HOURS)
+            conn.execute(
+                "INSERT INTO resources (country, client, project, name, role, rate, offshore_rate, capacity, person_id, allocation_pct, start_date, end_date) "
+                "VALUES ('',?,?,?,'',0,0,?,?,?,?,?)",
+                (client, project, p["name"], cap, int(body.person_id), alloc,
+                 sd, ed),
+            )
+
         conn.commit()
-        return {"ok": True, "id": cur.lastrowid}
+        if warnings:
+            return {"ok": True, "id": pid, "warnings": warnings}
+        return {"ok": True, "id": pid}
     finally:
         conn.close()
 

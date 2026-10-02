@@ -3998,6 +3998,20 @@ function renderProjModal() {
   $("#projModalTitle").textContent = isEdit ? "Edit Client Project" : "Add Client Project";
   const pickOpts = `<option value="">— New client/project —</option>` +
     projList.map((x) => `<option value="${x.id}"${p && p.id === x.id ? " selected" : ""}>${esc(x.client)} / ${esc(x.project)}</option>`).join("");
+  // GH-34: the create dialog now also captures the PM and how much of a person
+  // this project takes. Rijoy: "it should also ask for the PM and then the
+  // percentage allocation phase or full time etc and then if it exceed the
+  // allocation it should error". PM + allocation are CREATE-only: editing an
+  // existing project must not silently re-staff it.
+  const pmOpts = ((typeof users !== "undefined" && users) || [])
+    .filter((u) => u && u.role === "pm")
+    .map((u) => `<option value="${esc(u.username)}">${esc(u.username)}</option>`).join("");
+  const peopleOpts = (WB.people || [])
+    .filter((x) => x.active !== 0)
+    .map((x) => `<option value="${x.id}">${esc(x.name)}${x.home_title ? " — " + esc(x.home_title) : ""}</option>`).join("");
+  // Ownership list from the same map the Team & Access screen uses.
+  const ownList = Object.entries(typeof projectOwners !== "undefined" ? projectOwners : {})
+    .map(([k, pm]) => `${esc(k.replace("|", " / "))} — <b>${esc(pm)}</b>`);
   $("#projModalBody").innerHTML = `
     <div class="res-form">
       <div class="res-row">
@@ -4012,12 +4026,57 @@ function renderProjModal() {
         <label>Start Date <input class="inp res-inp" id="projStart" type="date" value="${p ? p.start_date : ""}"></label>
         <label>End Date <input class="inp res-inp" id="projEnd" type="date" value="${p ? p.end_date : ""}"></label>
       </div>
+      ${isEdit ? "" : `
+      <div class="res-row">
+        <label>Project manager
+          <select id="projPm" class="cur-sel">
+            <option value="">— no PM yet —</option>
+            ${pmOpts}
+          </select>
+        </label>
+        <label class="res-hint">One PM owns a project. Without one it shows as unowned on Team &amp; Access.</label>
+      </div>
+      <div class="res-row">
+        <label>Capacity for this project
+          <select id="projMode" class="cur-sel">
+            <option value="">— just create the project —</option>
+            <option value="full">Full time (100% of one person)</option>
+            <option value="partial">Partial (a percentage)</option>
+          </select>
+        </label>
+        <label>Person
+          <select id="projPerson" class="cur-sel"><option value="">— pick a person —</option>${peopleOpts}</select>
+        </label>
+      </div>
+      <div class="res-row" id="projPctRow" style="display:none">
+        <label>Allocation % <input class="inp res-inp" id="projPct" type="number" min="25" max="100" step="25" value="25" list="projPctSteps">
+          <datalist id="projPctSteps"><option value="25"><option value="50"><option value="75"><option value="100"></datalist>
+        </label>
+        <label class="res-hint">25% steps. Over 100% in any overlapping week is refused with the clashing weeks named.</label>
+      </div>
+      <div id="projAllocNote" class="muted-note"></div>`}
+      ${isEdit || !ownList.length ? "" : `
+      <details class="proj-owned">
+        <summary>Already owned (${ownList.length})</summary>
+        <div class="muted-note">${ownList.join("<br>")}</div>
+      </details>`}
     </div>`;
   $("#projPick").addEventListener("change", (e) => {
     const id = e.target.value;
     if (!id) { projEditId = null; renderProjModal(); return; }
     projEditId = +id;
     renderProjModal();
+  });
+  const mode = $("#projMode");
+  if (mode) mode.addEventListener("change", () => {
+    const partial = mode.value === "partial";
+    $("#projPctRow").style.display = partial ? "" : "none";
+    const n = $("#projAllocNote");
+    n.textContent = mode.value === "full"
+      ? "Full time = 100% of the chosen person. They will be refused if any overlapping week is already booked."
+      : mode.value === "partial"
+        ? "Partial: the share of that person's weekly capacity this project may use."
+        : "";
   });
 }
 
@@ -4028,18 +4087,46 @@ async function saveProjModal() {
   const end = $("#projEnd").value;
   if (!client) { toast("Client is required", true); return; }
   if (!project) { toast("Project is required", true); return; }
-  const btn = $("#projModalSave"); btn.disabled = true; btn.textContent = "…";
   const wasEdit = projEditId !== null;
+  // GH-34: PM + allocation are CREATE-only fields.
+  const pm = wasEdit ? null : ($("#projPm") ? $("#projPm").value : "");
+  const mode = wasEdit || !$("#projMode") ? "" : $("#projMode").value;
+  const personId = mode && $("#projPerson") ? +$("#projPerson").value || null : null;
+  const pct = mode === "full" ? 100 : (mode === "partial" ? +$("#projPct").value || 0 : 0);
+  // Catch the obvious mistakes here so the round-trip is not wasted; the SERVER
+  // still owns the real rules (it is the authority for the 100% block).
+  if (mode && !personId) { toast("Pick a person for the allocation, or set capacity to “just create the project”", true); return; }
+  if (mode === "partial" && pct % 25 !== 0) { toast("Allocation must be a multiple of 25% (25, 50, 75 or 100)", true); return; }
+  const btn = $("#projModalSave"); btn.disabled = true; btn.textContent = "…";
   try {
-    if (projEditId === null) {
-      await api("/api/projects", { method: "POST", body: JSON.stringify({ client, project, start_date: start, end_date: end }) });
-    } else {
+    if (wasEdit) {
       await api(`/api/projects/${projEditId}`, { method: "PUT", body: JSON.stringify({ client, project, start_date: start, end_date: end }) });
+    } else {
+      const res = await api("/api/projects", { method: "POST", body: JSON.stringify({
+        client, project, start_date: start, end_date: end,
+        pm: pm || "", capacity_mode: mode || "", allocation_pct: pct,
+        person_id: personId,
+      }) });
+      for (const w of (res && res.warnings) || []) toast(w, true);
     }
     closeProjModal();
     toast(wasEdit ? "Client project updated" : "Client project added");
     await loadProjects();
-  } catch (e) { toast(`Save failed: ${e.message}`, true); }
+  } catch (e) {
+    // The 100% refusal carries the clashing weeks — surface them verbatim rather
+    // than a generic "save failed", because the weeks ARE the explanation.
+    const d = e && e.detail ? e.detail : null;
+    const msg = (d && (d.message || d.msg)) || e.message || "Save failed";
+    toast(msg, true);
+    if (d && d.conflicts && d.conflicts.length) {
+      const note = $("#projAllocNote");
+      if (note) {
+        note.innerHTML = `<b style="color:var(--red)">Refused — over 100%:</b><br>` +
+          d.conflicts.slice(0, 6).map((c) => `${esc(c.label || "")} would reach <b>${fmt(c.total_pct, 0)}%</b>`).join("<br>") +
+          (d.conflicts.length > 6 ? `<br>…and ${d.conflicts.length - 6} more week(s)` : "");
+      }
+    }
+  }
   btn.disabled = false; btn.textContent = "Save";
 }
 
@@ -4048,7 +4135,15 @@ $("#projModalSave").addEventListener("click", saveProjModal);
 
 /* ---------------- toolbar ---------------- */
 $("#btnAdd").addEventListener("click", () => openResModal(null));
-$("#btnAddProject").addEventListener("click", () => { loadProjects().then(() => openProjModal(null)); });
+$("#btnAddProject").addEventListener("click", () => {
+  // The dialog offers the PM list and the ownership summary, so make sure those
+  // are loaded first (loadPMData is also what /api/users requires — admin-only).
+  Promise.all([
+    loadProjects(),
+    (WB.people && WB.people.length) ? Promise.resolve() : loadPeople(),
+    loadPMData(),
+  ]).then(() => openProjModal(null));
+});
 $("#btnEditGrid").addEventListener("click", () => {
   state.gridEdit[state.view] = !state.gridEdit[state.view];
   renderGrid();
