@@ -1931,8 +1931,19 @@ textarea.fb-inp { min-height: 72px; resize: vertical; }
 
 .wb-load-bar { flex-direction: column; align-items: stretch; gap: 8px; }
 .wb-load-bar .sheet-note { width: 100%; }
-.wb-load-search { display: flex; justify-content: flex-start; width: 100%; }
+.wb-load-search { display: flex; justify-content: flex-start; align-items: center; gap: 9px; width: 100%; flex-wrap: wrap; }
 .wb-load-search .search { max-width: 340px; margin: 0; }
+.wb-load-lbl { font-size: 12px; }
+.wb-load-search .cur-sel { max-width: 220px; }
+.wb-scope { color: var(--text); font-weight: 600; }
+/* GH-50: availability buckets in the Find-a-person rail — a labelled divider
+   before each 100 / 75 / 50 / <50 group so the ranking is obvious at a glance. */
+.wb-bucket {
+  font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--muted); margin: 10px 0 2px; padding-left: 2px;
+  border-bottom: 1px solid var(--border); padding-bottom: 4px;
+}
+.wb-bucket:first-child { margin-top: 0; }
 
 .wb-progress { padding: 12px 14px 6px; margin-top: 10px; }
 .wb-progress-head {
