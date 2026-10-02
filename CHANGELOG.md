@@ -9,6 +9,58 @@ wasn't one) and the commit.
 
 ---
 
+## 2026-10-02 — Resources tab: the whole roster, unavailable people included (GH-51)
+
+**GH-51**, stage 1 of the Resources/reallocation plan (the feature came from the owner):
+
+> "lets also include the unavailable folks too and we will move this to another
+> tab on the left called Resources."
+
+### Why this mattered more than it sounds
+
+GH-50 deliberately **hid** everyone whose window peak was ≥ 100%. Measured on
+live data, that hid **32 of 49 people** — more than half the roster was invisible
+on the one screen built for finding people. The fix is not cosmetic: a PM looking
+for someone to take a project could not see two-thirds of their options, and had
+no way to learn *why* someone was unavailable.
+
+### What changed
+
+- **New left-rail tab `Resources`** (`data-tab="resources"` → `#resourcesView`),
+  next to My Projects. The Find-a-person rail **moved** there; My Projects kept
+  its project list, team table and the GH-49 progress chart. One shared renderer
+  (`renderWbLoad` / `wbLoadCard`) — the rail is not duplicated.
+- **`Not available in this window`** is a collapsed `<details>` section listing
+  every person who cannot take work, each with the reason: the week they are
+  fully booked and the project(s) consuming it
+  (`Ryan Doyle — 100% booked — Fully booked Sep-28 — Apple/Regular`).
+  Sorted least-booked first, so the nearly-free are easiest to spot.
+- **Window selector** — auto (selected project's own range, else the near-term
+  horizon) · next 12 weeks · next 26 weeks · all of 2026 — with the horizon
+  always named. A 26-week ask in October reports `the next 14 weeks (to year
+  end)` rather than claiming 26.
+- Available people keep the freest-first 100 / 75–99 / 50–74 / under-50 buckets.
+
+### The permission decision (worth remembering)
+
+No new permission key. A regular admin's permissions are **stored explicitly**
+in `users.permissions`, so adding a fresh key to `ADMIN_PERMISSIONS` would have
+hidden the tab from **every existing admin** — a silent regression. The tab is
+gated on the `people` / `resources` capabilities they already hold; the API is
+`_require_people`. PMs get the tab via an explicit allow (they need the whole
+roster to staff a project).
+
+### Verified
+
+24-assertion Node harness (`<workspace>/test-gh51.js`) over the
+shipped functions against the live payload, then driven live in a browser:
+17 available / 32 unavailable at 12 weeks; the year view shifts to 11 / 38; the
+collapsed section opens with reasons.
+
+Commit `5b9541f`, branch `feat/51_resources_tab`, deployed 2026-10-02 18:35 UTC.
+
+---
+
 ## 2026-10-02 — Find a person: title filter, ranked by real availability (GH-50)
 
 **GH-50**, a feature requested by **paige (PM)** from the in-app form:
