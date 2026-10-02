@@ -4839,6 +4839,10 @@ else console.warn("workbench.js not loaded — My Projects will be unavailable")
    the calls above — a missing file must degrade, never brick the app. */
 if (typeof bindResources === "function") bindResources();
 else console.warn("workbench.js not loaded — Resources will be unavailable");
+/* GH-53: the notification bell. Guarded like the rest — a missing feature file
+   must degrade, never brick the app. */
+if (typeof bindBell === "function") bindBell();
+else console.warn("workbench.js not loaded — the notification bell will be unavailable");
 if (typeof bindWeekSheet === "function") bindWeekSheet();
 else console.warn("weeksheet.js not loaded — Weekly entry will be unavailable");
 if (typeof bindPeopleAndOt === "function") bindPeopleAndOt();
