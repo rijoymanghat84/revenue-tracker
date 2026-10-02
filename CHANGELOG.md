@@ -9,7 +9,82 @@ wasn't one) and the commit.
 
 ---
 
-## 2026-10-01 — Utilization: filters, availability view, centred month band (GH-29)
+## 2026-10-01 — Dropdown scroll fix + Logs section (GH-30, GH-31)
+
+Two fixes from the same review pass. Commits `ed4a0c3` (**GH-30**) and
+`89ec9ed` (**GH-31**).
+
+### GH-30 — the filter dropdown closed when you touched its own scrollbar
+
+Rijoy: _"when i click on project it list the project but i cannot scroll down
+when i try to click the scrollbar the dropdown goes back. I can click and drag
+the scroll bar either."_
+
+Reproduced before touching anything: the option list was **genuinely
+scrollable** (`scrollHeight 580` inside `clientHeight 298`), but closed the
+instant its scrollbar moved. `closeMsPopups` was bound as
+
+```js
+window.addEventListener("scroll", closeMsPopups, true);   // capture!
+```
+
+Capture fires for scroll events from **any** element, so a scroll *inside the
+popup* closed the popup. Now gated on the event target: a scroll originating
+inside `.ms-pop` is ignored; everything else (page scroll, resize, Escape,
+outside click) still closes it. Verified: survives inner scroll **and** wheel,
+still closes on outside scroll.
+
+### The stale-asset bug class, killed properly
+
+This is why "my fix isn't in the app" kept recurring. The served shell carried
+`app.js?v=110` while the cache-first service worker already held a **previous**
+`v=110` — so the browser executed pre-edit code even though the server was
+serving the new bytes, and `fetch(..., {cache:'reload'})` still returned the
+stale copy. Bumping the number is not a fix, because the number can always
+collide with one served earlier.
+
+- `index_page` now sends **`Cache-Control: no-store, must-revalidate`**.
+- New `_stamp_asset_versions()` rewrites every asset URL to a short **content
+  hash** (`app.js?v=7da3c74ecd`), which cannot collide with a previous build.
+  Verified: all four hashes match `sha1sum` of the files on disk.
+
+Nobody has to remember to bump a version number again.
+
+### GH-31 — Logs in the left panel
+
+Rijoy: _"where is the logs? ... there should be an option on the left panel to
+see the logs for admin."_
+
+The backend (`/api/activity`) and the renderer already existed — the panel was
+just buried at the bottom of **Team & Access**, the wrong place to look when
+asking "what just happened?". It is now a **🕘 Logs** tab in the Section Panel.
+
+- Admin-only, gated by an explicit `isAdmin` check rather than a permission key:
+  `can()` only grants admin-*held* permissions, so a `null` permission entry hid
+  the tab from admins too (caught in the browser test, not in review).
+- The old activity markup was **removed** from Team & Access rather than
+  duplicated — both blocks declared `id=activityHead`/`activityBody`, which would
+  have made `getElementById` bind the wrong one.
+- Adds a free-text filter (who / action / person, no refetch) and a 60/150/400
+  limit selector that refetches.
+
+| Check | Result |
+|---|---|
+| Dropdown survives inner scroll + wheel | **pass** (still closes on outside scroll) |
+| Asset hashes vs files on disk | all 4 **match** |
+| Logs tab appears for admin / opens / filters | **pass** |
+| `getElementById('activityHead')` count | **1** (no duplicate) |
+| Team & Access still renders | 48 people |
+| Console errors | 0 |
+| `tests/test_admin_mgmt.py` | **ALL PASSED** |
+| `tests/test_issue4_pm_admin_separation.py` | **ALL PASSED** |
+
+**Availability** was narrowed in the same pass at Rijoy's request: the panel now
+lists **available + over-allocated** and hides only the people at *exactly* 100%
+— 20 available + 3 over = 23 of 48, with the hidden count stated. Over-allocated
+rows are tinted and badge-counted on the button.
+
+---
 
 Commit `a6bee72` — **GH-29**. Rijoy asked for three things on the Utilization
 page: filters "per project and per resource", "a way to look which resources
