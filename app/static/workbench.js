@@ -362,6 +362,32 @@ async function refreshWorkbenchProjects() {
 const fmtH = (v) => (v == null ? "—" : Number(v).toLocaleString(undefined, { maximumFractionDigits: 1 }));
 
 /* ---------------- right: the selected project's team ---------------- */
+/* ---------------- dates ----------------
+ * the owner, 2026-10-02: "start and end date can be mentioned like dd/mmm/yy format".
+ * The rows were printing raw ISO ("2026-03-02"), which is precise but reads as
+ * data, not as a date. `02/Mar/26` is unambiguous for a mixed Canada/India team:
+ * dd/MON/yy can't be misread as mm/dd (which 03/02 would be), and the month is
+ * spelled so there is no numeric ambiguity at all.
+ *
+ * ISO stays the source of truth in the DB and in `<time datetime>`; this is
+ * display only. A value that isn't a plain ISO date is returned untouched rather
+ * than shown as "Invalid Date". */
+const WB_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function fmtDMY(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || "").trim());
+  if (!m) return String(iso || "").trim();
+  const yr = m[1].slice(2);
+  const mon = WB_MONTHS[+m[2] - 1] || m[2];
+  return `${m[3]}/${mon}/${yr}`;
+}
+/* A date range that degrades honestly: both dates, one date, or an em dash. */
+function fmtRange(a, b) {
+  const x = a ? `<time datetime="${esc(a)}">${esc(fmtDMY(a))}</time>` : "";
+  const y = b ? `<time datetime="${esc(b)}">${esc(fmtDMY(b))}</time>` : "";
+  if (x && y) return `${x}<span class="wb-dash">→</span>${y}`;
+  return x || y || "—";
+}
+
 function renderWbTeam() {
   const p = wbSel();
   const head = $("#wbTeamHead"), body = $("#wbTeamBody");
@@ -374,17 +400,17 @@ function renderWbTeam() {
     return;
   }
   if (addBtn) addBtn.disabled = false;
-  const window_ = [p.start_date, p.end_date].filter(Boolean).join(" → ") || "full year";
+  const window_ = [p.start_date, p.end_date].filter(Boolean).map(fmtDMY).join(" → ") || "full year";
   $("#wbHead").innerHTML = `<span class="dot on"></span><b>${esc(p.client)} · ${esc(p.project)}</b>
     — ${p.people} ${p.people === 1 ? "person" : "people"}, ${fmtH(p.booked_hours)} h booked. Dates: ${esc(window_)}.`;
 
   head.innerHTML = `<tr>
     <th>Person</th><th>Title</th><th class="num">Allocation</th>
-    <th>Start</th><th>End</th><th class="num">Weekly hrs</th>
+    <th>Period</th><th class="num">Weekly hrs</th>
     <th>Load (all projects)</th><th>Status</th><th></th>
   </tr>`;
   if (!p.team.length) {
-    body.innerHTML = `<tr><td colspan="9"><div class="wb-empty">Nobody on this project yet. Use <b>+ Add team member</b>.</div></td></tr>`;
+    body.innerHTML = `<tr><td colspan="8"><div class="wb-empty">Nobody on this project yet. Use <b>+ Add team member</b>.</div></td></tr>`;
     return;
   }
   body.innerHTML = p.team.map((t) => {
@@ -412,14 +438,15 @@ function renderWbTeam() {
         ? `<div class="muted-note" title="No allocation % is stored for this resource — it came in from the Excel import with hours only. Shown from their plan: peak week / ${fmtH(cap)}h, on the 25% grid. The hours themselves are untouched.">from plan</div>`
         : "")
       + ((t.phases && t.phases.length > 1)
-        ? `<div class="muted-note" title="${esc((t.phases || []).map((x) => x.allocation_pct + "% from " + (x.start_date || "start")).join(" · "))}">${t.phases.length} phases</div>`
+        ? `<div class="wb-phases" title="${esc((t.phases || []).map((x) => x.allocation_pct + "% from " + fmtDMY(x.start_date)).join(" · "))}">`
+          + (t.phases || []).map((x) => `${esc(x.allocation_pct)}% <span class="wb-dash">from</span> ${esc(fmtDMY(x.start_date))}`).join("<br>")
+          + `</div>`
         : "");
     return `<tr data-rid="${t.id}" data-pid="${t.person_id}">
-      <td><b>${esc(t.name)}</b>${exc ? `<div class="muted-note">⚑ ${esc(exc)}</div>` : ""}</td>
-      <td>${esc(t.role || "—")}</td>
+      <td class="wb-person"><b>${esc(t.name)}</b>${exc ? `<div class="wb-flag" title="Booked under a title exception">⚑ ${esc(exc)}</div>` : ""}</td>
+      <td class="wb-role">${esc(t.role || "—")}</td>
       <td class="num">${allocCell}</td>
-      <td>${esc(t.start_date || "—")}</td>
-      <td>${esc(t.end_date || "—")}</td>
+      <td class="wb-dates">${fmtRange(t.start_date, t.end_date)}</td>
       <td class="num">${weekly == null ? "—" : fmtH(weekly)}</td>
       <td>${peak == null ? "—" : loadBarHTML(peak)}</td>
       <td>${status}</td>
