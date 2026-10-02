@@ -1921,3 +1921,59 @@ textarea.fb-inp { min-height: 72px; resize: vertical; }
   border-radius: 8px; padding: 5px 9px; line-height: 1.35; max-width: 320px;
 }
 @media (max-width: 620px) { .fb-need { max-width: 100%; order: -1; } }
+/* ============ GH-49: workbench progress chart + left-aligned Find-a-person ==
+   1. "Lets move this Find people section a bit down and instead of right align
+      let is start from left properly." — the toolbar used to keep the note and
+      the search on one row with the search floated right. The note now takes
+      its own line and the search starts at the LEFT edge of the panel.
+   2. The chart uses the semantic theme variables so it recolours correctly
+      under every theme (dark and light). */
+
+.wb-load-bar { flex-direction: column; align-items: stretch; gap: 8px; }
+.wb-load-bar .sheet-note { width: 100%; }
+.wb-load-search { display: flex; justify-content: flex-start; width: 100%; }
+.wb-load-search .search { max-width: 340px; margin: 0; }
+
+.wb-progress { padding: 12px 14px 6px; margin-top: 10px; }
+.wb-progress-head {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+.wb-progress-head b { font-size: 13px; }
+.wb-prog-chart { width: 100%; }
+.wb-svg { width: 100%; height: auto; display: block; overflow: visible; }
+
+/* grid + axes */
+.wb-g { stroke: var(--border); stroke-width: 1; }
+.wb-ax, .wb-mx { fill: var(--muted); font-size: 11px; }
+.wb-mx { font-size: 10px; }
+.wb-now { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 4 4; opacity: 0.65; }
+.wb-nowt { fill: var(--muted); font-size: 10px; }
+
+/* planned = accent, actual = green normally / red when behind */
+.wb-area-p { fill: rgba(var(--accent-rgb), 0.10); stroke: none; }
+.wb-line-p { fill: none; stroke: var(--accent); stroke-width: 2.25; }
+.wb-dot-p { fill: var(--accent); }
+
+.wb-area-a { fill: rgba(46, 204, 113, 0.12); stroke: none; }
+.wb-line-a { fill: none; stroke: var(--green); stroke-width: 2.25; }
+.wb-line-a.behind { stroke: var(--red); }
+.wb-dot-a { fill: var(--green); }
+.wb-dot-a.behind { fill: var(--red); }
+
+.wb-prog-legend {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  font-size: 11.5px; color: var(--muted); padding: 6px 2px 4px;
+}
+.wb-prog-legend .sw {
+  display: inline-block; width: 12px; height: 3px; border-radius: 2px;
+  margin-right: 6px; vertical-align: middle;
+}
+.wb-prog-legend .sw.plan { background: var(--accent); }
+.wb-prog-legend .sw.act { background: var(--green); }
+
+/* On narrow screens the chart needs less height, not a squashed one. */
+@media (max-width: 720px) {
+  .wb-svg { height: 190px; }
+  .wb-prog-legend { gap: 10px; font-size: 11px; }
+}
