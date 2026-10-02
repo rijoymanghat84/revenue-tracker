@@ -1471,6 +1471,58 @@ td.week .a-inp { text-align: center; }
 .wb-legend .sw.hot { background: var(--red); }
 .wb-legend .sw.free { background: var(--surface-4); border: 1px solid var(--border); }
 
+/* ---------------- resource details table (My Projects) ----------------
+ * Rijoy, 2026-10-02: "the table is not proper, the name title and other details
+ * are mentioned so clustered. it should look professional and better."
+ *
+ * Cause: #wbTeamTable carries no class of its own, so it inherited the generic
+ * `thead th / td` rules — which were written for the DENSE WEEK GRID: 4px 6px
+ * padding, centered text, 11px. The team list is a normal reading table and was
+ * being rendered at grid density. It now gets its own rules: real padding,
+ * left-aligned text, a hierarchy between name and title, and right-aligned
+ * numbers so figures line up down the column instead of floating. */
+#wbTeamTable { width: 100%; table-layout: auto; }
+#wbTeamTable thead th {
+  text-align: left; padding: 9px 12px;
+  font-size: 10.5px; letter-spacing: .06em;
+  color: var(--muted); background: var(--surface-5);
+  border-bottom: 1px solid var(--border-strong);
+  white-space: nowrap;
+}
+#wbTeamTable thead th.num { text-align: right; }
+#wbTeamTable tbody td {
+  padding: 11px 12px;            /* was 4px 6px — the crowding he reported */
+  text-align: left; vertical-align: middle;
+  border-bottom: 1px solid var(--border);
+  line-height: 1.45;
+}
+#wbTeamTable tbody tr:last-child td { border-bottom: 0; }
+#wbTeamTable tbody tr:hover td { background: var(--surface-2); }
+#wbTeamTable td.num { text-align: right; font-variant-numeric: tabular-nums; }
+/* The person cell is the row's identity: name reads as a heading, and the role
+   and the flag sit under it as quiet supporting detail rather than competing. */
+#wbTeamTable .wb-person { min-width: 150px; }
+#wbTeamTable .wb-person b { display: block; font-size: 13px; font-weight: 650; }
+#wbTeamTable .wb-role { color: var(--muted); font-size: 12px; }
+#wbTeamTable .wb-flag { color: var(--amber); font-size: 11px; margin-top: 1px; }
+#wbTeamTable .wb-dates { white-space: nowrap; font-variant-numeric: tabular-nums; }
+#wbTeamTable .wb-dates .wb-dash { color: var(--muted); padding: 0 3px; }
+/* Row actions are real buttons, spaced apart so Edit and Remove are not one
+   blob — the same problem the compare panel had. */
+#wbTeamTable .wb-rowactions { padding-right: 14px; white-space: nowrap; }
+#wbTeamTable .wb-rowactions .btn {
+  padding: 5px 11px; border-radius: 8px; font-size: 12px;
+  border: 1px solid var(--border-strong); background: var(--surface-3);
+  color: var(--text); cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,0.22);
+}
+#wbTeamTable .wb-rowactions .btn + .btn { margin-left: 7px; }
+#wbTeamTable .wb-rowactions .btn:hover { background: var(--surface-6); border-color: var(--accent); color: var(--accent); }
+#wbTeamTable .wb-rowactions .btn[data-act=del]:hover {
+  color: var(--red); border-color: rgba(var(--red-rgb), 0.6); background: rgba(var(--red-rgb), 0.10);
+}
+/* A phase stack under Allocation reads as a small list, not a run-on line. */
+#wbTeamTable .wb-phases { color: var(--muted); font-size: 11px; margin-top: 3px; line-height: 1.5; }
+
 /* load rail */
 /* GH-53 follow-up: the list used to be capped at a fixed 420px, so a
    full-height screen showed three cards and left a large dead space below
