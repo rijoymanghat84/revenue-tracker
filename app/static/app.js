@@ -2882,8 +2882,14 @@ function renderDashboard() {
         ? `<button class="res-btn" title="Who are they? Click for names, rates and projects"
              onclick="openResourcePopup('${esc(g.client)}','${esc(g.project === "—" ? "" : g.project)}')">${g.resources}</button>`
         : "0";
-      rows += `<tr>
-        <td>${esc(g.country)}</td><td>${esc(g.client)}</td><td>${esc(g.project)}</td><td>${resCell}</td>
+      /* GH-32: an `empty` row is a project that exists with nobody assigned.
+         Without a marker it looks like a broken row (all zeros), and without the
+         row at all a newly added project looked like it had not been saved. */
+      const emptyTag = g.empty
+        ? ` <span class="dash-empty" title="This project exists but has no resources assigned yet">no team</span>`
+        : "";
+      rows += `<tr${g.empty ? ' class="dash-empty-row"' : ""}>
+        <td>${esc(g.country)}</td><td>${esc(g.client)}</td><td>${esc(g.project)}${emptyTag}</td><td>${resCell}</td>
         <td>${money(g.revenue, cur)}</td><td>${money(g.expense, cur)}</td>
         <td style="color:${pSavings >= 0 ? "var(--green)" : "var(--red)"}">${money(pSavings, cur)}</td>
         <td>${money(g.actual_rev || 0, cur)}</td><td>${money(g.actual_exp || 0, cur)}</td>
