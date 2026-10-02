@@ -71,6 +71,12 @@
         <button class="tab active" data-tab="dash" title="Dashboard"><span class="tab-ico">▤</span><span class="tab-txt">Dashboard</span></button>
         <button class="tab" data-tab="planned" title="Planned"><span class="tab-ico">✎</span><span class="tab-txt">Planned</span></button>
         <button class="tab pm-only hidden" data-tab="workbench" title="My Projects"><span class="tab-ico">▦</span><span class="tab-txt">My Projects</span></button>
+        <!-- GH-51: the Find-a-person rail moved here from My Projects, widened to
+             the whole roster (including people who cannot take work). Gated on
+             `people` ∪ `resources` — deliberately NOT a new permission key: a
+             stored-permission admin would otherwise never see the tab, and the
+             PM path is an explicit allow below. -->
+        <button class="tab" data-tab="resources" title="Resources"><span class="tab-ico">☰</span><span class="tab-txt">Resources</span></button>
         <button class="tab" data-tab="week" title="Weekly entry"><span class="tab-ico">✍</span><span class="tab-txt">Weekly entry</span></button>
         <button class="tab" data-tab="actuals" title="Actuals"><span class="tab-ico">✓</span><span class="tab-txt">Actuals</span></button>
         <!-- 2026-10-01: the old "Pricing" tab was doing six unrelated jobs in one
@@ -355,30 +361,52 @@
           </div>
           <div id="wbProgChart" class="wb-prog-chart"></div>
         </div>
-        <!-- GH-49: "Lets move this Find people section a bit down and instead of
-             right align let is start from left properly." This block used to sit
-             with the search box pushed to the far right of the toolbar. The note
-             is now on its own line and the search starts at the left edge. -->
-        <div class="toolbar glass wb-load-bar">
-          <div class="sheet-note"><span class="dot on"></span><b>Find a person</b> — filter by title, ranked by who is free for <span id="wbLoadScope" class="wb-scope">the rest of the year</span>. Red = over 100%; those people cannot take new work.</div>
-          <div class="wb-load-search">
-            <label class="muted-note wb-load-lbl">Title</label>
-            <select id="wbLoadTitle" class="cur-sel" title="Show only people who hold this title"><option value="">— all titles —</option></select>
-            <input type="search" id="wbLoadFilter" placeholder="Find a person…" class="search">
-          </div>
-        </div>
-        <div class="wb-loadlist" id="wbLoad"></div>
-        <!-- Each block is ONE WEEK. The month band above them groups the weeks,
-             and clicking a block opens that week's detail. -->
-        <div class="wb-legend">
-          <span class="muted-note">Each block = one week:</span>
-          <span><i class="sw booked"></i>Booked (&lt;50%)</span>
-          <span><i class="sw warn"></i>50–99%</span>
-          <span><i class="sw hot"></i>Over 100%</span>
-          <span><i class="sw free"></i>Free</span>
-          <span class="muted-note">· hover a block for its week &amp; month, click it for detail</span>
-        </div>
+        <!-- GH-51: the Find-a-person rail MOVED to its own Resources tab (Rijoy:
+             "we will move this to another tab on the left called Resources").
+             One place for it, shared renderer — it is not duplicated here. -->
       </div>
+    </div>
+  </section>
+
+  <!-- ============ RESOURCES (GH-51) ==========================================
+       Rijoy: "lets also include the unavailable folks too and we will move this
+       to another tab on the left called Resources."
+
+       The Find-a-person rail, promoted out of My Projects and widened to the
+       WHOLE roster: available people are ranked by how free they are for the
+       chosen window, and the people who cannot take work are no longer dropped —
+       they sit in a collapsed section that says WHY (booked X% in a named week,
+       on which projects). A window selector makes the horizon explicit, because
+       "available" is meaningless without saying over what period.
+
+       Everything here comes from the booked-% payload the PM already receives.
+       No rates, no money — CHARTER clause 1. -->
+  <section id="resourcesView" data-view="resources" class="view hidden">
+    <div class="toolbar glass wb-load-bar">
+      <div class="sheet-note"><span class="dot on"></span><b>Find a person</b> — filter by title, ranked by who is free for <span id="wbLoadScope" class="wb-scope">the next 12 weeks</span>. Red = over 100%; those people cannot take new work and are listed at the bottom.</div>
+      <div class="wb-load-search">
+        <label class="muted-note wb-load-lbl">Window</label>
+        <select id="wbLoadWindowSel" class="cur-sel" title="What period is 'available' measured over?">
+          <option value="auto">Auto — this project, else next 12 weeks</option>
+          <option value="12w">Next 12 weeks</option>
+          <option value="26w">Next 26 weeks</option>
+          <option value="year">All of 2026</option>
+        </select>
+        <label class="muted-note wb-load-lbl">Title</label>
+        <select id="wbLoadTitle" class="cur-sel" title="Show only people who hold this title"><option value="">— all titles —</option></select>
+        <input type="search" id="wbLoadFilter" placeholder="Find a person…" class="search">
+      </div>
+    </div>
+    <div class="wb-loadlist" id="wbLoad"></div>
+    <!-- Each block is ONE WEEK. The month band above them groups the weeks,
+         and clicking a block opens that week's detail. -->
+    <div class="wb-legend">
+      <span class="muted-note">Each block = one week:</span>
+      <span><i class="sw booked"></i>Booked (&lt;50%)</span>
+      <span><i class="sw warn"></i>50–99%</span>
+      <span><i class="sw hot"></i>Over 100%</span>
+      <span><i class="sw free"></i>Free</span>
+      <span class="muted-note">· hover a block for its week &amp; month, click it for detail</span>
     </div>
   </section>
 
