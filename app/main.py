@@ -2881,6 +2881,165 @@ def api_pricing_apply_all(request: Request):
 
 
 # ---------------- Import ----------------
+def _validate_import_capacity(conn: sqlite3.Connection, parsed: dict,
+                              mode: str) -> list[dict]:
+    """Every person's PLANNED weekly hours must fit their weekly capacity.
+
+    Rijoy: "make sure that it also take care of all the rules, meaning for example
+    if in the upload a resource is utilized for more than 100 hours in total then
+    the upload should fail giving the reason for the fails."
+
+    Runs BEFORE any write, on a simulation of the resulting state, so a rejected
+    file leaves the database exactly as it was (all-or-nothing, matching the PM
+    upload path). Grouping is by person NAME — the same key `compute_utilization`
+    and the 100% rule use — because a spreadsheet has no person ids, and one
+    person legitimately holds a row per project.
+
+    Capacity resolution per person, most specific first:
+      1. a `capacity` column in the uploaded file (per-row override), else
+      2. the person's stored capacity (people → resources), else
+      3. CAP_WEEK_HOURS (40).
+
+    In merge mode the person's OTHER projects are included, so an upload cannot
+    quietly overbook someone by adding hours to one project while leaving their
+    existing bookings alone. In replace mode the file IS the whole book.
+    """
+    try:
+        weeks, _months = _load_layout()
+    except Exception:  # noqa: BLE001
+        weeks = []
+    nweeks = len(weeks)
+
+    # --- capacity per normalised person name, from what is already stored ------
+    cap_by_name: dict[str, float] = {}
+    try:
+        for r in conn.execute("SELECT name, capacity FROM resources").fetchall():
+            k = _norm_person_name(r["name"])
+            if not k:
+                continue
+            c = float(r["capacity"] or CAP_WEEK_HOURS)
+            cap_by_name[k] = max(cap_by_name.get(k, 0.0), c)
+    except sqlite3.Error:
+        pass
+    try:
+        for r in conn.execute("SELECT name, capacity FROM people").fetchall():
+            k = _norm_person_name(r["name"])
+            if k and r["capacity"]:
+                cap_by_name[k] = float(r["capacity"])
+    except sqlite3.Error:
+        pass
+
+    # --- hours per person per week, starting from the EXISTING book ------------
+    # `before` is kept separately from `after` because the rule is NOT "nobody may
+    # ever exceed capacity" — the app deliberately tolerates EXISTING
+    # over-allocation ("we never retro-break existing bookings"). Measured on the
+    # live book, 103 person-weeks are already over. Refusing those would make the
+    # export → edit → upload round-trip impossible, which is the whole point of
+    # this feature. So only weeks the UPLOAD introduces or worsens are rejected.
+    per_week: dict[str, list[float]] = {}
+    before: dict[str, list[float]] = {}
+
+    def bucket(store: dict, name: str) -> list[float]:
+        k = _norm_person_name(name)
+        if k not in store:
+            store[k] = [0.0] * max(nweeks, 1)
+        return store[k]
+
+    file_names: set[str] = set()
+    for pr in parsed.get("resources", []):
+        file_names.add(_norm_person_name(pr.get("name") or ""))
+
+    if mode != "replace":
+        try:
+            rows = conn.execute(
+                "SELECT res.name, wh.week, wh.hours FROM weekly_hours wh "
+                "JOIN resources res ON res.id = wh.resource_id").fetchall()
+        except sqlite3.Error:
+            rows = []
+        for r in rows:
+            k = _norm_person_name(r["name"])
+            if not k:
+                continue
+            h = float(r["hours"] or 0.0)
+            if not h:
+                continue
+            i = int(r["week"])
+            arr = bucket(before, r["name"])
+            if 0 <= i < len(arr):
+                arr[i] += h
+
+    # `after`: start from the existing book, then let the file REPLACE each
+    # person it names (the importer upserts by (client,name), so a person in the
+    # file is governed by the file, while people absent from it keep their hours).
+    for k, arr in before.items():
+        per_week[k] = list(arr)
+    cap_override: dict[str, float] = {}
+    for pr in parsed.get("resources", []):
+        k = _norm_person_name(pr.get("name") or "")
+        if not k:
+            continue
+        if pr.get("capacity"):
+            try:
+                cap_override[k] = float(pr["capacity"])
+            except (TypeError, ValueError):
+                pass
+    file_hours: dict[str, list[float]] = {}
+    for pr in parsed.get("resources", []):
+        k = _norm_person_name(pr.get("name") or "")
+        if not k:
+            continue
+        arr = file_hours.setdefault(k, [0.0] * max(nweeks, 1))
+        for i, h in enumerate(pr.get("hours") or []):
+            if h and i < len(arr):
+                arr[i] += float(h)
+    for k, arr in file_hours.items():
+        per_week[k] = list(arr)
+
+    # --- report ---------------------------------------------------------------
+    # Only weeks the UPLOAD introduces or worsens (see the `before` note above).
+    # An already-over week that the file leaves alone is the status quo and must
+    # not block a round-trip.
+    problems: list[dict] = []
+    for k, arr in per_week.items():
+        cap = cap_override.get(k) or cap_by_name.get(k) or CAP_WEEK_HOURS
+        if cap <= 0:
+            continue
+        was = before.get(k) or []
+        peak = max(arr) if arr else 0.0
+        if peak <= cap:
+            continue
+        # Name it the way the workbook spells it, not the folded key.
+        disp = k
+        for pr in parsed.get("resources", []):
+            if _norm_person_name(pr.get("name") or "") == k:
+                disp = pr.get("name") or k
+                break
+        for i, h in enumerate(arr):
+            if h <= cap:
+                continue
+            prev = float(was[i]) if i < len(was) else 0.0
+            if prev > cap and h <= prev + 0.01:
+                continue        # already over, and the file did not worsen it
+            worse = " this upload makes it worse" if prev > cap else ""
+            problems.append({
+                "person": disp,
+                "week": i,
+                "week_label": weeks[i] if i < len(weeks) else f"week {i + 1}",
+                "hours": round(h, 2),
+                "was_hours": round(prev, 2),
+                "capacity": cap,
+                "over_by": round(h - cap, 2),
+                "pct": round(h / cap * 100, 1),
+                "reason": (f"planned {round(h, 2)}h exceeds the {cap:g}h weekly "
+                           f"capacity by {round(h - cap, 2)}h "
+                           f"({round(h / cap * 100, 1)}%)"
+                           + (f"; previously {round(prev, 2)}h{worse}" if prev else "")),
+                "fix": (f"reduce this week to {cap:g}h or less, raise the "
+                        f"capacity, or move hours to another week"),
+            })
+    return problems
+
+
 @app.post("/api/import")
 async def api_import(file: UploadFile = File(...), mode: str = Form("merge"), request: Request = None):
     user = _require_pm(request)
@@ -3064,6 +3223,27 @@ async def api_import(file: UploadFile = File(...), mode: str = Form("merge"), re
     conn = get_db()
     backup_path = None
     try:
+        # GH-35: every rule the app enforces must hold for a bulk upload too.
+        # Rijoy: "if in the upload a resource is utilized for more than 100 hours
+        # in total then the upload should fail giving the reason for the fails".
+        # Validated on a SIMULATION before anything is written, so a rejected file
+        # leaves the database exactly as it was — all-or-nothing, like the PM
+        # upload. Runs before the replace-mode wipe for the same reason.
+        cap_problems = _validate_import_capacity(conn, parsed, mode)
+        if cap_problems:
+            total = len(cap_problems)
+            raise HTTPException(400, {
+                "message": (
+                    f"Import rejected — {total} week(s) exceed a person's weekly "
+                    f"capacity. Nothing was saved. Fix the rows listed below "
+                    f"(or raise the capacity on Team & Access) and upload again."
+                ),
+                "problems": cap_problems[:60],
+                "problem_count": total,
+                "truncated": total > 60,
+                "kind": "capacity",
+            })
+
         # Replace mode: this file becomes the whole database. Backup first,
         # then wipe resources + hours. Pricing (the rate card) and the week
         # layout are kept — they're configuration, not data.
