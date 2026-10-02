@@ -1970,6 +1970,23 @@ textarea.fb-inp { min-height: 72px; resize: vertical; }
   padding-bottom: 8px; border-bottom: 1px solid var(--border);
 }
 .wb-count b { color: var(--text); }
+/* ---- GH-52: multi-select compare ---- */
+.wb-pick { flex: 0 0 auto; display: flex; align-items: center; padding-right: 2px; }
+.wb-pick input { width: 15px; height: 15px; accent-color: var(--accent, #22d3ee); cursor: pointer; }
+.wb-load .h .wb-id { flex: 1 1 auto; min-width: 0; }
+.wb-compare { margin: 12px 0; padding: 12px 14px; }
+.wb-cmp-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.wb-cmp-head b { font-size: 13px; }
+.wb-cmp-head .btn { margin-left: auto; }
+table.wb-cmp { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+table.wb-cmp th, table.wb-cmp td {
+  padding: 7px 9px; border-bottom: 1px solid var(--border); vertical-align: top; text-align: left;
+}
+table.wb-cmp th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+table.wb-cmp td.num { text-align: right; white-space: nowrap; }
+.wb-alloc { margin-bottom: 3px; }
+.wb-alloc:last-child { margin-bottom: 0; }
+
 
 .wb-progress { padding: 12px 14px 6px; margin-top: 10px; }
 .wb-progress-head {
