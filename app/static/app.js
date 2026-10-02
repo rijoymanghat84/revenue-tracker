@@ -3369,8 +3369,10 @@ function alignActualsSticky() {
 }
 
 function aMarkDirty(rid, week, value) {
-  let d = aDirty.get(rid) || { hours: false, notes: {} };
+  let d = aDirty.get(rid) || { hours: false, notes: {}, weeks: new Set() };
   d.hours = true;
+  if (!d.weeks) d.weeks = new Set();
+  d.weeks.add(week);          // exactly which weeks this PM edited
   aDirty.set(rid, d);
   if (!aFlushTimer) aFlushTimer = setTimeout(aFlush, 1200);
 }
@@ -3395,18 +3397,32 @@ async function aFlush() {
     const notes = {};
     // collect any notes already stored for this resource
     if (r && r.actual_notes) Object.assign(notes, r.actual_notes);
+    // The 53-week grid renders a full year; declare exactly which weeks the PM
+    // touched so the server does not re-litigate every other week (it used to
+    // ask "Why the shortfall?" for weeks nobody opened — the owner, 2026-10-02).
+    // `d.weeks` is filled by aMarkDirty; if it is somehow absent, fall back to
+    // "every week whose submitted value still differs from what is stored", and
+    // if even that is empty, send NO `edited` at all rather than an empty list —
+    // the server then applies that same diff rule itself, which is stricter than
+    // claiming "nothing was edited" and refusing to write a real change.
+    const dirtyWeeks = Array.from((aDirty.get(rid) || {}).weeks || []);
+    const edited = dirtyWeeks.length ? dirtyWeeks : undefined;
     try {
-      const res = await api(`/api/resources/${rid}/actuals`, { method: "PUT", body: JSON.stringify({ hours, notes }) });
+      const res = await api(`/api/resources/${rid}/actuals`, { method: "PUT", body: JSON.stringify({ hours, notes, edited }) });
       if (res.status === "needs_input") {
         // OT flow: prompt the PM for each week needing input
+        const ed = edited ? edited.slice() : [];
         for (const w of res.weeks) {
           const ok = await actualsPrompt(rid, w, hours);
           if (!ok) { toast("Actuals not saved — resolve the flagged weeks", true); return; }
+          // A resolved week may be one the PM did not TYPE in (a carried-over
+          // overage they just answered for): add it so the verdict is written.
+          if (ed.indexOf(w.week) < 0) ed.push(w.week);
         }
         // retry after prompts
         const r2 = actualsData.resources.find((x) => x.id === rid);
         const notes2 = r2 ? r2.actual_notes || {} : {};
-        const res2 = await api(`/api/resources/${rid}/actuals`, { method: "PUT", body: JSON.stringify({ hours, notes: notes2 }) });
+        const res2 = await api(`/api/resources/${rid}/actuals`, { method: "PUT", body: JSON.stringify({ hours, notes: notes2, edited: ed.length ? ed : undefined }) });
         if (res2.status !== "ok") { toast("Actuals still need input", true); return; }
       }
       toast("Actuals saved");
@@ -3757,17 +3773,21 @@ async function saveActualsModal() {
     }
     if (!changed) continue;
     any = true;
+    // Only the weeks the PM actually changed (and any already-flagged week) are
+    // edited; the rest of the year is untouched context (the owner, 2026-10-02).
+    let edited = weekIdx.slice();
     try {
-      const res = await api(`/api/resources/${r.id}/actuals`, { method: "PUT", body: JSON.stringify({ hours, notes }) });
+      const res = await api(`/api/resources/${r.id}/actuals`, { method: "PUT", body: JSON.stringify({ hours, notes, edited }) });
       if (res.status === "needs_input") {
         // OT flow: prompt for each week needing input
         for (const w of res.weeks) {
           const ok = await actualsPrompt(r.id, w.week, hours);
           if (!ok) { toast("Actuals not saved — resolve the flagged weeks", true); return; }
+          if (edited.indexOf(w.week) < 0) edited.push(w.week);
         }
         const r2 = actualsData.resources.find((x) => x.id === r.id);
         const notes2 = r2 ? r2.actual_notes || {} : {};
-        const res2 = await api(`/api/resources/${r.id}/actuals`, { method: "PUT", body: JSON.stringify({ hours, notes: notes2 }) });
+        const res2 = await api(`/api/resources/${r.id}/actuals`, { method: "PUT", body: JSON.stringify({ hours, notes: notes2, edited }) });
         if (res2.status !== "ok") { toast("Actuals still need input", true); return; }
       }
     } catch (err) { toast(`Save failed: ${err.message}`, true); return; }

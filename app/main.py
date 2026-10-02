@@ -1363,6 +1363,12 @@ def api_delete_resource(rid: int, request: Request):
 class ActualsUpdate(BaseModel):
     hours: list[float] | None = None          # full-row actual hours
     notes: dict[int, dict] | None = None      # week -> {comment,is_ot,approved,billed,reason}
+    # Which weeks THIS call is entering/editing. Everything else in `hours` is
+    # context that must survive the write, NOT something to re-litigate. Without
+    # this the save validated all 53 weeks and demanded a shortfall reason for
+    # weeks the PM never opened (the owner, 2026-10-02). None = the client did not
+    # say, so fall back to "every week whose value differs from the stored one".
+    edited: list[int] | None = None
 
 
 def _reason_text(note: dict) -> str:
@@ -1450,25 +1456,50 @@ def api_update_actuals(rid: int, body: ActualsUpdate, request: Request):
         if len(hours) != n:
             raise HTTPException(400, f"expected {n} hours, got {len(hours)}")
         planned = _hours_map(rid, conn)
+        stored = _actual_hours_map(rid, conn)
         capacity = row["capacity"] or 40.0
         notes = body.notes or {}
-        # Validate every week; collect anything that still needs input
+        # ---- which weeks is this call answering for? -------------------------
+        # A save carries the FULL week array (the backend requires it), but the PM
+        # is entering ONE week on the Weekly entry sheet, or the weeks of a single
+        # month in the Actuals wizard. Judging all 53 weeks meant any OTHER week
+        # sitting below plan without a recorded reason blocked the save and fired
+        # "Why the shortfall?" for a week nobody opened — the owner's report
+        # (2026-10-02). Validate the EDITED weeks only.
+        if body.edited is not None:
+            edited = sorted({int(w) for w in body.edited
+                             if isinstance(w, (int, float)) and 0 <= int(w) < n})
+        else:
+            # Backward-compatible fallback for a client that does not send it: a
+            # week counts as edited when its submitted value MOVED.
+            edited = [i for i in range(n)
+                      if abs(float(hours[i]) - float(stored.get(i, 0.0))) > 1e-9]
+
+        # Validate every EDITED week; collect anything that still needs input.
         needs = []
-        for i, h in enumerate(hours):
-            if not h:
+        for i in edited:
+            if not hours[i]:
                 continue
-            v = _validate_actual_week(planned.get(i, 0.0), h, capacity, notes.get(i))
+            v = _validate_actual_week(planned.get(i, 0.0), hours[i], capacity, notes.get(i))
             if v["status"] != "ok":
                 needs.append({"week": i, **v})
         if needs:
             return JSONResponse({"status": "needs_input", "weeks": needs}, status_code=200)
-        # All good: persist hours + notes
+        # Persist. Every week the call did NOT edit keeps its STORED value. The
+        # payload's other slots are context, not an instruction: the month-scoped
+        # grid and the week sheet both fill them from whatever they rendered, so
+        # writing them verbatim could insert a stale PLANNED value as if it were
+        # an entered actual (a quiet data corruption, not just a wrong prompt).
+        merged = dict(stored)
+        for i in edited:
+            merged[i] = hours[i]
         conn.execute("DELETE FROM actual_hours WHERE resource_id=?", (rid,))
         conn.executemany(
             "INSERT INTO actual_hours (resource_id, week, hours) VALUES (?,?,?)",
-            [(rid, i, h) for i, h in enumerate(hours) if h],
+            [(rid, i, h) for i, h in sorted(merged.items()) if h],
         )
-        for i, h in enumerate(hours):
+        for i in edited:
+            h = hours[i]
             if not h:
                 continue
             v = _validate_actual_week(planned.get(i, 0.0), h, capacity, notes.get(i))
