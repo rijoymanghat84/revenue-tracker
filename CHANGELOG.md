@@ -81,6 +81,86 @@ active), with every touched table restored to baseline (66 resources / 49 people
 
 ---
 
+## 2026-10-02 — Reallocation requests: propose → releasing-PM approval → 🔔 → trail (GH-53)
+
+**the owner's spec**, stage 3 of the Resources plan:
+
+> "lets say I want to move Nathan who is allocated 100% to Google and I want to take
+> his 50% from google to a new project … then I can do that but the allocation happen
+> once Google PM approved, so there should be a notiication bell icon on the top right
+> hand side … I can approve or reject and all these get tracked and noted. and the
+> same option the admin should have too and incase of admin he can do it for any
+> client and project and resource including PM"
+
+### The five decisions he locked, implemented
+
+| # | Decision | Behaviour |
+|---|---|---|
+| Q1 | Permanent **or** loan | Optional return date; blank = permanent |
+| Q2 | Admin moves apply **immediately** | Button reads "Move now (applies immediately)"; still recorded in the bell + trail |
+| Q3 | **Any PM** may request any resource | The releasing project's PM decides. **No PM on the source project → an admin decides**, or the request would have no decider at all |
+| Q4 | Finder lives only on Resources | Built in GH-51 |
+| Q5 | Loans end **automatically** | Returns on the date with a 7-day heads-up to both sides (daily 4am sweep, idempotent) |
+
+### The two rules that are enforced, not documented
+
+- **The past is immutable** (CHARTER #2). `effective_from_week` is clamped to the
+  current week, and the source row is reduced with a **phase split** — so every
+  week before the effective week keeps its original booking. Verified live: the
+  week before the move still held its full 40h.
+- **The 100% weekly hard block is checked TWICE** — at request time (so the PM
+  learns early) and again at approval (the world moves in between). When it no
+  longer fits the request **expires with a reason** instead of failing silently.
+
+Plus a guard the tests forced out: **you cannot release more than the source
+project actually holds** — asking for 100% off a 25% booking is refused, rather
+than clamped to zero and quietly over-crediting the target.
+
+### Two real defects the backend suite could not see
+
+Both found only by **driving the actual form in a browser** — the suite exercises
+endpoints, not DOM wiring:
+
+1. **The Move modal's buttons never attached.** The close listener was bound to
+   `#mvClose` but the element is `#moveClose` (it lives in the modal header,
+   outside the body the JS writes). The unguarded `addEventListener` threw before
+   the submit listener was reached, so "Move now" did nothing at all and the
+   console showed `Cannot read properties of null` at `workbench.js:996`.
+2. **The release guard ignored the DERIVED allocation.** 62 of the 66 rows have
+   `allocation_pct = NULL` — the Excel import carried weekly hours, never a %. The
+   guard read the raw column, so it reported *"Nathan Rowe is only at 0% on
+   Google/Support — you cannot release 25%"* when he is at 100%. Worse, the reduction
+   had the same bug: reading 0 there would have **zeroed a whole booking instead
+   of halving it**. Both now fall back to the derived share the rest of the app
+   shows.
+
+### Pipeline: the new pre-push guard refused my own deploy
+
+Two honest "Deploy failed — #53" events fired at 18:59/19:00. Cause: the
+`check-commit-autoclose.py` guard added earlier the same day blocked the push
+because a merge summary read `Deploy (GH-53): Allocation: fix Move modal button
+wiring (GH-53)` — GitHub parses "fix … (GH-53)" as an auto-close despite the
+`(GH-N)` tag. The deploy had merged locally but could not push. **Fixed at the
+source:** `repo-deploy.sh` now sanitises the summary's verbs (`fix`→`repair`,
+`close`→`complete`, `resolve`→`settle`) before building the merge message, so the
+pattern cannot be generated from there again. The three locally-merged commits
+were collapsed into one clean commit (`1141276`) rather than rewriting anything
+already pushed.
+
+### Verified
+
+43-assertion backend suite (`tests/test_allocation_requests.py`, now part of
+`scripts/run-tests.sh` — 5/5 suites green) plus a full end-to-end browser run:
+raised a move, watched the source drop 50%→25% from Sep-28 while earlier weeks
+kept 50%, the new row appear, and the bell report *applied by admin* with the
+trail. **Test data reverted** — production back at 66 resources / 60,000.00h
+planned / 35,000.00h actual.
+
+Commit `1141276`, deployed 2026-10-02 19:00 UTC. Cron `c19ea37b6719` runs the
+loan sweep daily at 4am.
+
+---
+
 ## 2026-10-02 — Multi-select compare: availability + current allocations (GH-52)
 
 **the owner:** *"there should be a way to select multiple resource to compare and see
