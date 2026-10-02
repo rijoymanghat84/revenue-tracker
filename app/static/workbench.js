@@ -756,7 +756,11 @@ function wbLoadCard(x, r, opts) {
           <input type="checkbox" data-act="pick" data-pid="${x.id}"${WB.compare.includes(x.id) ? " checked" : ""}>
         </label>
         <div class="wb-id"><b>${esc(x.name)}</b> <span class="sub">${esc(x.home_title || "—")}</span></div>
-        <div>${pill}${partTime} <span class="sub">free ${r.freeWeeks}/${r.weeks} wks</span> <button class="btn mini" data-act="view">Assign…</button></div>
+        <div>
+          ${pill}${partTime} <span class="sub">free ${r.freeWeeks}/${r.weeks} wks</span>
+          <button class="btn mini" data-act="move" data-pid="${x.id}" title="Move part of this person to another project (needs the releasing PM's approval)">Move…</button>
+          <button class="btn mini" data-act="view" title="Add this person to one of your projects">Assign…</button>
+        </div>
       </div>
       <div class="sub">${projs}</div>
       ${why}
@@ -1262,6 +1266,12 @@ function renderWbLoad() {
   $$("#wbLoad .wb-load button[data-act=view]").forEach((b) => b.addEventListener("click", () => {
     const pid = +b.closest(".wb-load").dataset.pid;
     openAssignModal(wbSel(), pid, null);
+  }));
+  // GH-53: Move is on EVERY row, not only inside the compare panel. Rijoy had to
+  // ask "how does the move resource work, where do I do that?" — a feature you
+  // cannot find is not shipped. Same handler the compare button uses.
+  $$("#wbLoad .wb-load button[data-act=move]").forEach((b) => b.addEventListener("click", () => {
+    openMoveModal(+b.closest(".wb-load").dataset.pid);
   }));
   // GH-52: the compare checkbox. Kept out of the Assign path on purpose — ticking
   // a box must not open a dialog.
