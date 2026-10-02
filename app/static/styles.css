@@ -1812,3 +1812,15 @@ textarea.fb-inp { min-height: 72px; resize: vertical; }
   cursor: pointer; line-height: 1;
 }
 @media (max-width: 620px) { .fb-row2 { grid-template-columns: 1fr; } .fb-kv span:first-child { min-width: 104px; } }
+
+/* Next when a step isn't satisfied: dimmed as a soft cue, but NEVER disabled —
+   a disabled button explains nothing and makes people click it repeatedly.
+   The click always lands and shows .fb-need with what's missing. */
+.fb-notready { opacity: 0.55; }
+.fb-notready:hover { opacity: 0.75; }
+.fb-need {
+  color: var(--amber); font-size: 12px; margin-right: 10px;
+  background: var(--pill-amber-bg); border: 1px solid rgba(var(--amber-rgb), 0.4);
+  border-radius: 8px; padding: 5px 9px; line-height: 1.35; max-width: 320px;
+}
+@media (max-width: 620px) { .fb-need { max-width: 100%; order: -1; } }
