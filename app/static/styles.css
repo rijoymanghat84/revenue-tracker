@@ -285,6 +285,18 @@ body {
   border-radius: 999px; padding: 1px 6px; margin-left: 6px; white-space: nowrap;
 }
 
+/* ---------- GH-36: refresh + "last updated" stamp ---------- */
+.util-refreshbar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 10px 0 2px;
+}
+.util-refreshbar .hint { font-size: 11.5px; }
+.dash-refreshbar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-top: 10px;
+}
+.dash-refreshbar .hint { font-size: 11.5px; }
+
 .tabs { display: flex; background: var(--panel-strong); border-radius: 10px; padding: 3px; }
 .tab {
   border: 0; background: transparent; color: var(--muted);
