@@ -9,6 +9,52 @@ wasn't one) and the commit.
 
 ---
 
+## 2026-10-02 — Multi-select compare: availability + current allocations (GH-52)
+
+**the owner:** *"there should be a way to select multiple resource to compare and see
+their availability and while doing that we should know where they are currently
+allocated for which project."* Stage 2 of the Resources plan.
+
+Tick **Compare** on any resource row and the selected people line up above the
+list: availability over the chosen window, and where each person is actually
+booked right now.
+
+- **Availability side by side** — % free (averaged over the window), whether a
+  **full slot** is available, and booked average/peak, so "free on average" is
+  never confused with "free next week".
+- **Current allocations per person** — each project with its peak % of capacity,
+  the weeks it touches, the week span, and total hours. This is what makes
+  "move 50% of Nathan off Google" concrete: live, Nathan Rowe reads
+  `Google/Support · 100% (5 wks, Sep-28–Oct-26, 160h)` next to
+  `Meta/Platform · 100% (9 wks, Oct-19–Dec-14, 320h)` — a phased handover
+  visible only as a week span.
+- **Over-allocation is flagged, not hidden.** Someone whose projects SUM past
+  100% in a week cannot be created through the UI (the hard block refuses it) but
+  exists in imported data: **Blake Herrera is at 125%** (NVIDIA/Platform 100% +
+  Adobe/Platform 25%), and the row says so with the week. A staffing view
+  that hides that is a staffing view that lies.
+- Rates render for **admins only** (CHARTER clause 1) — the columns appear only
+  when `/api/state` is available; the compare data itself carries no money.
+
+**Why allocations come from the per-week `detail` array and not
+`resources.allocation_pct`:** that column is NULL on **62 of the 66** resource rows
+(legacy imports), so reading it would print "—" for almost everyone. Collapsing
+`detail` across the window gives the real share per project *and* the weeks it
+spans.
+
+**Verified:** 9-assertion Node harness over the shipped functions against the live
+payload (allocations reconcile exactly with the raw weekly detail; over-allocation
+detected and flagged; "% free"/"full slot?" derive from each person's own series;
+"no project work booked" is real, not a rendering gap), then driven live: 3 rows
+compared, admin rates REDACTED / REDACTED shown, over-allocation called out.
+
+Commit `515b051`, branch `feat/52_compare`, deployed 2026-10-02 18:48 UTC —
+**the first deploy where the 🚀 event posted automatically**, after the wrapper was
+repointed at `repo-deploy.sh`. A pre-push hook now refuses any commit message that
+would auto-close an issue, so GH-52 stayed open.
+
+---
+
 ## 2026-10-02 — Availability is averaged over the window, not the worst week (GH-51)
 
 **the owner, on the Resources tab:** *"the list should have all the resources not just
