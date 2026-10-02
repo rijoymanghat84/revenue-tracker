@@ -9,6 +9,66 @@ wasn't one) and the commit.
 
 ---
 
+## 2026-10-02 — Find a person: title filter, ranked by real availability (GH-50)
+
+**GH-50**, a feature requested by **saloni (PM)** from the in-app form:
+
+> "The Find a person section should be much more informative, like have dropdown
+> based on title and when the user selects a title, it will list the resource
+> under that title and it will be listed with 100% available resource first,
+> then 75%, then 50% and then 25%. People who are not available can be skipped."
+
+Option **A** chosen by Rijoy (availability over the project's own date range).
+
+### What the rail was, and why that was the wrong question
+
+`#wbLoadFilter` was a name-substring search over `/api/pm/load`, sorted
+**busiest-first by peak-of-year booked %**. That ordering answers "who is over
+capacity, avoid them" — useful, but not the job a PM is doing on this panel,
+which is *staffing*: "who can I pull onto this project". The rail is now a
+finder.
+
+### What changed
+
+- **Title dropdown** (`#wbLoadTitle`), fed from the rate-card titles already on
+  `/api/pm/load`. No new endpoint, no rate or revenue value fetched or rendered
+  — CHARTER clause 1 stays intact.
+- **Availability ranking.** `availability = 100 − worst booked% across the
+  project's own date range`, so "free in January" cannot pose as "free when the
+  work runs". Grouped into **100 / 75–99 / 50–74 / under 50** buckets, most free
+  first, with the window named in the header (project range, or "the next 12
+  weeks").
+- **Unavailable people are skipped** — anyone whose window peak is ≥ 100% is not
+  shown, per the request.
+- The name search box stays beside the dropdown, so the two filters compose.
+
+### The one design call worth recording
+
+A project with **no dates** cannot use "the project window", and the obvious
+fallback — the whole year — is *worse than useless here*. Measured on live data:
+a 53-week window leaves only **11 of 49** people "available", because 38 are
+booked to ≥100% at some point in the year; a **12-week** near-term horizon shows
+**20**. 14 of the 16 projects are legacy imports with no dates, so the fallback
+is the 12-week horizon — otherwise the finder collapses to a handful of people
+on most projects. The header always says which horizon produced the number.
+
+### Verified
+
+15-assertion Node harness (`/opt/data/home/workspace/test-gh50.js`) running the
+**shipped** functions against the live payload: ranking monotonic; nobody ≥100%
+listed; shown + skipped == full roster; title filter exact; unknown title → empty
+(not a crash); both dated projects (one spanning into 2027) produce a valid
+window; money-leak sweep over the payload keys. Then driven live in a browser on
+production: dropdown holds the 15 titles, buckets render, `Quadient Developer`
+filters to 6 people (all free-first), Print Mail / Quadient shows window
+`2026-10-19 → 2027-01-18` with max window-peak 75% (nobody over).
+
+Commit `30da211`, branch `feat/50_find_person`, deployed 2026-10-02 18:17 UTC via
+`revenue-safe-upgrade.sh` (data intact: 66 resources / 15 pricing / 5 users /
+17 projects, both hour totals unchanged).
+
+---
+
 ## 2026-10-02 — Bug form: Next no longer waits on an unrelated control (GH-46)
 
 **GH-46**, reported while using the form: the **Console errors** toggle appeared to
