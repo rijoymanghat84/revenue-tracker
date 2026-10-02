@@ -9,6 +9,54 @@ wasn't one) and the commit.
 
 ---
 
+## 2026-10-02 — Bug form: Next no longer waits on an unrelated control (GH-46)
+
+**GH-46**, reported while using the form: the **Console errors** toggle appeared to
+be required to leave step 2, even though it is off by default.
+
+### The console toggle was innocent — `missing` was captured too early
+
+`fbNav()` computed readiness once, when the action bar was drawn, and the Next
+handler closed over it:
+
+```js
+const missing = step === 2 ? (hasText ? "" : "Add a line in ...") : "";
+next.addEventListener("click", () => {
+  if (missing) { fbNeed(); return; }   // stale value
+  advance();
+});
+```
+
+Typing cleared the dimming and hid the warning — a *different*, live listener did
+that — but left the captured `missing` truthy. So Next still refused and asked for a
+line that had already been written. Clicking **Console errors** called `fbRender()`,
+which recomputed the flag, and the very next click worked. Hence the illusion.
+
+Readiness is now a **function evaluated at click time** (`missingNow()`). Nothing
+depends on the user having *touched* a control: every default in `fbState` is a
+valid answer and readiness is derived from state, not from interaction history.
+
+### Related bug in the same code path
+
+Clicking the **already-active** option in `Console errors` or `This is a…`
+re-rendered the whole step and **erased both textareas mid-sentence**. Both handlers
+now return early when the value has not changed.
+
+### Verified by driving the real form
+
+- Step 2 empty → Next refuses, and says what is missing.
+- Type into *"What actually happened?"* only, console left `off` → dimming clears
+  and **Next advances to step 3**.
+- Clear the text → Next refuses again (correct).
+- Full 1 → 2 → 3 with the console toggle never touched: `consoleTouched: "off"`,
+  reached step 3, issue body generated correctly, all three suites pass.
+- Clicking the active console option preserves typed text.
+- Step 1 still requires an area (intentional); step 3 has no gate.
+
+All three test suites pass.
+
+---
+
 ## 2026-10-02 — Bug form offers every real control, read off the live screen (GH-44)
 
 **GH-44**, raised by Rijoy from a PM login: *"there are options on the left side

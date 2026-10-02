@@ -5308,8 +5308,20 @@ function fbStep2() {
         <div class="fb-hint">Technical, but often pins the cause. Off unless you turn it on.</div>
       </div>
     </div>`;
-  $$("#fbKind button").forEach((b) => b.addEventListener("click", () => { fbState.kind = b.dataset.kind; fbRender(); }));
-  $$("#fbConsole button").forEach((b) => b.addEventListener("click", () => { fbState.console = b.dataset.con; fbRender(); }));
+  $$("#fbKind button").forEach((b) => b.addEventListener("click", () => {
+    // Guard the no-op: re-rendering replaces the body, which would throw away
+    // whatever the user has typed but not yet committed to state. Clicking the
+    // already-selected option should do nothing.
+    if (fbState.kind === b.dataset.kind) return;
+    fbState.kind = b.dataset.kind; fbRender();
+  }));
+  $$("#fbConsole button").forEach((b) => b.addEventListener("click", () => {
+    // Same guard. This one mattered: the console toggle is OFF by default, and
+    // clicking "Off" (already active) used to re-render the whole step and erase
+    // both textareas mid-sentence.
+    if (fbState.console === b.dataset.con) return;
+    fbState.console = b.dataset.con; fbRender();
+  }));
   const ce = $("#fbExpected"), ch = $("#fbHappened");
   if (ce) ce.addEventListener("input", () => { fbState.expected = ce.value; });
   if (ch) ch.addEventListener("input", () => { fbState.happened = ch.value; });
@@ -5368,10 +5380,25 @@ function fbNav() {
   // before it actually moved"). Now the click is always accepted and, when
   // something is missing, it says what and points at it.
   const step = fbState.step;
-  const hasText = Boolean((fbState.expected || "").trim() || (fbState.happened || "").trim());
-  const missing = step === 1 ? (fbState.module ? "" : "Pick an area above first")
-    : step === 2 ? (hasText ? "" : "Add a line in \u201cWhat did you expect?\u201d or \u201cWhat actually happened?\u201d")
-    : "";
+  // Readiness is a FUNCTION, not a value, and it is re-evaluated at CLICK time.
+  //
+  // The previous version computed `missing` once when the action bar was drawn
+  // and the Next handler closed over it. Typing text then cleared the dimming
+  // and hid the warning (the live listeners did that) but left the captured
+  // `missing` truthy — so Next still refused, and told you to add a line you had
+  // already written. Clicking the "Console errors" toggle appeared to fix it,
+  // because that handler calls fbRender() and recomputed the flag. That is why
+  // it looked like the console toggle was secretly required (Rijoy, GH-45).
+  //
+  // Nothing here depends on the user having TOUCHED a control: every default in
+  // fbState is a valid answer, and readiness is derived from the state itself.
+  const hasText = () => Boolean((fbState.expected || "").trim() || (fbState.happened || "").trim());
+  const missingNow = () => step === 1
+    ? (fbState.module ? "" : "Pick an area above first")
+    : step === 2
+      ? (hasText() ? "" : "Add a line in \u201cWhat did you expect?\u201d or \u201cWhat actually happened?\u201d")
+      : "";
+  let missing = missingNow();
   const labels = ["", "Next: what happened \u2192", "Next: review \u2192", ""];
   let html = `<span class="fb-spacer">Step ${step} of 3</span>`;
   if (missing) html += '<span class="fb-need" id="fbNeed" hidden></span>';
@@ -5388,10 +5415,10 @@ function fbNav() {
     const need = $("#fbNeed");
     if (need) need.dataset.msg = missing;
   }
-  const fbNeed = () => {
+  const fbNeed = (msg) => {
     const el = $("#fbNeed");
     if (!el) return;
-    el.textContent = "\u26a0 " + el.dataset.msg;
+    el.textContent = "\u26a0 " + (msg || el.dataset.msg || "");
     el.hidden = false;
   };
   const clearNeed = () => { const el = $("#fbNeed"); if (el) el.hidden = true; };
@@ -5402,26 +5429,28 @@ function fbNav() {
   });
   const next = $("#fbNext");
   if (next) next.addEventListener("click", () => {
-    if (missing) { fbNeed(); return; }
+    // Re-evaluate NOW. Never trust the flag captured when this bar was drawn.
+    missing = missingNow();
+    if (missing) { fbNeed(missing); return; }
     advance();
   });
 
-  // Keep the button honest as the user works: typing in step 2 (or the console
-  // toggle) can satisfy the step, and clearing it can un-satisfy it. Re-render
-  // only the action bar — never the fields, so focus and caret are untouched.
-  if (missing && step === 2) {
-    const ready = () => Boolean((fbState.expected || "").trim() || (fbState.happened || "").trim());
-    const fieldIds = ["#fbExpected", "#fbHappened", "#fbKind", "#fbConsole"];
-    fieldIds.forEach((id) => {
-      const root = $(id);
-      if (!root || !root.addEventListener) return;
-      const ev = id === "#fbExpected" || id === "#fbHappened" ? "input" : "click";
-      root.addEventListener(ev, () => {
-        if (!ready()) return;
-        const btn = $("#fbNext");
-        if (btn) { btn.classList.remove("fb-notready"); btn.disabled = false; }
-        clearNeed();
-      });
+  // Keep the cue honest as the user works: typing satisfies the step and clearing
+  // it un-satisfies it again. This only refreshes the VISUAL cue (dimming +
+  // warning) — it no longer decides whether Next works, because Next re-evaluates
+  // on click. It also re-renders just the action bar, never the fields, so the
+  // caret and focus are untouched while typing.
+  if (step === 2) {
+    const refresh = () => {
+      const msg = missingNow();
+      const btn = $("#fbNext");
+      if (btn) btn.classList.toggle("fb-notready", Boolean(msg));
+      if (msg) { const el = $("#fbNeed"); if (el) el.dataset.msg = msg; }
+      else clearNeed();
+    };
+    ["#fbExpected", "#fbHappened"].forEach((id) => {
+      const el = $(id);
+      if (el) el.addEventListener("input", refresh);
     });
   }
   const copy = $("#fbCopy");
