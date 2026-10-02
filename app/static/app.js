@@ -4969,22 +4969,69 @@ function fbNav() {
   // gate — a cross-cutting report ("the app is slow", "login confuses people")
   // genuinely has no single screen, and forcing a choice would make reporters
   // pick anything just to get past the step.
-  const canNext = fbState.step === 1 ? Boolean(fbState.module)
-    : fbState.step === 2 ? Boolean((fbState.expected || "").trim() || (fbState.happened || "").trim())
-    : true;
+  //
+  // The button is NEVER `disabled`. A disabled button explains nothing: the
+  // click does nothing, says nothing and moves nothing, so people press it
+  // again and again. Rijoy hit exactly that ("I had to press next a few times
+  // before it actually moved"). Now the click is always accepted and, when
+  // something is missing, it says what and points at it.
+  const step = fbState.step;
+  const hasText = Boolean((fbState.expected || "").trim() || (fbState.happened || "").trim());
+  const missing = step === 1 ? (fbState.module ? "" : "Pick an area above first")
+    : step === 2 ? (hasText ? "" : "Add a line in \u201cWhat did you expect?\u201d or \u201cWhat actually happened?\u201d")
+    : "";
   const labels = ["", "Next: what happened \u2192", "Next: review \u2192", ""];
-  let html = `<span class="fb-spacer">Step ${fbState.step} of 3</span>`;
-  html += `<button type="button" class="btn ghost" id="fbCancel">${fbState.step === 1 ? "Cancel" : "\u2190 Back"}</button>`;
-  if (fbState.step === 3) {
+  let html = `<span class="fb-spacer">Step ${step} of 3</span>`;
+  if (missing) html += '<span class="fb-need" id="fbNeed" hidden></span>';
+  html += `<button type="button" class="btn ghost" id="fbCancel">${step === 1 ? "Cancel" : "\u2190 Back"}</button>`;
+  if (step === 3) {
     html += `<button type="button" class="btn ghost" id="fbCopy">\ud83d\udccb Copy instead</button>`;
     html += `<button type="button" class="btn primary" id="fbGo">Open GitHub with this filled in \u2197</button>`;
   } else {
-    html += `<button type="button" class="btn primary" id="fbNext" ${canNext ? "" : "disabled"}>${labels[fbState.step]}</button>`;
+    // Soft cue: dimmed when not ready, but still clickable.
+    html += `<button type="button" class="btn primary ${missing ? "fb-notready" : ""}" id="fbNext">${labels[step]}</button>`;
   }
   $("#fbActions").innerHTML = html;
-  $("#fbCancel").addEventListener("click", () => { fbState.step === 1 ? fbClose() : (fbState.step--, fbRender()); });
+  if (missing) {
+    const need = $("#fbNeed");
+    if (need) need.dataset.msg = missing;
+  }
+  const fbNeed = () => {
+    const el = $("#fbNeed");
+    if (!el) return;
+    el.textContent = "\u26a0 " + el.dataset.msg;
+    el.hidden = false;
+  };
+  const clearNeed = () => { const el = $("#fbNeed"); if (el) el.hidden = true; };
+  const advance = () => { fbState.step++; fbRender(); };
+
+  $("#fbCancel").addEventListener("click", () => {
+    if (step === 1) fbClose(); else { fbState.step--; fbRender(); }
+  });
   const next = $("#fbNext");
-  if (next) next.addEventListener("click", () => { if (canNext) { fbState.step++; fbRender(); } });
+  if (next) next.addEventListener("click", () => {
+    if (missing) { fbNeed(); return; }
+    advance();
+  });
+
+  // Keep the button honest as the user works: typing in step 2 (or the console
+  // toggle) can satisfy the step, and clearing it can un-satisfy it. Re-render
+  // only the action bar — never the fields, so focus and caret are untouched.
+  if (missing && step === 2) {
+    const ready = () => Boolean((fbState.expected || "").trim() || (fbState.happened || "").trim());
+    const fieldIds = ["#fbExpected", "#fbHappened", "#fbKind", "#fbConsole"];
+    fieldIds.forEach((id) => {
+      const root = $(id);
+      if (!root || !root.addEventListener) return;
+      const ev = id === "#fbExpected" || id === "#fbHappened" ? "input" : "click";
+      root.addEventListener(ev, () => {
+        if (!ready()) return;
+        const btn = $("#fbNext");
+        if (btn) { btn.classList.remove("fb-notready"); btn.disabled = false; }
+        clearNeed();
+      });
+    });
+  }
   const copy = $("#fbCopy");
   if (copy) copy.addEventListener("click", () => {
     const text = fbBody();
