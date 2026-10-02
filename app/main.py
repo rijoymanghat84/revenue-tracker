@@ -2049,6 +2049,13 @@ def api_dashboard(request: Request, month: str = "", client: str = "",
                                  _split_csv(pm), owners)
         wr = _month_week_range(months, month)
         rows = build_dashboard_rows(resources, weeks, wr, _till_date_cap(weeks))
+        # GH-32: a project can EXIST (projects table) with nobody assigned to it,
+        # and then it contributes no resource rows and so no dashboard row at all.
+        # Adding one silently vanished, which read as "it didn't get added"
+        # (Rijoy, 2026-10-01). Surface it as an explicit zero row instead.
+        rows["groups"] = rows["groups"] + _empty_project_groups(
+            conn, all_res, _split_csv(client), _split_csv(project),
+            _split_csv(pm), owners)
 
         # Currency selector. When a single currency is chosen, drop the other
         # currency's rows/totals entirely so the KPI tiles and table agree.
@@ -2057,12 +2064,20 @@ def api_dashboard(request: Request, month: str = "", client: str = "",
             rows = {"groups": [g for g in rows["groups"] if g["currency"] == cur],
                     "totals": [t for t in rows["totals"] if t["currency"] == cur]}
 
-        # Option lists — always from the FULL set (see docstring).
+        # Option lists — always from the FULL set (see docstring). GH-32: projects
+        # that exist but have no resources belong here too, otherwise a project
+        # you just created cannot even be filtered to.
         all_clients = sorted({(r.get("client") or "").strip() for r in all_res
                               if (r.get("client") or "").strip()}, key=lambda s: s.lower())
-        proj_pairs = sorted({((r.get("client") or "").strip(), (r.get("project") or "").strip())
-                             for r in all_res if (r.get("project") or "").strip()},
-                            key=lambda t: (t[0].lower(), t[1].lower()))
+        proj_pairs = {((r.get("client") or "").strip(), (r.get("project") or "").strip())
+                      for r in all_res if (r.get("project") or "").strip()}
+        try:
+            proj_pairs |= {((d["client"] or "").strip(), (d["project"] or "").strip())
+                           for d in conn.execute("SELECT client, project FROM projects").fetchall()
+                           if (d["project"] or "").strip()}
+        except sqlite3.Error:
+            pass
+        proj_pairs = sorted(proj_pairs, key=lambda t: (t[0].lower(), t[1].lower()))
         pm_opts = sorted({v for v in owners.values() if v}, key=lambda s: s.lower())
         has_unassigned = any(
             (r.get("project") or "").strip()
@@ -2221,6 +2236,70 @@ def _actuals_financials(r: dict, week_range: tuple[int, int] | None = None,
         "pending_ot_rev": round(pending_ot_rev, 2),
         "pending_ot_exp": round(pending_ot_exp, 2),
     }
+
+
+def _empty_project_groups(conn: sqlite3.Connection, all_res: list[dict],
+                          clients: list[str], projects: list[str],
+                          pms: list[str], owners: dict) -> list[dict]:
+    """Dashboard rows for projects that EXIST but have nobody assigned (GH-32).
+
+    The dashboard is built from `resources` rows, so a project with no resources
+    totals to nothing and produced no row at all — adding a project looked like
+    it had silently failed. These come back as explicit zero rows, flagged
+    `empty` so the UI can mark them as awaiting their first person.
+
+    Respects the live filters: an empty project is dropped when the client,
+    project or PM filter excludes it, so filtering behaves exactly as before.
+    """
+    cset = {_norm(c) for c in clients}
+    pset: set[tuple[str | None, str]] = set()
+    for p in projects:
+        if " · " in p:
+            c, pr = p.split(" · ", 1)
+            pset.add((_norm(c), _norm(pr)))
+        else:
+            pset.add((None, _norm(p)))
+    pmset = {_norm(p) for p in pms}
+    want_unassigned = UNASSIGNED_PM in pms
+
+    have = {(_norm((r.get("client") or "")), _norm((r.get("project") or "")))
+            for r in all_res if (r.get("project") or "").strip()}
+
+    out: list[dict] = []
+    try:
+        defined = conn.execute("SELECT client, project FROM projects").fetchall()
+    except sqlite3.Error:
+        return out
+    for d in defined:
+        raw_c, raw_p = (d["client"] or "").strip(), (d["project"] or "").strip()
+        if not raw_p:
+            continue
+        c, p = _norm(raw_c), _norm(raw_p)
+        if (c, p) in have:
+            continue                      # real rows already cover it
+        if not raw_c:
+            continue                      # build_dashboard_rows skips client-less rows
+        if cset and c not in cset:
+            continue
+        if pset and not any((pc is None and p == pn) or (pc == c and p == pn)
+                            for pc, pn in pset):
+            continue
+        if pmset or want_unassigned:
+            owner = owners.get((raw_c, raw_p))
+            hit = bool(want_unassigned and not owner)
+            if owner and _norm(owner) in pmset:
+                hit = True
+            if not hit:
+                continue
+        out.append({
+            "country": "—", "client": raw_c, "project": raw_p,
+            "revenue": 0.0, "expense": 0.0, "actual_rev": 0.0, "actual_exp": 0.0,
+            "difference": 0.0, "add_rev": 0.0, "add_exp": 0.0,
+            "adj_rev": 0.0, "adj_exp": 0.0,
+            "currency": "EUR" if c in EU_COUNTRIES else "USD",
+            "resources": 0, "empty": True,
+        })
+    return out
 
 
 def build_dashboard_rows(resources: list[dict], weeks: list[str],

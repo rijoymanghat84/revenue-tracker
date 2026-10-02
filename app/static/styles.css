@@ -277,6 +277,14 @@ body {
 .kpi .v { font-size: 18px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .kpi .sub2 { font-size: 10.5px; color: var(--muted); margin-top: 1px; white-space: nowrap; }
 
+/* ---------- GH-32: projects that exist with no resources assigned ---------- */
+.dash-empty-row td { background: rgba(var(--accent-rgb, 90,160,255), 0.05); }
+.dash-empty {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase;
+  color: var(--accent); border: 1px solid rgba(var(--accent-rgb, 90,160,255), 0.45);
+  border-radius: 999px; padding: 1px 6px; margin-left: 6px; white-space: nowrap;
+}
+
 .tabs { display: flex; background: var(--panel-strong); border-radius: 10px; padding: 3px; }
 .tab {
   border: 0; background: transparent; color: var(--muted);
