@@ -993,9 +993,15 @@ function openMoveModal(pid) {
     $("#mvUntilWrap").classList.toggle("hidden", e.target.value !== "loan");
   });
   upd();
-  $("#mvClose").addEventListener("click", closeMoveModal);
-  $("#mvCancel").addEventListener("click", closeMoveModal);
-  $("#mvSubmit").addEventListener("click", submitMove);
+  // `moveClose` lives in the modal HEADER (outside #moveBody); `mvCancel` and
+  // `mvSubmit` are inside the body we just wrote. Guarded individually: a
+  // mismatch here silently killed the whole submit flow — the API suite passed
+  // because it never touches the DOM wiring, and only driving the real modal in
+  // a browser caught it (workbench.js:996, "Cannot read properties of null").
+  const wire = (sel, fn) => { const el = $(sel); if (el) el.addEventListener("click", fn); };
+  wire("#moveClose", closeMoveModal);
+  wire("#mvCancel", closeMoveModal);
+  wire("#mvSubmit", submitMove);
 }
 
 function closeMoveModal() {

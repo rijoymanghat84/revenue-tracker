@@ -9,6 +9,78 @@ wasn't one) and the commit.
 
 ---
 
+## 2026-10-02 — My Projects panel: fill the allocation, Edit pre-fills it, Remove asks resigned vs bench (GH-54)
+
+**Rijoy (PM login → My Projects → click a project):** three changes to the right-hand
+resource panel, where each resource has Edit and Remove and some details.
+
+1. **The planned/allocation must not come up empty.** ⚠️ **Measured: 62 of the 66
+   resource rows have `resources.allocation_pct` = NULL** — the original Excel
+   import carried per-week *hours*, never an allocation %, and only rows created
+   through the assignment dialog ever got one. So the panel's `Allocation` and
+   `Weekly hrs` columns, and the Edit dialog's seed, rendered `—` for almost the
+   whole book even though the plan is fully populated (`weekly_hours`, 1,898 rows,
+   63,710.25 h).
+   **Fix: derive it, don't migrate it.** The % is computed from each resource's
+   **peak** week ÷ its capacity, rounded to the nearest quarter with a **25%
+   floor** for any positive plan (4h → 25%, 20h → 50%, 40h → 100%). **Nothing is
+   written** — `weekly_hours` is untouched, so the money cannot move (planned total
+   unchanged at 63,710.25 through every deploy). Marked **"from plan"** on screen so
+   a derived number is never mistaken for one someone typed; a real Edit save
+   stores it. A row with no planned hours still shows —, not 0%.
+   *Why the floor:* flooring (112% → 100%, correct for *benching*) rendered a
+   4h/week plan as **0%**, which reads as "not allocated at all". Caught by
+   measuring live: 8 resources were still blank after the first deploy.
+
+2. **Edit pre-fills the resource — you don't re-select it.** Four real defects, all
+   fixed:
+   - the dialog rendered a **full person picker** even when editing, so a PM had to
+     re-find the person they had just clicked Edit on;
+   - it seeded the person's **home title**, not the title the row is actually booked
+     under. **8 live rows are booked under a different title** (a QA booked as a
+     Quadient Developer) — so Edit showed the wrong title and a save silently
+     re-titled the booking;
+   - allocation defaulted to a flat **50%** and the dates came up **blank**;
+   - **and those 8 rows were unsaveable**: `PUT /api/assignments/{rid}` refused a
+     non-home title with no reason, which was true of all 8. The reason is now
+     required only when the title actually **changes** (a PM still cannot introduce
+     a non-approved title), so legacy bookings edit cleanly.
+
+3. **Edit only rewrites the plan when the allocation really changes.** Rijoy:
+   *"leave the weeks exactly as they are unless I actually change the allocation %"*.
+   Every save used to re-spread `pct × capacity` across the window, so opening Edit
+   to fix a title **flattened a varied plan** (40h most weeks, 20h in others). The
+   write now happens only on a real change, and a **blank posted date is not read as
+   "clear the window"** — with legacy rows the window is derived, so a no-op save
+   posts blanks and would otherwise have re-spread the plan as full-year.
+
+4. **Remove asks "did they resign?"** — a real in-app dialog replaces the browser
+   `confirm()` (which only warned about deleted hours). It names the hours that go
+   with the removal and offers:
+   - **Not resigned → back on Bench** for the share that actually **frees up**,
+     measured *after* the removal (50% here + 50% elsewhere benches **50%**, not
+     100%), through the same 100% validator as any assignment, on a **zero-rate**
+     Bench row so it is financially inert;
+   - **Resigned → the person is marked Inactive** (`people.active = 0`, badged
+     "Inactive" on the admin People list).
+   Resigning while still on **another** project **warns and needs a second press**;
+   the server re-checks (409 `still_assigned`) and never silently clears another
+   project's data. Removing the **Bench row itself does not re-bench** (circular),
+   and a resource with no person record says so instead of pretending to bench.
+
+**Commits:** `087cefa` (feature), `2797398` (the 25% floor), `556d24d` (superseded
+attempt, reverted by a concurrent writer).
+**Verified:** `tests/test_gh54_panel.py` (37 assertions, temp DB) covers the
+derivation, plan preservation, the grandfather rule and **every** Remove branch
+including the 409 and the Bench/unlinked edges — added to `scripts/run-tests.sh`
+(now 5 suites, all green). A 24-assertion Node harness over the shipped
+`workbench.js` proves the dialog payloads and the pre-fill. Then driven **live**:
+assign → no-op edit (weeks byte-identical) → remove → Bench (zero-rate, person still
+active), with every touched table restored to baseline (66 resources / 49 people /
+17 projects / 63,710.25 h).
+
+---
+
 ## 2026-10-02 — Multi-select compare: availability + current allocations (GH-52)
 
 **Rijoy:** *"there should be a way to select multiple resource to compare and see

@@ -6436,16 +6436,34 @@ def _validate_move(conn, body: AllocationRequestBody, user: dict,
     # You cannot release more than that project actually holds. Without this a
     # request could ask for 100% off a 25% booking and the approval would silently
     # drive the source negative (clamped to 0), quietly over-crediting the target.
+    #
+    # IMPORTANT: `resources.allocation_pct` is NULL on 62 of the 66 live rows —
+    # the original Excel import carried per-week HOURS, never a %. The UI (and
+    # _derived_allocation) reconstruct the share from those hours, so reading the
+    # column alone would report 0% for almost everyone and block every move.
+    # Measured live 2026-10-02: Deepak Kumar's row has allocation_pct NULL while
+    # his weeks hold 40h (=100% of a 40h capacity). Fall back to the same derived
+    # value the rest of the app shows.
     src_pct = float(src["allocation_pct"] or 0.0)
     if not src_pct:
         sp = parse_phases(src["phases"])
-        src_pct = float(sp[0]["allocation_pct"] or 0.0) if sp else 0.0
+        src_pct = float(sp[0]["allocation_pct"] or 0.0) if sp and sp[0]["allocation_pct"] else 0.0
+    if not src_pct:
+        hrs = _hours_map(src["id"], conn)
+        peak_hours = max(hrs.values()) if hrs else 0.0
+        cap_src = float(src["capacity"] or CAP_WEEK_HOURS) or CAP_WEEK_HOURS
+        src_pct = _snap_quarter(peak_hours / cap_src * 100.0)
+    if src_pct <= 0:
+        raise HTTPException(
+            400, f"{person['name']} has no planned allocation on "
+                 f"{body.from_client} · {body.from_project} to move.")
     if float(body.from_pct) > src_pct + 1e-9:
         raise HTTPException(
             400, f"{person['name']} is only at {src_pct:g}% on "
                  f"{body.from_client} · {body.from_project} — "
                  f"you cannot release {body.from_pct:g}%.")
     return {"person": person, "src": src, "effective_from_week": eff,
+            "src_pct": src_pct,
             "to_client": to_client, "to_project": to_project, "weeks": weeks}
 
 
@@ -6541,9 +6559,20 @@ def _apply_move(conn, rec, actor: str) -> list[int]:
     src_phases = parse_phases(src["phases"])
     start_d = _iso_date(src["start_date"])
     # Weeks strictly before the effective week keep the old %.
+    #
+    # The share being reduced FROM must be the value the app actually shows. On a
+    # legacy row (`allocation_pct` NULL, share derived from planned hours) reading
+    # the column alone gives 0 and the reduction would zero the whole booking
+    # instead of halving it — so fall back to the derived percentage, exactly as
+    # _validate_move did.
     old_pct = float(src["allocation_pct"] or 0.0)
     if not old_pct and src_phases:
         old_pct = float(src_phases[0]["allocation_pct"] or 0.0)
+    if not old_pct:
+        hrs = _hours_map(src["id"], conn)
+        peak_hours = max(hrs.values()) if hrs else 0.0
+        cap_src = float(src["capacity"] or CAP_WEEK_HOURS) or CAP_WEEK_HOURS
+        old_pct = _snap_quarter(peak_hours / cap_src * 100.0)
     new_pct = max(0.0, old_pct - float(rec["from_pct"] or 0.0))
 
     if eff_date and start_d and eff_date > start_d:
