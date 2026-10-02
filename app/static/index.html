@@ -12,7 +12,7 @@
 <link rel="icon" type="image/png" sizes="16x16" href="/icons/favicon-16.png">
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
 <title>Recon</title>
-<link rel="stylesheet" href="/styles.css?v=84">
+<link rel="stylesheet" href="/styles.css?v=85">
 </head>
 <body>
 <div class="bg-glow"></div>
@@ -338,6 +338,11 @@
        BEFORE you try to assign — so a 100% clash is prevented, not reported.
        PM-only view; admins reach it through Team & Access → People. -->
   <section id="workbenchView" data-view="workbench" class="view hidden">
+    <!-- "Viewing as PM" banner (2026-10-02): shown only when an admin arrived
+         here by clicking a project on the Dashboard. It names the PM whose
+         screen this is and carries the way back. Hidden for a real PM, whose
+         workbench is simply their own screen. -->
+    <div class="wb-viewas glass hidden" id="wbViewAs"></div>
     <div class="wb-grid">
       <div class="wb-master glass">
         <div class="wb-master-head">
@@ -853,13 +858,13 @@
      not executed yet. Getting this order wrong threw a ReferenceError that
      aborted the REST of app.js — including boot() — so the entire app failed to
      initialise. -->
-<script src="/workbench.js?v=13"></script>
+<script src="/workbench.js?v=14"></script>
 <!-- Generic column sorting for EVERY table (2026-10-02). Self-initialising and
      delegated, so it needs no per-table wiring and survives every re-render. -->
 <script src="/tablesort.js?v=4"></script>
 <!-- weeksheet.js also loads BEFORE app.js, for the same reason as workbench.js. -->
 <script src="/weeksheet.js?v=11"></script>
-<script src="/app.js?v=114"></script>
+<script src="/app.js?v=115"></script>
 <script>
   // PWA: register the service worker (only after load; skip on failure)
   if ("serviceWorker" in navigator) {
