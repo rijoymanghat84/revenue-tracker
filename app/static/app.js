@@ -4839,19 +4839,242 @@ setInterval(() => aFlush(), 3000);
 
 const FB_REPO = "https://github.com/rijoymanghat84/revenue-tracker";
 
-// Module -> screens, mirroring the real tabs. Kept explicit (not generated from
-// the DOM) so the wording reads like a person describing a screen, not a view id.
-const FB_MODULES = [
-  ["dash", "\u25a4", "Dashboard", ["Overview cards", "Client / project table", "Filters", "Month scope"]],
-  ["planned", "\u270e", "Planned", ["Grid (hours and rates)", "Add / Edit Resource", "Add / Edit Client Project", "Planned Hours wizard", "Import / Export"]],
-  ["week", "\u270d", "Weekly entry", ["Week sheet", "Overtime", "Save / submit"]],
-  ["actuals", "\u2713", "Actuals", ["Week entry", "Reconciliation (why a number changed)", "Overtime approval", "Filters / month view"]],
-  ["workbench", "\u25a6", "My Projects", ["Project list", "Assignments / load"]],
-  ["rates", "\u20bf", "Rate Card", ["Rate library", "Apply to resources", "Update all pricing"]],
-  ["util", "\u25d4", "Utilization", ["Month view", "Week view", "Available people", "Filters"]],
-  ["access", "\ud83d\udd11", "Team & Access", ["Team members", "Permissions", "Capacity", "Database security"]],
-  ["logs", "\ud83d\udd58", "Logs", ["Activity log", "Who changed what"]],
-];
+/* ============ CONTROL DISCOVERY — read the LIVE screen ============
+   Why this is generated and not a list: the form used to carry a hand-written
+   `FB_MODULES` of four "screens" per area. It could only ever be as complete as
+   the last person to remember it, so real controls (Select week, Hours / %,
+   Import / Export, the quick theme swatch) were simply missing — and any button
+   added later would be missing too, forever. the owner's requirement is that a NEW
+   control shows up on its own.
+
+   So the options are read off the DOM at the moment the form opens:
+     - the sections carry `data-view`, so a new tab needs no entry here at all;
+     - controls are found by their semantics (button / select / input / link /
+       <summary>), not by an inventory;
+     - every area also offers a free-text "Something else" escape hatch, plus a
+       whole-area option, so nothing is unreachable when the scan is imperfect.
+
+   Names are made human by fbHuman(): the visible label if there is one, else the
+   id / class in words, with run-together camelCase split. Ids are kept as the
+   stable key so a rename shows up as a change rather than silently matching the
+   wrong thing. */
+
+// View id -> display name and icon. Display-only: an unknown view falls back to
+// a prettified id rather than disappearing (see fbViewMeta).
+const FB_VIEW_LABEL = {
+  dash: ["\u25a4", "Dashboard"], planned: ["\u270e", "Planned"],
+  week: ["\u270d", "Weekly entry"], actuals: ["\u2713", "Actuals"],
+  workbench: ["\u25a6", "My Projects"], rates: ["\u20bf", "Rate Card"],
+  util: ["\u25d4", "Utilization"], access: ["\U0001f511", "Team & Access"],
+  logs: ["\U0001f558", "Logs"],
+};
+
+function fbViewMeta(view) {
+  const m = FB_VIEW_LABEL[view];
+  return m ? { icon: m[0], label: m[1] } : { icon: "\u25aa", label: fbHuman(view) };
+}
+
+function fbHuman(raw) {
+  if (!raw) return "";
+  return String(raw)
+    .replace(/^#/, "")
+    .replace(/^(fb|btn|um|tp|tq|util|dash|wk|wb|a|p)[-_]?/i, (m) => (/^(a|p)$/i.test(m) ? m : ""))
+    .replace(/[-_]+/g, " ")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^./, (c) => c.toUpperCase());
+}
+
+// The label a person would use. Prefer VISIBLE text (most honest — it is what
+// the reporter can see), then aria-label/title, then the id, then the class.
+function fbControlName(el) {
+  const tag = el.tagName.toLowerCase();
+  // A <select> whose textContent is used would concatenate every <option> — the
+  // first version reported the week dropdown as "Last 60 Last 150 Last 400".
+  // Use its own label/aria, then the id, then the nearest <label>, then a noun.
+  if (tag === "select" || tag === "input" || tag === "textarea") {
+    const aria = el.getAttribute("aria-label") || el.getAttribute("title");
+    if (aria) return fbHuman(aria);
+    if (el.placeholder) return fbHuman(el.placeholder);
+    if (el.id) return fbHuman(el.id);
+    const lbl = el.closest("label");
+    if (lbl) {
+      const t = (lbl.textContent || "").replace(/\s+/g, " ").trim();
+      if (t && t.length <= 34) return t;
+    }
+    return tag === "select" ? "Dropdown" : "Text field";
+  }
+  const vis = (el.textContent || "").replace(/\s+/g, " ").trim();
+  if (vis && vis.length <= 34) return vis;
+  const aria = el.getAttribute("aria-label") || el.getAttribute("title");
+  if (aria) return fbHuman(aria);
+  if (el.id) return fbHuman(el.id);
+  const cls = (el.getAttribute("class") || "").split(/\s+/)
+    .filter((c) => c && !/^(hidden|on|active|mini|ghost|primary|danger|small|big)$/.test(c));
+  return fbHuman(cls[0] || tag);
+}
+
+// A stable key for the same control across sessions. Prefers the id (a rename
+// then reads as a change), else tag+class+name, else hash of a long label.
+function fbControlKey(el, name) {
+  if (el.id) return "#" + el.id;
+  const cls = (el.getAttribute("class") || "").split(/\s+/).filter(Boolean)[0] || "";
+  const nm = el.getAttribute("name") || "";
+  const sig = `${el.tagName.toLowerCase()}|${cls}|${nm}|${(el.textContent || "").trim().slice(0, 24)}`;
+  return sig;
+}
+
+/* Controls worth reporting on. Deliberately excludes:
+     - the feedback form's own modal (#fbModal) — reporting a bug in the bug form
+       from inside the bug form is a loop;
+     - the hidden export link / file input (the toolbar buttons cover them);
+     - anything in a `hidden` subtree, anything display:none, and zero-size nodes;
+     - the theme picker's 15 per-theme swatch rows (each is a .tp-row button) —
+       "Sepia" is not a control the user means, "the theme picker" is.
+   Everything else that a person can see and click is included, which is the
+   whole point: completeness beats curation here. */
+const FB_CTRL_SEL = [
+  "button", "select", "input:not([type=hidden])", "textarea", "a[href]",
+  "summary", "[role=button]", "[role=tab]", "[role=switch]",
+].join(",");
+
+function fbScanRoot() {
+  return document.querySelector("#fbModal") ? document.body : document.body;
+}
+
+function fbVisible(el) {
+  if (!el || el.closest("#fbModal")) return false;
+  if (el.closest(".hidden, [hidden]")) return false;
+  if (el.closest(".tp-list")) return false;             // theme swatch rows
+  if (el.classList.contains("rail-hidden")) return false;
+  if (el.id === "fileInput" || el.id === "btnExport") return false;
+  const r = el.getBoundingClientRect();
+  if (r.width < 6 || r.height < 6) return false;        // zero-size / collapsed
+  const cs = getComputedStyle(el);
+  if (cs.display === "none" || cs.visibility === "hidden" || cs.opacity === "0") return false;
+  return true;
+}
+
+/* Walk every view's section and collect its visible controls.
+ * Returns [{ view, icon, label, controls:[{key,name,kind,scope}] }].
+ *
+ * IMPORTANT: the other views are `hidden` while the user is on one tab, so a
+ * naive `getBoundingClientRect()` test finds almost nothing outside the current
+ * screen — the first version reported 1 control for Dashboard and 0 for Logs.
+ * Each section is therefore measured with its `hidden` class lifted, then put
+ * back, so the SCAN sees the screen as it would look when you are on it. This is
+ * the difference between "reports on this tab" and "reports on the whole app". */
+function fbScanControls() {
+  const out = [];
+  document.querySelectorAll("section.view[data-view]").forEach((sec) => {
+    const view = sec.dataset.view;
+    const meta = fbViewMeta(view);
+    const wasHidden = sec.classList.contains("hidden");
+    if (wasHidden) sec.classList.remove("hidden");
+    // Reveal the section but keep it out of the way. Off-screen ABSOLUTE
+    // positioning (not `visibility:hidden`) is what makes this work: the section
+    // is laid out for real, so getBoundingClientRect() and computed styles are
+    // genuine, while fbVisible()'s own visibility check stays meaningful. Setting
+    // visibility:hidden here would make the scanner reject every control it was
+    // trying to find.
+    const prevPos = sec.style.position;
+    const prevLeft = sec.style.left, prevTop = sec.style.top;
+    sec.style.position = "absolute";
+    sec.style.left = "-10000px";
+    sec.style.top = "0";
+
+    const seen = new Set();
+    const controls = [];
+    sec.querySelectorAll(FB_CTRL_SEL).forEach((el) => {
+      if (!fbVisible(el)) return;
+      const tag = el.tagName.toLowerCase();
+      const name = fbControlName(el);
+      if (!name || name.length < 2) return;
+      const key = fbControlKey(el, name);
+      if (seen.has(key)) return;
+      seen.add(key);
+      const kind = tag === "select" ? "select"
+        : (tag === "input" || tag === "textarea") ? "field"
+        : (tag === "a") ? "link" : "button";
+      controls.push({ key, name, kind, scope: view });
+    });
+
+    // restore
+    sec.style.position = prevPos;
+    sec.style.left = prevLeft;
+    sec.style.top = prevTop;
+    if (wasHidden) sec.classList.add("hidden");
+
+    if (controls.length) {
+      out.push({ view, icon: meta.icon, label: meta.label, controls });
+    }
+  });
+
+  // The left rail. Import / Export, the month scope and the source/mode selects
+  // live HERE, outside every view section — which is exactly why the old
+  // hand-written list never offered them: it only ever described tab contents.
+  const rail = document.querySelector("#rail");
+  if (rail) {
+    const seenRail = new Set();
+    const ctrls = [];
+    rail.querySelectorAll(FB_CTRL_SEL).forEach((el) => {
+      if (!fbVisible(el)) return;
+      if (el.closest(".rail-hidden")) return;
+      // The rail's Section Panel tabs are navigation to the screens that are
+      // already area chips — listing "Dashboard / Planned / …" as reportable
+      // CONTROLS would be meaningless (nobody reports a bug in "Planned" from a
+      // nav button; they report it on the Planned screen).
+      if (el.closest("#tabs")) return;
+      const tag = el.tagName.toLowerCase();
+      const nm = fbControlName(el);
+      if (!nm || nm.length < 2) return;
+      const k = fbControlKey(el, nm);
+      if (seenRail.has(k)) return;
+      seenRail.add(k);
+      const kind = tag === "select" ? "select"
+        : (tag === "input" || tag === "textarea") ? "field"
+        : (tag === "a") ? "link" : "button";
+      ctrls.push({ key: k, name: nm, kind, scope: "rail" });
+    });
+    if (ctrls.length) {
+      out.push({ view: "rail", icon: "\U0001f4c2", label: "Left panel (all screens)",
+                 controls: ctrls });
+    }
+  }
+
+  // The shared top strip: worth reporting on from ANY tab, because that is where
+  // a person is standing when it misbehaves.
+  const shared = [];
+  const topbar = document.querySelector("#topbar");
+  if (topbar) {
+    const seenTop = new Set();
+    topbar.querySelectorAll(FB_CTRL_SEL).forEach((el) => {
+      if (!fbVisible(el)) return;
+      if (el.closest(".user-menu")) return;             // covered by "Account menu"
+      const nm = fbControlName(el);
+      if (!nm || nm.length < 2) return;
+      const k = fbControlKey(el, nm);
+      if (seenTop.has(k)) return;
+      seenTop.add(k);
+      shared.push({ key: k, name: nm, kind: "button", scope: "shared" });
+    });
+  }
+  if (shared.length) {
+    out.push({ view: "__shared__", icon: "\u2b50", label: "Top bar (all screens)",
+               controls: shared });
+  }
+  return out;
+}
+
+// Cached per open: the scan reads layout (getBoundingClientRect), so doing it
+// once when the form opens keeps it cheap and keeps the option list stable while
+// the user works through the steps.
+let FB_SCAN = null;
+function fbControls() {
+  if (!FB_SCAN) FB_SCAN = fbScanControls();
+  return FB_SCAN;
+}
 
 // Ring buffer of console errors so an opt-in report can carry real evidence.
 const FB_ERRORS = [];
@@ -4866,6 +5089,7 @@ window.addEventListener("unhandledrejection", (e) => {
 
 const fbState = {
   step: 1, module: null, screen: null, kind: "bug",
+  controls: [], otherCtl: "",
   severity: "Blocks my work", freq: "Every time",
   expected: "", happened: "", console: "off", shots: [], version: "unknown", _title: null,
 };
@@ -4892,9 +5116,17 @@ function fbMonth() {
 }
 
 function fbPath() {
-  const m = FB_MODULES.find((x) => x[0] === fbState.module);
-  if (!m) return "";
-  return fbState.screen ? `${m[2]} \u203a ${fbState.screen}` : m[2];
+  // Built from the LIVE scan, so the label always matches the screen that exists
+  // (the old version looked the module up in a hand-written table and returned
+  // "" for anything not listed — which silently dropped the location from the
+  // report for every control that had been forgotten).
+  const area = fbControls().find((a) => a.view === fbState.module);
+  if (!area) return fbState.module === "__app__" ? "Whole app" : "";
+  const picked = (fbState.controls || []).filter(Boolean);
+  const extra = (fbState.otherCtl || "").trim();
+  const parts = picked.slice();
+  if (extra) parts.push(extra);
+  return parts.length ? `${area.label} \u203a ${parts.join(", ")}` : area.label;
 }
 
 function fbTitleText() {
@@ -4906,8 +5138,20 @@ function fbTitleText() {
 
 function fbBody() {
   const me = state.me || {};
+  const picked = (fbState.controls || []).filter(Boolean);
+  const extra = (fbState.otherCtl || "").trim();
+  // Name the controls explicitly — this is the line that makes a report actionable
+  // ("Export is dead on Planned") instead of a vague "something on Planned".
+  const ctrlLine = picked.length || extra
+    ? "### Control(s)\n" + [
+        ...picked.map((c) => `- ${c}`),
+        ...(extra ? [`- ${extra} _(typed by the reporter)_`] : []),
+      ].join("\n") + "\n\n"
+    : "";
   const lines = [
     "### Where", fbPath() || "(not specified)", "",
+    ctrlLine ? ctrlLine.trimEnd() : null,
+    "",
     "### What I expected", fbState.expected || "(not given)", "",
     "### What happened", fbState.happened || "(not given)", "",
     "### App context (automatic)",
@@ -4917,7 +5161,7 @@ function fbBody() {
     `Month   : ${fbMonth()}`,
     `Browser : ${fbBrowser()}`,
     `Type    : ${fbState.kind} \u00b7 ${fbState.severity} \u00b7 ${fbState.freq}`,
-  ];
+  ].filter((l) => l !== null);
   if (fbState.console === "on") {
     const errs = FB_ERRORS.length ? FB_ERRORS : ["(none recorded)"];
     lines.push("", "### Console errors (last 10)", "```", ...errs, "```");
@@ -4937,27 +5181,57 @@ function fbRenderSteps() {
 }
 
 function fbStep1() {
-  const chips = FB_MODULES.map(([id, ico, label]) =>
-    `<button type="button" class="fb-chip ${fbState.module === id ? "on" : ""}" data-mod="${id}">`
-    + `<span>${ico}</span>${label}${fbState.module === id ? ' <span style="color:var(--accent)">\u25be</span>' : ""}</button>`).join("");
-  const mod = FB_MODULES.find((x) => x[0] === fbState.module);
-  const screens = mod ? `
+  const areas = fbControls();
+  // Area chips = the live screens, plus a "Not sure / whole app" option. A screen
+  // with no discoverable controls is still listed, so it is never unreachable.
+  const chips = areas.map((a) =>
+    `<button type="button" class="fb-chip ${fbState.module === a.view ? "on" : ""}" data-mod="${a.view}">`
+    + `<span>${a.icon}</span>${a.label}${fbState.module === a.view ? ' <span style="color:var(--accent)">\u25be</span>' : ""}</button>`
+  ).join("") + '<button type="button" class="fb-chip '
+    + (fbState.module === "__app__" ? "on" : "")
+    + '" data-mod="__app__"><span>\U0001f310</span>Not sure / whole app</button>';
+
+  const area = areas.find((a) => a.view === fbState.module);
+  let ctrlBlock = "";
+
+  if (area) {
+    const sel = new Set(fbState.controls || []);
+    const byKind = { button: [], select: [], field: [], link: [] };
+    area.controls.forEach((c) => (byKind[c.kind] || byKind.button).push(c));
+    const kindLabel = { button: "Buttons", select: "Dropdowns", field: "Fields", link: "Links" };
+
+    // Multi-select on purpose: a report is often about more than one control, and
+    // the owner's ask was for the user to be able to say WHICH options need fixing.
+    const groups = ["button", "select", "field", "link"].filter((k) => byKind[k].length).map((k) =>
+      `<div class="fb-ctl-group"><div class="fb-ctl-kind">${kindLabel[k]}</div><div class="fb-chips">`
+      + byKind[k].map((c) =>
+        `<button type="button" class="fb-chip fb-chip-sm ${sel.has(c.name) ? "on" : ""}" data-ctl="${encodeURIComponent(c.name)}">${esc(c.name)}</button>`
+      ).join("")
+      + "</div></div>").join("");
+
+    ctrlBlock = `
     <div class="fb-screen-wrap">
-      <div class="fb-path">Selected: <b>${mod[2]}</b>${fbState.screen ? " \u203a " + fbState.screen : ""}</div>
-      <label class="f">Which screen inside ${mod[2]}? <span class="fb-hint" style="display:inline">(optional — skip if it's not one screen)</span></label>
-      <div class="fb-chips">${mod[3].map((s) =>
-        `<button type="button" class="fb-chip ${fbState.screen === s ? "on" : ""}" data-screen="${s.replace(/"/g, "&quot;")}">${s}</button>`).join("")}
-        ${fbState.screen ? '<button type="button" class="fb-chip" data-screen="">\u2715 Not one screen</button>' : ""}
+      <div class="fb-path">Selected: <b>${area.label}</b>${sel.size ? " \u203a " + sel.size + " control" + (sel.size > 1 ? "s" : "") : ""}</div>
+      <label class="f">Which part of ${esc(area.label)}? <span class="fb-hint" style="display:inline">(pick as many as you like)</span></label>
+      <div class="fb-ctl-wrap">
+        <button type="button" class="fb-chip ${sel.size === 0 ? "on" : ""}" data-ctl="__area__">Whole screen</button>
+        ${groups}
       </div>
-    </div>` : "";
+      <div class="fb-other">
+        <input class="fb-inp" id="fbOtherCtl" placeholder="Something else \u2014 describe the button or field (optional)"
+               value="${esc(fbState.otherCtl || "")}">
+      </div>
+    </div>`;
+  }
+
   $("#fbBody").innerHTML = `
     <div class="fb-field">
       <label class="f">Which area of Recon?</label>
       <div class="fb-chips">${chips}</div>
     </div>
-    ${screens}
+    ${ctrlBlock}
     <details class="fb-auto">
-      <summary>\ud83d\udcce What we'll attach automatically \u2014 <b>you'll see it before anything is sent</b></summary>
+      <summary>\U0001f4ce What we'll attach automatically \u2014 <b>you'll see it before anything is sent</b></summary>
       <div class="fb-kv">
         <div><span>Version</span><span>build ${fbState.version}</span></div>
         <div><span>Screen</span><span>${fbPath() || "\u2014"}</span></div>
@@ -4967,12 +5241,23 @@ function fbStep1() {
         <div><span>Your data</span><span>never \u2014 no client, project, rate or hour values</span></div>
       </div>
     </details>`;
+
   $$("[data-mod]").forEach((b) => b.addEventListener("click", () => {
-    fbState.module = b.dataset.mod; fbState.screen = null; fbRender();
+    fbState.module = b.dataset.mod;
+    fbState.controls = [];          // controls belong to the previous area
+    fbState.screen = null;
+    fbRender();
   }));
-  $$("[data-screen]").forEach((b) => b.addEventListener("click", () => {
-    fbState.screen = b.dataset.screen; fbRender();
+  $$("[data-ctl]").forEach((b) => b.addEventListener("click", () => {
+    const v = decodeURIComponent(b.dataset.ctl);
+    if (v === "__area__") { fbState.controls = []; fbRender(); return; }
+    const set = new Set(fbState.controls || []);
+    set.has(v) ? set.delete(v) : set.add(v);
+    fbState.controls = [...set];
+    fbRender();
   }));
+  const other = $("#fbOtherCtl");
+  if (other) other.addEventListener("input", () => { fbState.otherCtl = other.value; });
 }
 
 function fbStep2() {
@@ -5182,10 +5467,15 @@ function fbClose() { $("#fbModal").classList.add("hidden"); }
 
 function openFeedback() {
   fbState.step = 1; fbState.module = null; fbState.screen = null;
+  fbState.controls = []; fbState.otherCtl = "";
   fbState.expected = ""; fbState.happened = ""; fbState.shots = [];
   fbState._title = null; fbState.version = "unknown"; fbState.kind = "bug";
-  const guess = FB_MODULES.find((m) => m[0] === state.view);
-  if (guess) fbState.module = state.view;
+  // Re-scan on every open: the DOM may have changed since last time (a tab added,
+  // a button renamed, a panel that only renders when empty). Caching the scan
+  // across opens would re-introduce exactly the staleness this replaces.
+  FB_SCAN = null;
+  // Pre-select the screen the user is actually standing on, when it has controls.
+  if (fbControls().some((a) => a.view === state.view)) fbState.module = state.view;
   $("#fbModal").classList.remove("hidden");
   fbRender();
   api("/api/version").then((d) => {

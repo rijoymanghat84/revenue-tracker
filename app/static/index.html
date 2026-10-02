@@ -195,7 +195,7 @@
 
 <main>
   <!-- ============ UTILIZATION (auto-calculated, read-only) ============ -->
-  <section id="utilView" class="view hidden">
+  <section id="utilView" data-view="util" class="view hidden">
     <div class="toolbar glass">
       <div class="sheet-note" id="utilNote"><span class="dot on"></span>Booked hours ÷ capacity (<b>40 hrs/week = 100%</b>) — 🔴 &gt;100% · 🟢 80–100% · 🟡 50–80% · 🟠 &lt;50%. Read-only; edit a person's capacity on <b>Team &amp; Access</b>.</div>
       <div class="util-mode glass" id="utilModeSeg" role="group" aria-label="Utilization granularity">
@@ -263,7 +263,7 @@
        which is not where you look when asking "what just happened?". The backend
        (/api/activity) and the renderer already existed — only the home changed.
        Admin-only, hidden by permission in renderView(). -->
-  <section id="logsView" class="view hidden">
+  <section id="logsView" data-view="logs" class="view hidden">
     <div class="toolbar glass" id="logsToolbar">
       <div class="sheet-note"><span class="dot on"></span><b>Activity log</b> — every change that touched people, money or access, newest first. Written by the server, not the browser, so it cannot be edited away.</div>
       <div class="toolbar-right">
@@ -285,7 +285,7 @@
   </section>
 
   <!-- ============ ONSITE / OFFSHORE GRID (shared container, mode-driven) ============ -->
-  <section id="gridView" class="view">
+  <section id="gridView" data-view="planned" class="view">
     <div class="toolbar glass">
       <div class="sheet-note" id="gridNote"></div>
       <input type="search" id="filter" placeholder="Filter by name, client, project, title…" class="search">
@@ -312,7 +312,7 @@
        right, and the week-by-week LOAD RAIL that shows every person's booked %
        BEFORE you try to assign — so a 100% clash is prevented, not reported.
        PM-only view; admins reach it through Team & Access → People. -->
-  <section id="workbenchView" class="view hidden">
+  <section id="workbenchView" data-view="workbench" class="view hidden">
     <div class="wb-grid">
       <div class="wb-master glass">
         <div class="wb-master-head">
@@ -370,7 +370,7 @@
        type the actuals down the column, one save for the whole week.
        Under-delivery asks for a reason AND whether the client still pays;
        overage runs the OT flow (is it OT / approved / billed to client). -->
-  <section id="weekView" class="view hidden">
+  <section id="weekView" data-view="week" class="view hidden">
     <div class="toolbar glass">
       <div class="sheet-note" id="wkNote"><span class="dot on"></span>Pick a week, then type each person's actual hours. One save records the whole week.</div>
       <div class="toolbar-right">
@@ -398,7 +398,7 @@
   </section>
 
   <!-- ============ ACTUALS ============ -->
-  <section id="actualsView" class="view hidden">
+  <section id="actualsView" data-view="actuals" class="view hidden">
     <div class="toolbar glass">
       <div class="sheet-note" id="actualsNote"><span class="dot on"></span>Record <b>actual</b> hours worked. Compared against planned (Onsite/Offshore). Overage → OT flow; under → comment required.</div>
       <input type="search" id="actualsFilter" placeholder="Filter by name, client, project…" class="search">
@@ -419,7 +419,7 @@
   </section>
 
   <!-- ============ DASHBOARD ============ -->
-  <section id="dashView" class="view hidden">
+  <section id="dashView" data-view="dash" class="view hidden">
     <!-- filter row: Month · Project · PM · Client · Currency (feature #12) -->
     <div class="filterbar glass" id="dashFilters"></div>
     <!-- KPI bar: one horizontal row of key metrics -->
@@ -438,7 +438,7 @@
        Was #pricingView. People/permissions moved to #accessView, capacity moved
        to #utilView. This tab now does exactly one job: what you charge vs what
        the title costs offshore. -->
-  <section id="ratesView" class="view hidden">
+  <section id="ratesView" data-view="rates" class="view hidden">
     <div class="toolbar glass">
       <div class="sheet-note" id="pricingNote"><span class="dot off"></span>Rate card — rows are locked until you click <b>Edit</b>; set Title, both rates &amp; currency ($/£/CA$) together, then Save. Apply pushes rates to every resource using the title.</div>
       <div class="toolbar-right">
@@ -466,7 +466,7 @@
   </section>
 
   <!-- ============ TEAM & ACCESS (PMs + admins + DB security) ============ -->
-  <section id="accessView" class="view hidden">
+  <section id="accessView" data-view="access" class="view hidden">
     <!-- People master list (2026-10-01): the ONE record per human that makes
          "already assigned" and the 100% rule possible. Admin-only. -->
     <div class="toolbar glass pm-toolbar" id="peopleToolbar">

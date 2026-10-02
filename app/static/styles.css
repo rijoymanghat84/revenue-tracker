@@ -24,6 +24,7 @@
      unreadable. Each theme now solves its own value; these are midnight's,
      and midnight IS :root. */
   --on-accent: #070a15;
+  --on-green: #030408;
   --on-warn: #070a15;
   --on-hot: #070a15;
   --amber-ink: #fbbf24;   /* amber text on its own amber tint */
@@ -1806,9 +1807,9 @@ html[data-theme-dark="0"] .ts-ind { color: #0d5462; }
   display: flex; gap: 10px; align-items: flex-start;
   padding: 11px 13px; border-radius: 11px; margin-bottom: 14px;
   background: var(--pill-amber-bg); border: 1px solid rgba(var(--amber-rgb), 0.42);
-  color: #f6dd9a; font-size: 12.5px; line-height: 1.5;
+  color: var(--amber); font-size: 12.5px; line-height: 1.5;
 }
-.fb-notice b { color: #ffe9ae; }
+.fb-notice b { font-weight: 700; }
 .fb-notice span:first-child { font-size: 15px; line-height: 1.2; }
 
 /* stepper */
@@ -1818,14 +1819,14 @@ html[data-theme-dark="0"] .ts-ind { color: #0d5462; }
   color: var(--muted); padding: 5px 10px; border-radius: 99px;
   border: 1px solid var(--border); background: rgba(255,255,255,0.03);
 }
-.fb-step.on { color: #eafbff; border-color: rgba(var(--accent-rgb), 0.5); background: rgba(var(--accent-rgb), 0.10); }
+.fb-step.on { color: var(--text); border-color: rgba(var(--accent-rgb), 0.5); background: rgba(var(--accent-rgb), 0.10); }
 .fb-step.done { color: var(--green); border-color: rgba(var(--green-rgb), 0.4); background: rgba(var(--green-rgb), 0.08); }
 .fb-step .n {
   width: 16px; height: 16px; border-radius: 99px; display: grid; place-items: center;
   font-size: 10.5px; font-weight: 700; background: rgba(255,255,255,0.10);
 }
-.fb-step.on .n { background: var(--accent); color: #05202a; }
-.fb-step.done .n { background: var(--green); color: #062b1d; }
+.fb-step.on .n { background: var(--accent); color: var(--on-accent); }
+.fb-step.done .n { background: var(--green); color: var(--on-green); }
 .fb-arrow { color: var(--hairline); font-size: 12px; }
 
 /* the module -> screen chips */
@@ -1836,14 +1837,28 @@ html[data-theme-dark="0"] .ts-ind { color: #0d5462; }
   color: var(--text); font-size: 12.5px; cursor: pointer;
 }
 .fb-chip:hover { border-color: var(--border-strong); background: rgba(255,255,255,0.07); }
-.fb-chip.on { border-color: rgba(var(--accent-rgb), 0.55); background: rgba(var(--accent-rgb), 0.12); color: #eafbff; }
+.fb-chip.on { border-color: rgba(var(--accent-rgb), 0.55); background: rgba(var(--accent-rgb), 0.12); color: var(--text); }
 .fb-screen-wrap {
   margin-top: 12px; padding: 12px; border-radius: 11px;
   background: var(--surface-4); border: 1px solid var(--border);
   border-left: 2px solid rgba(var(--accent-rgb), 0.5);
 }
 .fb-path { color: var(--muted); font-size: 11.5px; margin-bottom: 9px; }
-.fb-path b { color: #eafbff; font-weight: 600; }
+.fb-path b { color: var(--text); font-weight: 600; }
+
+/* ---- control picker (2026-10-02) ----
+   The options here are READ OFF THE LIVE DOM (fbScanControls in app.js), so a
+   button added to any tab appears without touching this form. Grouped by kind so
+   a long list stays scannable; multi-select because a report is often about more
+   than one control. */
+.fb-ctl-wrap { display: flex; flex-direction: column; gap: 9px; }
+.fb-ctl-group { display: flex; flex-direction: column; gap: 5px; }
+.fb-ctl-kind {
+  font-size: 9.5px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase;
+  color: var(--muted);
+}
+.fb-chip-sm { padding: 5px 9px; font-size: 11.5px; border-radius: 8px; }
+.fb-other { margin-top: 9px; }
 
 /* fields */
 .fb-field { margin-bottom: 13px; }
@@ -1859,13 +1874,13 @@ textarea.fb-inp { min-height: 72px; resize: vertical; }
 .fb-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
 .fb-seg button { background: transparent; border: 0; color: var(--muted); padding: 8px 13px; font-size: 12.5px; cursor: pointer; }
 .fb-seg button + button { border-left: 1px solid var(--border); }
-.fb-seg button.on { background: rgba(var(--accent-rgb), 0.14); color: #eafbff; }
+.fb-seg button.on { background: rgba(var(--accent-rgb), 0.14); color: var(--text); }
 
 /* auto-context disclosure */
 .fb-auto { margin-top: 13px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface-4); }
 .fb-auto summary { cursor: pointer; padding: 11px 13px; font-size: 12.5px; color: var(--muted); list-style: none; }
 .fb-auto summary::-webkit-details-marker { display: none; }
-.fb-auto summary b { color: #eafbff; font-weight: 600; }
+.fb-auto summary b { color: var(--text); font-weight: 600; }
 .fb-kv { padding: 2px 13px 13px; font-size: 12px; }
 .fb-kv div { display: flex; gap: 10px; padding: 4px 0; border-top: 1px dashed var(--border); }
 .fb-kv span:first-child { color: var(--muted); min-width: 132px; }
@@ -1875,11 +1890,14 @@ textarea.fb-inp { min-height: 72px; resize: vertical; }
 .fb-preview {
   border: 1px solid var(--border); border-radius: 11px; background: var(--surface-5);
   padding: 13px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px;
-  color: #cdd8ea; white-space: pre-wrap; max-height: 240px; overflow: auto; line-height: 1.55;
+  color: var(--text); white-space: pre-wrap; max-height: 240px; overflow: auto; line-height: 1.55;
 }
 .fb-badge {
   display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px; border-radius: 99px;
-  font-size: 11.5px; border: 1px solid var(--border); color: var(--muted); background: rgba(255,255,255,0.04);
+  /* Was rgba(255,255,255,0.04) — a white wash under --muted, which pushed the
+     label to 4.23:1 on nord and 4.34:1 on solarized. A themed surface keeps it
+     above 4.5 everywhere. */
+  font-size: 11.5px; border: 1px solid var(--border); color: var(--muted); background: var(--surface-4);
 }
 .fb-spacer { margin-right: auto; color: var(--muted); font-size: 12px; }
 .fb-shots { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
