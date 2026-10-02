@@ -1490,41 +1490,58 @@ function renderPricing() {
   if (pf) pf.addEventListener("input", () => { pricingFilter = pf.value; renderPricing(); pf.focus(); });
 }
 
-/* ---------------- Team & Access (PMs + admins + DB security) ----------------
-   Was the bottom half of renderPricing(). Kept as its own entry point so the
-   access tab owns its own data loading instead of piggy-backing on a pricing
-   render. */
+/* ---------------- Team (accounts + permissions + DB security) ----------------
+   Was the bottom half of renderPricing(), then "Team & Access". 2026-10-02:
+   the PEOPLE half (master list + capacity) moved to the Resource tab, because
+   that is where the master table now lives. What is left here is pure ACCOUNTS:
+   who may log in and what they may do. */
 function renderAccess() {
-  // The capacity editor lives on this screen now, so keep it in step.
-  if (typeof renderCapacity === "function") renderCapacity();
   if (!loadPMDataStarted) loadPMDataStarted = true;
   loadPMData().then(() => {
     if (state.view !== "access") return;
     renderPMs();
     renderAdmins();
   });
-  // People + OT approvals (2026-10-01). Each block is hidden individually by
-  // its own permission so a people-only or ot_approval-only admin still has a
-  // usable Team & Access page.
-  // PMs see the People list too: they must pick from it when assigning, and a PM
-  // may add a new joiner. The server scopes the list (no rates) and gates every
-  // write, so this does not hand a PM admin powers.
-  const isPmRole = !!(state.me && state.me.role === "pm");
-  const showPeople = canPerm("people") || isPmRole;
-  showBlock($("#peopleToolbar"), showPeople);
-  showBlock($("#peopleWrap"), showPeople);
-  if (showPeople) { loadPeople().then(() => { if (state.view === "access") renderPeople(); }); if (!WB.load.length) refreshLoadOnly(); }
+  // OT approvals stay an admin decision (billable OT is withheld from the
+  // Dashboard until approved), so it is an access control, not a people one.
   const showOt = canPerm("ot_approval");
   showBlock($("#otToolbar"), showOt);
   showBlock($("#otWrap"), showOt);
   if (showOt) loadOt();
-  // Recent activity (2026-10-01). Admin-only: the API gates it, and it names
-  // who changed what, so any admin who can reach this tab may see it.
-  // The activity log moved to its own #logsView section in the rail (2026-10-01);
-  // its old home at the bottom of this tab was removed with it.
+  // The activity log moved to its own #logsView section (2026-10-01).
   renderPMs();
   renderAdmins();
   renderDbSec();
+}
+
+/* ---------------- Resource (master list) — admin side ------------------------
+   2026-10-02: the People master list and the Capacity editor now live on the
+   Resource tab, alongside the card list every user sees. They are gated
+   individually (a `people`-only admin still gets a usable page; an admin
+   without it gets neither block). The CARD list itself is rendered by
+   workbench.js's renderWbLoad, which adds the admin controls per card. */
+function renderResourceAdmin() {
+  const v = $("#resourcesView");
+  if (!v) return;
+  // ADMIN ONLY. A PM gets the SAME card list (they staff projects from it) but
+  // none of the record-editing controls — adding a resource, merging, the
+  // capacity editor and the records table are admin acts. Note this must be
+  // canPerm() alone and NOT `|| isPmRole`: the previous Team & Access gate
+  // included PMs because a PM could reach that page, but a PM can never reach
+  // THIS page's admin controls, and including them here rendered "+ Add
+  // resource"/"Merge" to a PM (caught live on the demoPM account, 2026-10-02).
+  const showPeople = canPerm("people");
+  showBlock($("#peopleToolbar"), showPeople);
+  showBlock($("#capToolbar"), showPeople);
+  showBlock($("#peopleTableToolbar"), showPeople);
+  if (showPeople) {
+    if (typeof renderCapacity === "function") renderCapacity();
+    loadPeople().then(() => { if (state.view === "resources") renderPeople(); });
+  } else {
+    // Without the permission, make sure the record table cannot linger open.
+    showBlock($("#peopleWrap"), false);
+    showBlock($("#capWrap"), false);
+  }
 }
 /* ---------------- Recent activity (2026-10-01) ----------------
    Server-side log of destructive / money-affecting actions. Built because the owner
@@ -4807,9 +4824,9 @@ function renderView() {
     actuals: ["Actuals", "PM reconciliation — recorded hours vs plan"],
     rates: ["Rate Card", "Client rate vs offshore rate, per title"],
     util: ["Utilization", "Booked hours ÷ capacity (40 hrs/week = 100%)"],
-    access: ["Team & Access", "People, PMs, admins, permissions & database security"],
+    access: ["Team", "Accounts — PMs, admins, permissions & database security"],
     workbench: ["My Projects", "Your projects, your team, and their week-by-week load"],
-    resources: ["Resources", "Find a person — the whole roster, ranked by who is free"],
+    resources: ["Resource", "The master list — one record per person, and who is free"],
     week: ["Weekly entry", "Enter one week of actual hours for everyone on your projects"],
     logs: ["Activity log", "Every change that touched people, money or access — newest first"],
   };
@@ -4831,7 +4848,14 @@ function renderView() {
   else if (state.view === "rates") renderPricing();
   else if (state.view === "access") renderAccess();
   else if (state.view === "workbench") loadWorkbench();
-  else if (state.view === "resources") { loadWorkbench(); renderResources(); }
+  else if (state.view === "resources") {
+    // The Resource tab is role-agnostic now: the card list is the master list.
+    // The admin-only blocks (People records + Capacity) are gated inside
+    // renderResourceAdmin, which is a no-op for a PM.
+    loadWorkbench();
+    renderResources();
+    if (typeof renderResourceAdmin === "function") renderResourceAdmin();
+  }
   else if (state.view === "week") loadWeekSheet();
 }
 

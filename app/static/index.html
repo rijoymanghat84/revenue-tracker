@@ -90,7 +90,7 @@
         <button class="tab" data-tab="rates" title="Rate Card"><span class="tab-ico">₿</span><span class="tab-txt">Rate Card</span></button>
         <button class="tab" data-tab="util" title="Utilization"><span class="tab-ico">◔</span><span class="tab-txt">Utilization</span></button>
         <button class="tab admin-only hidden" data-tab="logs" title="Activity log"><span class="tab-ico">🕘</span><span class="tab-txt">Logs</span></button>
-        <button class="tab" data-tab="access" title="Team &amp; Access"><span class="tab-ico">🔑</span><span class="tab-txt">Team &amp; Access</span></button>
+        <button class="tab" data-tab="access" title="Team"><span class="tab-ico">🔑</span><span class="tab-txt">Team</span></button>
       </div>
     </div>
 
@@ -399,7 +399,15 @@
        "available" is meaningless without saying over what period.
 
        Everything here comes from the booked-% payload the PM already receives.
-       No rates, no money — CHARTER clause 1. -->
+       No rates, no money — CHARTER clause 1.
+
+       2026-10-02 — this is now the RESOURCE master list for BOTH roles. the owner:
+       "This will be the master table for resource any change to this will reflect
+       everywhere and any change to resource by PM or any body should replce here
+       too." So the admin gets his controls (add resource, active/inactive, home
+       title, approved titles, capacity, projects, assign) ON the same card the PM
+       sees — one look, one list, one truth. An admin additionally gets the
+       Capacity editor (moved here from Team) and the People table for merges. -->
   <section id="resourcesView" data-view="resources" class="view hidden">
     <!-- GH-53: a plain-language guide. the owner had to ask where the move feature
          lives — if the flow needs explaining, explain it ON the screen. -->
@@ -414,6 +422,19 @@
       </ol>
       <div class="muted-note">Every request, approval and rejection is recorded — open the 🔔 and press <b>Details</b> on any item to see who asked, who decided, when and why.</div>
     </details>
+
+    <!-- ---------- ADMIN MASTER-LIST CONTROLS (2026-10-02) ----------
+         Visible only to an admin holding the `people` permission. The PM sees
+         the same card list below, just without these. -->
+    <div class="toolbar glass pm-toolbar" id="peopleToolbar">
+      <div class="sheet-note"><span class="dot on"></span><b>Resources</b> — every person exists <b>once</b>, with a home title, approved titles and a weekly capacity. This is the master list: a change here updates every project, grid and report. A new resource starts on the <b>Bench</b>, so they are never invisible while unassigned.</div>
+      <div class="toolbar-right">
+        <button class="btn primary" id="btnAddPerson" title="Add a resource: name, title, capacity. They land on the Bench until you assign them.">+ Add resource</button>
+        <button class="btn mini js-add-joiner" id="btnAddJoiner" title="A new hire: name, availability and a title from the rate card">+ New joiner</button>
+        <button class="btn mini" id="btnPeopleMergeHint" title="Rename or merge a duplicate person">Merge / rename…</button>
+      </div>
+    </div>
+
     <div class="toolbar glass wb-load-bar">
       <div class="sheet-note"><span class="dot on"></span><b>Find a person</b> — filter by title, ranked by who is free for <span id="wbLoadScope" class="wb-scope">the next 12 weeks</span>. Red = over 100%; those people cannot take new work and are listed at the bottom.</div>
       <div class="wb-load-search">
@@ -442,6 +463,39 @@
       <span><i class="sw hot"></i>Over 100%</span>
       <span><i class="sw free"></i>Free</span>
       <span class="muted-note">· hover a block for its week &amp; month, click it for detail</span>
+    </div>
+
+    <!-- ---------- CAPACITY EDITOR (admin, moved from Team 2026-10-02) ----------
+         Capacity is a property of a PERSON, so it lives with the person. It is
+         the denominator of the 100% rule and of every utilization %. -->
+    <div class="toolbar glass pm-toolbar" id="capToolbar">
+      <div class="sheet-note"><span class="dot on"></span><b>Capacity</b> — each person's weekly hours (40 = 100%). This drives the 100% allocation rule and every utilization %. <span id="capBadge2"></span></div>
+      <div class="toolbar-right">
+        <button class="btn mini" id="btnToggleCap" title="Show / hide the per-person weekly capacity editor">⚙ Edit capacity</button>
+      </div>
+    </div>
+    <div class="table-wrap glass narrow hidden" id="capWrap">
+      <table id="capTable">
+        <thead id="capHead"></thead>
+        <tbody id="capBody"></tbody>
+      </table>
+    </div>
+
+    <!-- ---------- PEOPLE TABLE (admin: merges + duplicate spellings) ----------
+         Deliberately still a TABLE, not cards: its one unique job is spotting and
+         merging the same human entered twice under different spellings, which is
+         a scan-the-columns task. The card list above is the master list. -->
+    <div class="toolbar glass pm-toolbar" id="peopleTableToolbar">
+      <div class="sheet-note"><span class="dot on"></span><b>Duplicates &amp; record hygiene</b> — the same human entered twice defeats the 100% rule. Merge split records here, or rename a person (which updates every project at once).</div>
+      <div class="toolbar-right">
+        <button class="btn mini" id="btnPeopleTableToggle" title="Show / hide the record table">⚙ Show records</button>
+      </div>
+    </div>
+    <div class="table-wrap glass narrow hidden" id="peopleWrap">
+      <table id="peopleTable">
+        <thead id="peopleHead"></thead>
+        <tbody id="peopleBody"></tbody>
+      </table>
     </div>
   </section>
 
@@ -563,54 +617,15 @@
     </div>
   </section>
 
-  <!-- ============ TEAM & ACCESS (PMs + admins + DB security) ============ -->
+  <!-- ============ TEAM (accounts + permissions + DB security) ================
+       2026-10-02: the owner split what used to be "Team & Access" into TEAM and
+       RESOURCE. Team keeps only ACCOUNTS: who may log in (PMs, admins), what
+       each admin may do, the billable-OT gate, and database security. Everything
+       that describes a PERSON's work — the master list, capacity, assignments —
+       moved to the Resource tab, because that is where the master table lives.
+       The `data-tab` id stays "access" so every existing binding and permission
+       gate keeps working; only the LABEL changed. -->
   <section id="accessView" data-view="access" class="view hidden">
-    <!-- People master list (2026-10-01): the ONE record per human that makes
-         "already assigned" and the 100% rule possible. Admin-only. -->
-    <div class="toolbar glass pm-toolbar" id="peopleToolbar">
-      <div class="sheet-note"><span class="dot on"></span><b>People</b> — every person exists once, with a home title, approved titles and a weekly capacity. PMs pick from this list and can never invent a name or a rate. Merging split records here keeps the 100% rule honest.</div>
-      <div class="toolbar-right">
-        <button class="btn mini" id="btnAddPerson">+ Add Person</button>
-        <!-- the owner: a PM may add a new hire — name, availability and a title that
-             must already exist on the Rate Card. Editing/merging people stays
-             admin-only. -->
-        <button class="btn mini js-add-joiner" id="btnAddJoiner" title="A new hire: name, availability and a title from the rate card">+ New joiner</button>
-      </div>
-    </div>
-    <div class="table-wrap glass narrow" id="peopleWrap">
-      <table id="peopleTable">
-        <thead id="peopleHead"></thead>
-        <tbody id="peopleBody"></tbody>
-      </table>
-    </div>
-
-    <!-- Capacity editor (moved here from Utilization, 2026-10-01). Capacity is a
-         property of a PERSON, so it is edited next to the person, not on a page
-         that only consumes the number. Drives the 100% rule and utilization. -->
-    <div class="toolbar glass pm-toolbar" id="capToolbar">
-      <div class="sheet-note"><span class="dot on"></span><b>Capacity</b> — each person's weekly hours (40 = 100%). This drives the 100% allocation rule and every utilization %. <span id="capBadge2"></span></div>
-      <div class="toolbar-right">
-        <button class="btn mini" id="btnToggleCap" title="Show / hide the per-person weekly capacity editor">⚙ Edit capacity</button>
-      </div>
-    </div>
-    <div class="table-wrap glass narrow hidden" id="capWrap">
-      <table id="capTable">
-        <thead id="capHead"></thead>
-        <tbody id="capBody"></tbody>
-      </table>
-    </div>
-
-    <!-- ============ RECENT ACTIVITY (2026-10-01) ============
-         the owner accidentally confirmed a person merge and had no way to find out
-         what it did — the merge is irreversible and left no trace. Every
-         destructive / money-affecting action now writes a server-side row and
-         shows up here, newest first. Admin-only (it names who did what). -->
-    <!-- Activity log MOVED to its own Logs section in the rail (2026-10-01).
-         It used to live here, at the bottom of Team & Access, which is not where
-         you look when asking "what just happened?". Keeping it here would also
-         duplicate the activityHead/activityBody ids, so the block is gone from
-         this view entirely — see #logsView. -->
-
     <!-- OT approval queue: billable OT is invisible to the Dashboard until
          approved here (the gate the owner asked for). -->
     <div class="toolbar glass pm-toolbar" id="otToolbar">
