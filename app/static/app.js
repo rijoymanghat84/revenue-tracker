@@ -4836,10 +4836,11 @@ function fbStep1() {
   const mod = FB_MODULES.find((x) => x[0] === fbState.module);
   const screens = mod ? `
     <div class="fb-screen-wrap">
-      <div class="fb-path">Selected: <b>${mod[2]}</b></div>
-      <label class="f">Which screen inside ${mod[2]}?</label>
+      <div class="fb-path">Selected: <b>${mod[2]}</b>${fbState.screen ? " \u203a " + fbState.screen : ""}</div>
+      <label class="f">Which screen inside ${mod[2]}? <span class="fb-hint" style="display:inline">(optional — skip if it's not one screen)</span></label>
       <div class="fb-chips">${mod[3].map((s) =>
         `<button type="button" class="fb-chip ${fbState.screen === s ? "on" : ""}" data-screen="${s.replace(/"/g, "&quot;")}">${s}</button>`).join("")}
+        ${fbState.screen ? '<button type="button" class="fb-chip" data-screen="">\u2715 Not one screen</button>' : ""}
       </div>
     </div>` : "";
   $("#fbBody").innerHTML = `
@@ -4964,7 +4965,11 @@ function fbStep3() {
 }
 
 function fbNav() {
-  const canNext = fbState.step === 1 ? Boolean(fbState.module && fbState.screen)
+  // Step 1 requires only the AREA. The screen is a helpful precision, not a
+  // gate — a cross-cutting report ("the app is slow", "login confuses people")
+  // genuinely has no single screen, and forcing a choice would make reporters
+  // pick anything just to get past the step.
+  const canNext = fbState.step === 1 ? Boolean(fbState.module)
     : fbState.step === 2 ? Boolean((fbState.expected || "").trim() || (fbState.happened || "").trim())
     : true;
   const labels = ["", "Next: what happened \u2192", "Next: review \u2192", ""];
@@ -5000,7 +5005,7 @@ function fbRender() {
   else fbStep3();
   fbNav();
   $("#fbTitle").textContent = fbState.step === 3 ? "Review & send" : "Report a bug or request a feature";
-  $("#fbSub").textContent = fbState.step === 1 ? "Tell us where it happened \u2014 two taps, then the details."
+  $("#fbSub").textContent = fbState.step === 1 ? "Tell us where it happened — the area is enough, the screen is optional."
     : fbState.step === 2 ? "Plain words are perfect. Short is fine."
     : "This is exactly what gets posted. Nothing is sent until you press Submit on GitHub.";
 }
