@@ -9,6 +9,60 @@ wasn't one) and the commit.
 
 ---
 
+## 2026-10-02 — Archive on admin delete too; the odd buttons fixed (GH-39)
+
+Commit `0bbce39` — **GH-39**. Two things from Rijoy, both about the recoverable
+delete shipped in GH-38.
+
+### The Reactivate / Delete buttons looked wrong — three causes, all real
+
+Measured before touching anything:
+
+```
+cell: 46px wide, display=flex     ← flex on a <td> kills table-cell layout
+"↺ Reactivate"  95px  but 14px tall   colour rgb(26,34,51)  ← DEFAULT text colour
+"🗑 Delete"      73px  but 14px tall   opacity 0.35          ← looked disabled
+```
+
+**168px of buttons in a 46px cell.** The causes:
+
+1. `#dashTable td.dash-actions { width: 46px }` was written for a single icon;
+   two labelled buttons need a real cell.
+2. `.dash-arch-actions { display: flex }` on a `<td>` destroys table-cell layout —
+   the buttons were laid out as flex children in a 46px box.
+3. **Specificity.** The action rules sat *before* the base `.btn` rules in the
+   file, and `.btn` also sets `color` / `padding` at the same (0,1,0) specificity
+   — so `.dash-reactivate` lost and the buttons rendered in the default text colour
+   with Delete's icon style (opacity 0.35) still applying. Every rule is now
+   id-scoped (`#dashTable …`), so file order cannot win against it again.
+
+Now: **cell 212px, buttons 26px tall, `inline-flex`, green Reactivate
+(`rgb(15,122,74)`, opacity 1) and red Delete (`rgb(255,154,154)`, opacity 1).**
+Measured that the archived row demands **no extra table width** (−13px versus a
+normal row), so nothing was pushed off-screen.
+
+### An admin delete now archives too
+
+Previously an admin `DELETE` purged immediately. Now `purge=false` **ARCHIVES for
+any role**, so an admin's mistake is as recoverable as a PM's: the project leaves
+every live figure and appears on the Dashboard under the red
+`DELETED BY <admin>` strip with Reactivate / Delete. Only Delete on an
+already-archived row purges (`purge=true`) — the deliberate second step.
+
+Because archiving destroys nothing, the first click **no longer warns about losing
+hours**; that warning now belongs to the purge, where it is actually true.
+
+| Verified in the browser as admin | Result |
+|---|---|
+| 🗑 on a live row | `archived=true`, badge `deleted by rijoy`, Reactivate + Delete offered |
+| Toast | "…deleted — it is on the Dashboard in red until you Reactivate or Delete it for good" |
+| Reactivate | row un-flagged, `archived:false`, PM sees it again |
+| Delete on the archived row | purged; `include_archived=1` empty |
+| API plain DELETE | returns `archived: True` (was `purged: True`), `archived_by` = the admin |
+| DB | 17 projects, 0 archived rows, **0 orphaned resources**, integrity `ok` |
+
+---
+
 ## 2026-10-02 — PM project delete is recoverable: red strip, Reactivate or Delete (GH-38)
 
 Commit `4d7addf` — **GH-38**. Rijoy: _"if PM delete the project, then it will go
