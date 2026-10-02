@@ -10,7 +10,7 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icons/icon-192.png">
 <title>Revenue Recon</title>
-<link rel="stylesheet" href="/styles.css?v=82">
+<link rel="stylesheet" href="/styles.css?v=83">
 </head>
 <body>
 <div class="bg-glow"></div>
@@ -424,6 +424,10 @@
         <span class="hint">“Apply” pushes one title's rates; “Update All Pricing” pushes every title.</span>
       </div>
     </div>
+    <!-- The Rate Card's filter / expand buttons render here, ABOVE the table.
+         They used to be written into the <tbody>, which is invalid and destroyed
+         the table's header row. -->
+    <div id="pricingTools"></div>
     <div class="table-wrap glass narrow" id="pricingWrap">
       <table id="pricingTable">
         <thead id="pricingHead"></thead>
@@ -687,9 +691,12 @@
      aborted the REST of app.js — including boot() — so the entire app failed to
      initialise. -->
 <script src="/workbench.js?v=12"></script>
+<!-- Generic column sorting for EVERY table (2026-10-02). Self-initialising and
+     delegated, so it needs no per-table wiring and survives every re-render. -->
+<script src="/tablesort.js?v=4"></script>
 <!-- weeksheet.js also loads BEFORE app.js, for the same reason as workbench.js. -->
 <script src="/weeksheet.js?v=11"></script>
-<script src="/app.js?v=111"></script>
+<script src="/app.js?v=113"></script>
 <script>
   // PWA: register the service worker (only after load; skip on failure)
   if ("serviceWorker" in navigator) {
