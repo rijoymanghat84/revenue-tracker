@@ -2964,20 +2964,29 @@ function renderDashboard() {
       const archTag = g.archived
         ? `<span class="dash-arch" title="Deleted by ${esc(g.archived_by || "a PM")} on ${esc(g.archived_at || "")} — still recoverable">deleted by ${esc(g.archived_by || "PM")}</span>`
         : "";
+      /* GH-38/GH-39: the action cell.
+
+         This was rendering badly: `#dashTable td.dash-actions { width: 46px }`
+         was written for a single icon, then two labelled buttons were put in it,
+         so 168px of content sat in a 46px cell and the buttons were squeezed to
+         14px tall with `display:flex` on a `<td>` (which breaks table-cell
+         layout). The archived row now gets a real, wide cell and inline-flex
+         buttons that keep their shape; the plain delete stays a discrete icon. */
       const actions = g.archived
         ? `<td class="dash-actions dash-arch-actions">
-             <button class="btn mini dash-reactivate" data-rid="${g.project_id}"
-               title="Reactivate — show it to the PM again, with its team and hours intact">↺ Reactivate</button>
-             <button class="btn mini dash-del" data-del-client="${esc(g.client)}"
+             <button type="button" class="btn mini dash-reactivate" data-rid="${g.project_id}"
+               title="Reactivate — the PM sees it again, with its team and hours intact">↺ Reactivate</button>
+             <button type="button" class="btn mini dash-del dash-del-final"
+               data-del-client="${esc(g.client)}"
                data-del-project="${esc(g.project === "—" ? "" : g.project)}"
                data-del-name="${esc(g.client)} · ${esc(g.project)}"
                title="Delete permanently — this cannot be undone">🗑 Delete</button>
            </td>`
         : (canDelete
-          ? `<td class="dash-actions"><button class="btn mini dash-del"
+          ? `<td class="dash-actions"><button type="button" class="btn mini dash-del"
                data-del-client="${esc(g.client)}" data-del-project="${esc(g.project === "—" ? "" : g.project)}"
                data-del-name="${esc(g.client)} · ${esc(g.project)}"
-               title="Delete this project (${esc(g.client)} · ${esc(g.project)})">🗑</button></td>`
+               title="Delete ${esc(g.client)} · ${esc(g.project)} — it goes to the recoverable list, nothing is lost">🗑</button></td>`
           : "<td></td>");
       const rowCls = g.archived ? "dash-arch-row" : (g.empty ? "dash-empty-row" : "");
       rows += `<tr${rowCls ? ` class="${rowCls}"` : ""}>
@@ -3038,32 +3047,39 @@ function bindDashDelete() {
       if (!target) { toast(`${label} is not a Project entry (nothing to delete)`, true); return; }
 
       const isArchived = !!target.archived;
+      /* GH-39: an ADMIN delete now archives too, so the flow matches the PM's —
+         red tint on the Dashboard plus Reactivate / Delete. Only the Delete button
+         on an ALREADY-archived row purges (`purge=true`), which is the deliberate
+         second step. Because archiving destroys nothing, there is no hour-loss
+         warning on the first click; that warning belongs to the purge. */
       const doDelete = async (force) => {
         b.disabled = true;
         try {
-          const res = await api(`/api/projects/${target.id}?force=${force ? "true" : "false"}&purge=true`,
-                                { method: "DELETE" });
+          const qs = isArchived ? "?purge=true&force=true" : "?purge=false";
+          const res = await api(`/api/projects/${target.id}${qs}`, { method: "DELETE" });
           const d = (res && res.deleted) || {};
-          toast(`Permanently deleted ${d.client || client} · ${d.project || project}` +
-                (d.people ? ` — removed ${d.people} assignment(s), ${d.planned_weeks} planned week(s)` : ""));
+          if (res && res.archived) {
+            toast(`${d.client || client} · ${d.project || project} deleted — it is on the Dashboard in red until you Reactivate or Delete it for good`);
+          } else {
+            toast(`Permanently deleted ${d.client || client} · ${d.project || project}` +
+                  (d.people ? ` — removed ${d.people} assignment(s), ${d.planned_weeks} planned week(s)` : ""));
+          }
           loadActivity();
           renderDashboard();
           return true;
         } catch (err) {
           const det = err && err.detail ? err.detail : null;
           if (det && det.code === "has_assignments") {
-            if (confirm(`${det.message}\n\nDelete it and discard those hours permanently?`)) return doDelete(true);
+            if (confirm(`${det.message}\n\nDelete it permanently?`)) return doDelete(true);
             return false;
           }
           toast((det && det.message) || err.message || "Delete failed", true);
           return false;
         } finally { b.disabled = false; }
       };
-      // Wording differs for an already-archived row: that data is still recoverable,
-      // so the confirm must not imply the same finality as a first-time delete.
       const msg = isArchived
-        ? `Permanently delete ${label}?\n\nIt is currently deleted-but-recoverable. This removes it and its hours for good — Reactivate is the undo, so use that instead if you are unsure.`
-        : `Delete ${label}?\n\nThis removes the project and its assignments. It cannot be undone.`;
+        ? `Permanently delete ${label}?\n\nIt is already deleted and recoverable. This removes it and its hours for good — use Reactivate instead if you are unsure.`
+        : `Delete ${label}?\n\nIt will show on this Dashboard with a red strip until you choose Reactivate or Delete. Nothing is lost yet.`;
       if (confirm(msg)) {
         await doDelete(false);
       }
