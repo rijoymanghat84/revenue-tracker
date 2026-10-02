@@ -63,7 +63,138 @@ function wbSel() {
 function renderWorkbench() {
   renderWbProjects();
   renderWbTeam();
+  renderWbProgress();
   renderWbLoad();
+}
+
+/* ---------------- project progress chart (GH-49) ----------------
+ * "Some where in the screen can we include a graph, that will should how the
+ * project is going on compare to what was planned. It should be a graph and not
+ * a bar diagram some thing on view would know how project is running."
+ *
+ * So: a CUMULATIVE LINE/AREA chart of planned vs actual hours for the selected
+ * project. Cumulative is the point — two lines diverging is what tells you at a
+ * glance whether the project is running ahead of or behind plan; a per-week
+ * series would just look like noise. Hours only, never money.
+ */
+let wbProgCache = {};   // "client||project" -> series, so switching back is instant
+
+async function renderWbProgress() {
+  const box = $("#wbProgChart");
+  const note = $("#wbProgNote");
+  if (!box) return;
+  const sel = wbSel();
+  if (!sel) {
+    box.innerHTML = `<div class="wb-empty">Pick a project to see how it is running against plan.</div>`;
+    if (note) note.textContent = "planned vs actual hours, cumulative";
+    return;
+  }
+  const key = wbKey(sel.client, sel.project);
+  let d = wbProgCache[key];
+  if (!d) {
+    box.innerHTML = `<div class="wb-empty">Loading chart…</div>`;
+    try {
+      d = await api(`/api/pm/progress?client=${encodeURIComponent(sel.client || "")}`
+        + `&project=${encodeURIComponent(sel.project || "")}`);
+      wbProgCache[key] = d;
+    } catch (e) {
+      box.innerHTML = `<div class="wb-empty">Could not load progress: ${esc(e.message || "")}</div>`;
+      return;
+    }
+  }
+  // The selected project may have changed while the fetch was in flight.
+  if (wbKey(wbSel()?.client, wbSel()?.project) !== key) return;
+
+  const cp = d.cum_planned || [], ca = d.cum_actual || [];
+  const maxV = Math.max(1, ...cp, ...ca);
+  const cur = d.current_week;
+  // Only draw the actual line up to "now" — an actual line running flat into
+  // future weeks implies work happened that has not.
+  const upto = (cur === null || cur === undefined) ? ca.length - 1 : cur;
+  const shown = ca.slice(0, upto + 1);
+
+  const t = d.totals || { planned: 0, actual: 0 };
+  if (!cp.length || (maxV <= 1 && !t.planned)) {
+    box.innerHTML = `<div class="wb-empty">No planned hours booked on this project yet, so there is nothing to compare against.</div>`;
+    if (note) note.textContent = "";
+    return;
+  }
+  // A project with a plan but no actuals yet is normal (the month has not been
+  // reconciled) — say that plainly instead of drawing a misleading flat line.
+  const noActuals = shown.every((v) => !v);
+  if (note) {
+    const pct = t.planned ? Math.round((t.actual / t.planned) * 100) : 0;
+    note.textContent = `planned ${fmtH(t.planned)} h · actual ${fmtH(t.actual)} h`
+      + (t.planned ? ` · ${pct}% of plan` : "")
+      + (noActuals ? " · no actuals recorded yet" : "");
+  }
+  box.innerHTML = svgProgress(cp, ca, upto, d.weeks || [], d.week_month || [], d.months || []);
+}
+
+/* Hand-rolled SVG so there is no charting dependency and it inherits the
+   theme variables (works across all themes, including the light ones). */
+function svgProgress(cumPlanned, cumActual, upto, weeks, weekMonth, months) {
+  const W = 1000, H = 260;                 // viewBox units; CSS scales it
+  const L = 62, R = 16, T = 16, B = 46;    // margins
+  const n = cumPlanned.length;
+  const plotW = W - L - R, plotH = H - T - B;
+  const maxV = Math.max(1, ...cumPlanned, ...cumActual);
+  // Round the top up to something tidy so the gridlines carry readable numbers.
+  const mag = Math.pow(10, Math.floor(Math.log10(maxV)));
+  const top = Math.ceil(maxV / mag) * mag;
+  const x = (i) => L + (n === 1 ? plotW / 2 : (i / (n - 1)) * plotW);
+  const y = (v) => T + plotH - (v / top) * plotH;
+
+  const line = (arr, last) => arr.slice(0, last + 1)
+    .map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const area = (arr, last) => arr.slice(0, last + 1)
+    .map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ")
+    + ` L${x(last).toFixed(1)},${y(0).toFixed(1)} L${x(0).toFixed(1)},${y(0).toFixed(1)} Z`;
+
+  // 4 horizontal gridlines with value labels.
+  let grid = "";
+  for (let g = 0; g <= 4; g++) {
+    const v = (top / 4) * g, yy = y(v);
+    grid += `<line x1="${L}" y1="${yy.toFixed(1)}" x2="${W - R}" y2="${yy.toFixed(1)}" class="wb-g"/>`
+      + `<text x="${L - 8}" y="${(yy + 4).toFixed(1)}" class="wb-ax" text-anchor="end">${fmtH(v)}</text>`;
+  }
+  // Month ticks: label the first week of each month, thinned so they never collide.
+  let mticks = "";
+  const seen = new Set();
+  weeks.forEach((w, i) => {
+    const mn = weekMonth[i];
+    if (!mn || seen.has(mn)) return;
+    seen.add(mn);
+    if (seen.size % 2 === 0 && n > 14) return;      // thin on long ranges
+    mticks += `<text x="${x(i).toFixed(1)}" y="${H - B + 18}" class="wb-mx" text-anchor="middle">${esc(mn.slice(0, 3))}</text>`;
+  });
+  // "Today" marker — where the actual line stops.
+  const nowX = x(upto).toFixed(1);
+  const nowLine = (upto >= 0 && upto < n - 1)
+    ? `<line x1="${nowX}" y1="${T}" x2="${nowX}" y2="${T + plotH}" class="wb-now"/>`
+      + `<text x="${nowX}" y="${T - 4}" class="wb-nowt" text-anchor="middle">today</text>`
+    : "";
+
+  const endP = cumPlanned[n - 1], endA = cumActual[upto >= 0 ? upto : 0];
+  const behind = endA < endP;
+
+  return `<svg viewBox="0 0 ${W} ${H}" class="wb-svg" role="img"
+      aria-label="Cumulative planned versus actual hours for this project">
+    ${grid}${mticks}${nowLine}
+    <path d="${area(cumPlanned, n - 1)}" class="wb-area-p"/>
+    <path d="${line(cumPlanned, n - 1)}" class="wb-line-p"/>
+    ${upto >= 0 ? `<path d="${area(cumActual, upto)}" class="wb-area-a"/>` : ""}
+    ${upto >= 0 ? `<path d="${line(cumActual, upto)}" class="wb-line-a${behind ? " behind" : ""}"/>` : ""}
+    <circle cx="${x(n - 1).toFixed(1)}" cy="${y(endP).toFixed(1)}" r="3.5" class="wb-dot-p"/>
+    ${upto >= 0 ? `<circle cx="${x(upto).toFixed(1)}" cy="${y(endA).toFixed(1)}" r="3.5" class="wb-dot-a${behind ? " behind" : ""}"/>` : ""}
+  </svg>
+  <div class="wb-prog-legend">
+    <span><i class="sw plan"></i>Planned (cumulative)</span>
+    <span><i class="sw act"></i>Actual (to date)</span>
+    <span class="muted-note">${behind
+      ? "Behind plan — actual is below planned hours"
+      : "On or ahead of plan"}</span>
+  </div>`;
 }
 
 /* ---------------- left: owned projects ---------------- */

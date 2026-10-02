@@ -4602,6 +4602,97 @@ def _require_people(request):
     return user
 
 
+@app.get("/api/pm/progress")
+def api_pm_progress(request: Request, client: str = "", project: str = ""):
+    """Planned vs actual HOURS per week for one project (GH-49).
+
+    Powers the "how is the project running vs plan" line chart on the PM's
+    My Projects screen.
+
+    HARD RULE: this returns HOURS ONLY. No rate, no revenue, no expense, no
+    margin — a PM must never see money, and this endpoint sits on their screen.
+    The scope check below is the same one /api/my-projects uses, so a PM cannot
+    read a project they do not own.
+    """
+    user = _require_people(request)
+    conn = get_db()
+    try:
+        c = (client or "").strip()
+        p = (project or "").strip()
+        if not p:
+            raise HTTPException(400, "project is required")
+        # Scope: a PM may only read a project they own. Admins pass.
+        if user.get("r") == "pm":
+            projs = _pm_projects(user["u"], conn)
+            if not _pm_owns(projs, c, p):
+                raise HTTPException(403, "Not assigned to this project")
+
+        weeks, months = _load_layout()
+        n = len(weeks)
+
+        # Resources on this project. person_id may be NULL for rows not yet
+        # linked to the people master list — those still carry hours, and the
+        # project chart must count them or the plan would understate.
+        rids = [r["id"] for r in conn.execute(
+            "SELECT id FROM resources WHERE TRIM(project)=? AND (?='' OR TRIM(client)=?)",
+            (p, c, c)).fetchall()]
+        if not rids:
+            return {"client": c, "project": p, "weeks": weeks, "months": months,
+                    "planned": [0.0] * n, "actual": [0.0] * n, "cum_planned": [0.0] * n,
+                    "cum_actual": [0.0] * n, "totals": {"planned": 0.0, "actual": 0.0},
+                    "current_week": None, "empty": True}
+
+        qmarks = ",".join("?" * len(rids))
+        planned = [0.0] * n
+        for row in conn.execute(
+                f"SELECT week, hours FROM weekly_hours WHERE resource_id IN ({qmarks})",
+                rids).fetchall():
+            i = row["week"]
+            if 0 <= i < n:
+                planned[i] += row["hours"] or 0.0
+        actual = [0.0] * n
+        for row in conn.execute(
+                f"SELECT week, hours FROM actual_hours WHERE resource_id IN ({qmarks})",
+                rids).fetchall():
+            i = row["week"]
+            if 0 <= i < n:
+                actual[i] += row["hours"] or 0.0
+
+        # Cumulative series is what actually answers "how is it going vs plan" —
+        # the two lines diverging is the signal. Sent precomputed so the client
+        # never has to re-derive it (and cannot disagree with the totals).
+        cum_p, cum_a = [], []
+        sp = sa = 0.0
+        for i in range(n):
+            sp += planned[i]
+            sa += actual[i]
+            cum_p.append(round(sp, 1))
+            cum_a.append(round(sa, 1))
+
+        # Which week is "now", so the chart can mark progress to date and stop
+        # the actual line where reality ends rather than drawing zeros into the
+        # future.
+        cur = None
+        today = dt.date.today()
+        for i, w in enumerate(weeks):
+            d = _week_date(w)
+            if d is not None and d <= today:
+                cur = i
+
+        return {
+            "client": c, "project": p,
+            "weeks": weeks, "months": months,
+            "planned": [round(v, 1) for v in planned],
+            "actual": [round(v, 1) for v in actual],
+            "cum_planned": cum_p, "cum_actual": cum_a,
+            "totals": {"planned": round(sp, 1), "actual": round(sa, 1)},
+            "current_week": cur,
+            "empty": False,
+        }
+    finally:
+        conn.close()
+
+
 def _pm_may_touch(conn, user, client: str, project: str) -> None:
     """Raise 403 unless this PM owns (client, project). Admins pass."""
     if user.get("r") != "pm":

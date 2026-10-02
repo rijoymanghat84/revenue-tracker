@@ -12,7 +12,7 @@
 <link rel="icon" type="image/png" sizes="16x16" href="/icons/favicon-16.png">
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
 <title>Recon</title>
-<link rel="stylesheet" href="/styles.css?v=83">
+<link rel="stylesheet" href="/styles.css?v=84">
 </head>
 <body>
 <div class="bg-glow"></div>
@@ -343,9 +343,27 @@
             <tbody id="wbTeamBody"></tbody>
           </table>
         </div>
-        <div class="toolbar glass">
+        <!-- GH-49: "Some where in the screen can we include a graph, that will
+             show how the project is going on compared to what was planned. It
+             should be a graph and not a bar diagram." A planned-vs-actual line
+             chart for the SELECTED project, sitting directly under the team
+             table so it reads as part of the project detail. HOURS ONLY. -->
+        <div class="glass wb-progress" id="wbProgress">
+          <div class="wb-progress-head">
+            <b>Project progress vs plan</b>
+            <span class="muted-note" id="wbProgNote">planned vs actual hours, cumulative</span>
+          </div>
+          <div id="wbProgChart" class="wb-prog-chart"></div>
+        </div>
+        <!-- GH-49: "Lets move this Find people section a bit down and instead of
+             right align let is start from left properly." This block used to sit
+             with the search box pushed to the far right of the toolbar. The note
+             is now on its own line and the search starts at the left edge. -->
+        <div class="toolbar glass wb-load-bar">
           <div class="sheet-note"><span class="dot on"></span><b>Load across all projects</b> — booked % of each person's weekly capacity. Red = over 100%; those people cannot take new work.</div>
-          <input type="search" id="wbLoadFilter" placeholder="Find a person…" class="search">
+          <div class="wb-load-search">
+            <input type="search" id="wbLoadFilter" placeholder="Find a person…" class="search">
+          </div>
         </div>
         <div class="wb-loadlist" id="wbLoad"></div>
         <!-- Each block is ONE WEEK. The month band above them groups the weeks,
@@ -740,13 +758,13 @@
      not executed yet. Getting this order wrong threw a ReferenceError that
      aborted the REST of app.js — including boot() — so the entire app failed to
      initialise. -->
-<script src="/workbench.js?v=12"></script>
+<script src="/workbench.js?v=13"></script>
 <!-- Generic column sorting for EVERY table (2026-10-02). Self-initialising and
      delegated, so it needs no per-table wiring and survives every re-render. -->
 <script src="/tablesort.js?v=4"></script>
 <!-- weeksheet.js also loads BEFORE app.js, for the same reason as workbench.js. -->
 <script src="/weeksheet.js?v=11"></script>
-<script src="/app.js?v=113"></script>
+<script src="/app.js?v=114"></script>
 <script>
   // PWA: register the service worker (only after load; skip on failure)
   if ("serviceWorker" in navigator) {
