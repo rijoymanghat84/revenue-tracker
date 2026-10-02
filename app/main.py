@@ -4735,6 +4735,168 @@ def api_people(request: Request):
         conn.close()
 
 
+# ---------------- Allocation derived from the plan (GH-54) ----------------
+# 62 of the 66 live resources carry allocation_pct = NULL: the original Excel
+# import held per-week HOURS, never an allocation %, and only rows created
+# through the assignment dialog ever got one. So the team panel and the Edit
+# dialog rendered "—" for most of the book even though the plan is fully there.
+#
+# Rather than migrate the data (62 guessed values written into a field the 100%
+# rule reads), the % is DERIVED from the plan wherever it is missing. One
+# definition, shared by the team panel, the Edit dialog and the API, so they
+# cannot disagree — and NOTHING is written.
+def _allocation_peak(res: dict) -> float:
+    """Peak booked % of a resource's own capacity across its planned weeks.
+
+    Peak, not average: allocation is the share of a WEEK, and a taper's opening
+    leg (the heavy one) is what the assignment was written against. Legacy rows
+    have no allocation at all, so this is the honest reconstruction.
+    """
+    cap = float(res.get("capacity") or CAP_WEEK_HOURS) or CAP_WEEK_HOURS
+    peak = float(res.get("peak_hours") or 0.0)
+    if peak <= 0:
+        return 0.0
+    return peak / cap * 100.0
+
+
+def _snap_quarter(pct: float) -> float:
+    """Floor a percentage onto the 25% allocation grid (0/25/50/75/100).
+
+    Floor, not round: the grid is a CEILING on how much someone owns, so 112%
+    must read as 100% (fully booked) and never 125% (over-allocated).
+    """
+    p = max(0.0, min(100.0, float(pct or 0.0)))
+    return float(int(p / 25.0) * 25)
+
+
+def _derived_allocation(res: dict) -> float:
+    """The % to show for a resource: the stored value, or one derived from plan.
+
+    0.0 only for a resource with no planned hours AND no stored % — a genuinely
+    empty row, which the caller renders as an em dash rather than 0%.
+    """
+    stored = res.get("allocation_pct")
+    if stored is not None and float(stored) > 0:
+        return float(stored)
+    return _snap_quarter(_allocation_peak(res))
+
+
+def _load_plan_stats(conn: sqlite3.Connection, rids: list[int]) -> dict[int, dict]:
+    """Per-resource plan stats: peak week hours, first/last planned week, total.
+
+    ONE grouped query for the whole list — never per row. Looping a query per
+    resource through SQLCipher measured 6.2s on /api/pm/load once; batching is
+    the difference between a usable screen and an unusable one.
+    """
+    out: dict[int, dict] = {}
+    if not rids:
+        return out
+    q = ",".join("?" * len(rids))
+    for r in conn.execute(
+            f"SELECT resource_id rid, MAX(hours) peak, MIN(week) w0, MAX(week) w1, "
+            f"SUM(hours) tot FROM weekly_hours WHERE resource_id IN ({q}) "
+            f"GROUP BY resource_id", rids).fetchall():
+        out[r["rid"]] = {
+            "peak": float(r["peak"] or 0.0),
+            "first_week": int(r["w0"]) if r["w0"] is not None else None,
+            "last_week": int(r["w1"]) if r["w1"] is not None else None,
+            "total": float(r["tot"] or 0.0),
+        }
+    return out
+
+
+def _plan_window(weeks: list[str], stats: dict | None,
+                 start_date: str, end_date: str) -> tuple[str, str]:
+    """The start/end to show for an assignment.
+
+    Prefer the STORED window; otherwise derive one from the weeks that actually
+    carry hours (Monday of the first planned week → Sunday of the last), so the
+    Edit dialog opens on the resource's real span instead of two blank boxes.
+    """
+    sd = (start_date or "").strip()
+    ed = (end_date or "").strip()
+    if (sd and ed) or not stats or stats.get("first_week") is None:
+        return sd, ed
+    w0, w1 = stats["first_week"], stats["last_week"]
+    d0 = _week_date(weeks[w0]) if 0 <= w0 < len(weeks) else None
+    d1 = _week_date(weeks[w1]) if 0 <= w1 < len(weeks) else None
+    if not sd and d0:
+        sd = d0.isoformat()
+    if not ed and d1:
+        ed = (d1 + dt.timedelta(days=6)).isoformat()   # Sunday of the last week
+    return sd, ed
+
+
+def _norm_project(client: str | None, project: str | None) -> tuple[str, str]:
+    """The (client, project) key the app matches on everywhere: trimmed, upper."""
+    return ((client or "").strip().upper(), (project or "").strip().upper())
+
+
+def _bench_person(conn: sqlite3.Connection, pid: int, p, alloc: float,
+                  start_date: str, end_date: str) -> bool:
+    """Park a person on Internal · Bench at `alloc`% for a freed share.
+
+    Bench holds ZERO rates, so this is financially inert — it exists so the
+    person's availability is visible instead of silently vanishing when they
+    come off a project (Rijoy's spec for "not resigned").
+
+    Goes through the SAME 100% validator as any other assignment, so benching
+    can never smuggle an over-allocation. Returns False when there is nothing to
+    bench (they are already fully booked, or `alloc` floors to 0) — the caller
+    reports that rather than failing the removal itself.
+    """
+    alloc = _snap_quarter(alloc)
+    if alloc <= 0:
+        return False
+    if not ensure_bench(conn):
+        return False
+    existing = conn.execute(
+        "SELECT id FROM resources WHERE person_id=? AND TRIM(UPPER(client))=? "
+        "AND TRIM(UPPER(project))=?",
+        (pid, BENCH_CLIENT.upper(), BENCH_PROJECT.upper())).fetchone()
+    cap = float(p["capacity"] or CAP_WEEK_HOURS)
+    v = validate_assignment(conn, pid, float(alloc), start_date or "", end_date or "",
+                            exclude_resource_id=(existing["id"] if existing else None))
+    if not v["ok"]:
+        return False
+    if existing:
+        bid = existing["id"]
+        conn.execute(
+            "UPDATE resources SET allocation_pct=?, start_date=?, end_date=?, "
+            "capacity=?, phases='' WHERE id=?",
+            (float(alloc), start_date or "", end_date or "", cap, bid))
+    else:
+        sort = conn.execute(
+            "SELECT COALESCE(MAX(sort_order),0)+1 s FROM resources").fetchone()["s"]
+        bid = int(conn.execute(
+            "INSERT INTO resources (country, client, project, name, role, rate, "
+            "offshore_rate, sort_order, capacity, person_id, allocation_pct, "
+            "start_date, end_date, phases) VALUES (?,?,?,?,?,0,0,?,?,?,?,?,?,'')",
+            ((p["country"] or ""), BENCH_CLIENT, BENCH_PROJECT, p["name"],
+             (p["home_title"] or ""), sort, cap, pid, float(alloc),
+             start_date or "", end_date or "")).lastrowid or 0)
+    _write_allocation_hours(conn, bid, float(alloc), cap, start_date or "", end_date or "")
+    return True
+
+
+class AssignmentRemoveBody(BaseModel):
+    """How a resource leaves a project (GH-54, Rijoy's spec).
+
+    resigned=True  -> remove the assignment AND mark the person inactive (they
+                      have left the company).
+    resigned=False -> remove the assignment and park them back on
+                      Internal · Bench for the share they just freed, so their
+                      availability is visible instead of silently vanishing.
+    `force` carries the second confirmation when a resigned person still holds
+    other project assignments — the dialog warns first, never silently clears
+    another project's data.
+    """
+    resigned: bool = False
+    start_date: str | None = ""
+    end_date: str | None = ""
+    force: bool = False
+
+
 class BenchBody(BaseModel):
     person_id: int
     # Blank = auto: bench whatever share of the week is unbooked, floored onto the
@@ -5559,6 +5721,23 @@ def api_assignment_update(rid: int, body: AssignmentBody, request: Request):
             raise HTTPException(409, _clash_message(p["name"], alloc, v))
         pr = _pricing_row(conn, title)
         cap = p["capacity"] or CAP_WEEK_HOURS
+        # GH-54: only rewrite the weekly plan when the allocation or the window
+        # ACTUALLY changes. Rijoy: "leave the weeks exactly as they are unless I
+        # actually change the allocation %". Before this, every save re-spread
+        # pct x capacity across the whole window, so opening Edit to fix a title
+        # (or to add a title_exception reason) silently erased a varied plan —
+        # a person planned 40h most weeks and 20h in others came back flat.
+        prev_alloc = float(row["allocation_pct"] or 0.0)
+        prev_phases = (row["phases"] or "").strip()
+        prev_sd = (row["start_date"] or "").strip()
+        prev_ed = (row["end_date"] or "").strip()
+        new_phases = (json.dumps(phases) if phases else "")
+        plan_changed = (
+            abs(alloc - prev_alloc) > 1e-9
+            or new_phases != prev_phases
+            or (sd or "").strip() != prev_sd
+            or (ed or "").strip() != prev_ed
+        )
         conn.execute(
             "UPDATE resources SET person_id=?, role=?, rate=?, offshore_rate=?, "
             "capacity=?, allocation_pct=?, start_date=?, end_date=?, title_exception=?, "
@@ -5566,22 +5745,32 @@ def api_assignment_update(rid: int, body: AssignmentBody, request: Request):
             (pid, title, (pr["rate"] if pr else row["rate"]),
              (pr["offshore_rate"] if pr else row["offshore_rate"]),
              cap, alloc, sd, ed, exception,
-             (json.dumps(phases) if phases else ""), rid))
+             new_phases, rid))
         # Switching an assignment back to flat mode must not leave the old
-        # phased hours behind in weeks the flat window no longer covers.
-        if phases:
-            _write_phase_hours(conn, rid, phases, cap)
-        else:
-            _write_allocation_hours(conn, rid, alloc, cap, sd, ed)
+        # phased hours behind in weeks the flat window no longer covers — but
+        # that is exactly what plan_changed detects, so a no-op save writes
+        # nothing at all.
+        if plan_changed:
+            if phases:
+                _write_phase_hours(conn, rid, phases, cap)
+            else:
+                _write_allocation_hours(conn, rid, alloc, cap, sd, ed)
         conn.commit()
-        return {"ok": True, "weeks_booked": v["weeks_in_window"], "phased": bool(phases)}
+        return {"ok": True, "weeks_booked": v["weeks_in_window"], "phased": bool(phases),
+                "plan_rewritten": plan_changed}
     finally:
         conn.close()
 
 
 @app.delete("/api/assignments/{rid}")
 def api_assignment_delete(rid: int, request: Request):
-    """Remove a person from a project (PM-scoped). Deletes its hours + actuals."""
+    """Remove a person from a project (PM-scoped). Deletes its hours + actuals.
+
+    Kept as a plain delete for backwards compatibility (the Excel/other callers
+    and the test suites use it); the UI's Remove goes through
+    POST /api/assignments/{rid}/remove, which additionally asks the resigned
+    question. This path answers `{ok}` and nothing else.
+    """
     user = _require_people(request)
     conn = get_db()
     try:
@@ -5601,6 +5790,109 @@ def api_assignment_delete(rid: int, request: Request):
                       project=f"{row['client']} · {row['project']}")
         conn.commit()
         return {"ok": True}
+    finally:
+        conn.close()
+
+
+@app.post("/api/assignments/{rid}/remove")
+def api_assignment_remove(rid: int, body: AssignmentRemoveBody, request: Request):
+    """Remove a resource from a project, asking WHAT HAPPENED TO THEM (GH-54).
+
+    Rijoy: "remove button should ask if the resource resigned — if not then put
+    the resource along with the availability back to bench and if resigned then
+    remove the resource and make the person inactive".
+
+    resigned=False -> remove, then park them on Internal · Bench for the share
+                      they just freed (auto-computed, quarter-floored) so their
+                      availability is visible.
+    resigned=True  -> remove, then set people.active = 0 (left the company).
+
+    A resigned person who still holds OTHER project assignments is NOT silently
+    cleared: the first call returns 409 `still_assigned` naming them, and the
+    caller must re-post with force=true. Offboarding one project must never
+    quietly empty another.
+    """
+    user = _require_people(request)
+    conn = get_db()
+    try:
+        row = conn.execute("SELECT * FROM resources WHERE id=?", (rid,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Assignment not found")
+        _pm_may_touch(conn, user, row["client"], row["project"])
+        pid = row["person_id"]
+        p = (conn.execute("SELECT * FROM people WHERE id=?", (pid,)).fetchone()
+             if pid else None)
+
+        nh = conn.execute("SELECT COUNT(*) FROM weekly_hours WHERE resource_id=?", (rid,)).fetchone()[0]
+        na = conn.execute("SELECT COUNT(*) FROM actual_hours WHERE resource_id=?", (rid,)).fetchone()[0]
+        label = f"{row['name']} — {row['client']} · {row['project']}"
+
+        # The share to bench = their peak allocation, i.e. what this row was
+        # holding. Peak, not average, so a taper's opening leg is what is freed.
+        freed_pct = _allocation_peak({
+            "capacity": row["capacity"],
+            "peak_hours": conn.execute(
+                "SELECT COALESCE(MAX(hours),0) FROM weekly_hours WHERE resource_id=?",
+                (rid,)).fetchone()[0],
+        })
+
+        # Resigned with work still elsewhere: ask before touching their status.
+        if body.resigned and pid and not body.force:
+            other = conn.execute(
+                "SELECT client, project FROM resources WHERE person_id=? AND id<>?",
+                (pid, rid)).fetchall()
+            if other:
+                others = [f"{r['client']} · {r['project']}" for r in other]
+                raise HTTPException(409, {
+                    "code": "still_assigned",
+                    "message": (f"{row['name']} is still on {len(others)} other project(s): "
+                                f"{', '.join(others[:5])}"
+                                + (" …" if len(others) > 5 else "")
+                                + ". Marking them inactive will leave those assignments in place. "
+                                  "Confirm to proceed."),
+                    "other_projects": others,
+                })
+
+        sd, ed = "", ""
+        if not body.resigned and pid:
+            # Bench for the freed share, from tomorrow forward so it does not
+            # touch the plan already recorded for the weeks they worked.
+            today = dt.date.today()
+            sd = (body.start_date or "").strip()
+            ed = (body.end_date or "").strip()
+            if not sd:
+                sd = (today + dt.timedelta(days=1)).isoformat()
+            if not ed:
+                ed = dt.date(today.year, 12, 31).isoformat()
+
+        conn.execute("DELETE FROM weekly_hours WHERE resource_id=?", (rid,))
+        conn.execute("DELETE FROM actual_hours WHERE resource_id=?", (rid,))
+        conn.execute("DELETE FROM actual_notes WHERE resource_id=?", (rid,))
+        conn.execute("DELETE FROM resources WHERE id=?", (rid,))
+
+        benched = False
+        if not body.resigned and pid and p:
+            benched = _bench_person(conn, pid, p, freed_pct, sd, ed)
+
+        deactivated = False
+        if body.resigned and pid:
+            conn.execute("UPDATE people SET active=0 WHERE id=?", (pid,))
+            deactivated = True
+
+        outcome = ("resigned — person marked inactive" if deactivated
+                   else f"removed; benched at {_snap_quarter(freed_pct):g}%"
+                        if benched
+                        else "removed (nothing to bench — already fully booked)")
+        _log_activity(
+            conn, request,
+            "assignment.resign" if deactivated else "assignment.remove",
+            target=label,
+            details=(f"{outcome}. Deleted {nh} planned-hour row(s) and {na} actual-hour row(s)."),
+            project=f"{row['client']} · {row['project']}")
+        conn.commit()
+        return {"ok": True, "resigned": bool(deactivated), "benched": bool(benched),
+                "bench_pct": (_snap_quarter(freed_pct) if benched else 0.0),
+                "name": row["name"], "outcome": outcome}
     finally:
         conn.close()
 
@@ -5634,15 +5926,35 @@ def api_my_projects(request: Request):
                 ((r["client"] or "").upper(), (r["project"] or "").upper())).fetchone()
             team = conn.execute(
                 "SELECT id, name, role, allocation_pct, start_date, end_date, capacity, "
-                "title_exception, phases "
+                "title_exception, phases, person_id "
                 "FROM resources WHERE TRIM(UPPER(client))=? AND TRIM(UPPER(project))=? ORDER BY name",
                 ((r["client"] or "").upper(), (r["project"] or "").upper())).fetchall()
+            # GH-54: give every member an allocation % (derived from their plan
+            # when none is stored) plus the hours/week it represents and the real
+            # window — so the panel is never blank and Edit opens pre-filled.
+            stats = _load_plan_stats(conn, [t["id"] for t in team])
+            tmembers = []
+            for t in team:
+                st = stats.get(t["id"]) or {}
+                row_d = {**dict(t), "peak_hours": st.get("peak", 0.0),
+                         "planned_hours": st.get("total", 0.0)}
+                alloc = _derived_allocation(row_d)
+                cap = float(t["capacity"] or CAP_WEEK_HOURS)
+                sd_v, ed_v = _plan_window(weeks, st, t["start_date"], t["end_date"])
+                tmembers.append({
+                    **dict(t), "phases": parse_phases(t["phases"]),
+                    "allocation_pct": alloc,
+                    "allocation_derived": (t["allocation_pct"] is None or float(t["allocation_pct"] or 0) <= 0),
+                    "weekly_hours": round(alloc / 100.0 * cap, 1),
+                    "start_date": sd_v, "end_date": ed_v,
+                    "planned_hours": round(st.get("total", 0.0), 1),
+                })
             out.append({
                 "client": r["client"], "project": r["project"],
                 "people": r["n"], "booked_hours": round(r["hrs"] or 0, 1),
                 "start_date": (meta["start_date"] if meta else "") or "",
                 "end_date": (meta["end_date"] if meta else "") or "",
-                "team": [{**dict(t), "phases": parse_phases(t["phases"])} for t in team],
+                "team": tmembers,
             })
         # GH-37: a project this PM owns but has NOBODY on yet has no resource rows,
         # so the query above cannot see it and a freshly created project vanished
