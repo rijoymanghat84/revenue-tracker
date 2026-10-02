@@ -59,6 +59,18 @@ collapsed section opens with reasons.
 
 Commit `5b9541f`, branch `feat/51_resources_tab`, deployed 2026-10-02 18:35 UTC.
 
+### Data note (not from this deploy)
+
+Planned hours read **+40h** across this deploy (60,000.00 vs 60,000.00). Diffed
+snapshot-vs-live to locate it exactly rather than assume: it is
+**`Dylan Marsh` — Apple/PHP (resource 190)**, whose `allocation_pct` went
+`NULL → 50` and whose weeks 44 / 50 / 51 / 52 moved 12–16h → 20h (the rest of his
+weeks were already 20h). That is an **in-app assignment edit made between 18:17
+and 18:35**, almost certainly the new assign/partial-allocation path being
+exercised — this deploy writes no resource rows, and actual hours (35,000.00) are
+unchanged. Resource and hour edits are not written to the activity log, so the
+log cannot name the actor; flagged rather than altered.
+
 ---
 
 ## 2026-10-02 — Find a person: title filter, ranked by real availability (GH-50)
