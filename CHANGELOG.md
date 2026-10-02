@@ -9,6 +9,79 @@ wasn't one) and the commit.
 
 ---
 
+## 2026-10-01 — Delete projects from the Dashboard; PMs create/delete their own (GH-37)
+
+Commit `814387b` — **GH-37**. the owner asked for two things: a delete option on the
+Admin Dashboard, and for PMs to be able to create a project (without any dollar
+values), have it show on the Dashboard, and delete what they created.
+
+### The delete was also an integrity bug
+
+`DELETE /api/projects/{pid}` was a bare `DELETE FROM projects WHERE id=?`. It
+removed the definition and **left every `resources` row — plus its
+`weekly_hours`, `actual_hours` and `actual_notes` children — pointing at a project
+that no longer existed.** Those rows still appeared in the Planned grid and still
+counted in Utilization and the Dashboard.
+
+It now clears children → riders → PM assignment → definition in one transaction,
+matched with `TRIM(UPPER(...))` the way the rest of the app keys projects.
+Measured: **18 projects → 17, with 0 orphaned resources.**
+
+### Deleting a staffed project is refused, and says why
+
+```
+Apple · Support still has 5 person(s) assigned (Ethan Caldwell, Mason Reyes,
+Noah Bennett, Olivia Grant, Liam Foster) with 236 planned week(s) and
+136 actual week(s). Deleting it discards those hours.
+```
+
+`?force=true` overrides. Both UIs are **two-step**: the first attempt is refused
+with the real numbers, and only then does the second confirm ask again — so a
+stray click can never destroy a team.
+
+### Permissions
+
+New `_may_manage_projects()` lets a PM reach the project routes. Ownership still
+decides everything through `_pm_may_touch()`, so a PM may only create, edit or
+delete projects **they own**. `GET /api/projects` is now scoped for PMs instead of
+403 (they could create a project but never list one). A PM creating a project is
+written as its **owner** automatically; an explicit `pm` from an admin still wins.
+
+### UI
+
+- **Admin:** a 🗑 column on the Dashboard, rendered only when the user holds the
+  `projects` permission.
+- **PM:** a **+ New project** button on the workbench — client, project and
+  optional dates only, **no rate, no revenue, no dollar field** — plus a 🗑 on
+  each of their project rows.
+
+### Found while testing
+
+`/api/my-projects` built its list from **resource** rows, so a project the PM
+owned with nobody on it yet did not appear. The create returned 200 but the
+project vanished from the very list it was created for — the same class of bug as
+GH-32. Owned-but-empty projects are now included.
+
+| Check (throwaway PM, created and removed for the test) | Result |
+|---|---|
+| PM creates a project | **200**, auto-assigned as owner |
+| Appears on the admin Dashboard | **yes**, empty "no team" row |
+| Visible in the PM's workbench | **yes**, "+ Add team member" enabled |
+| PM deletes **another** PM's project | **403** |
+| PM renames **another** PM's project | **403** |
+| PM deletes **their own** project | **200**, ownership row released |
+| PM sees money (dashboard/pricing/users/activity) | **403 on all four** |
+| DB after the round-trip | 17 projects, 65 resources, 1,885 weeks, **0 orphans**, `ok` |
+| Money | **unchanged** at $2,000,000.00 / $1,000,000.00 |
+
+**Two bugs in my own work, caught by testing rather than review:** the shared SQL
+predicate was built with a `res` alias and then reused in a statement where
+`resources` is unaliased, so every delete raised `no such column: res.client` and
+returned a bare 500; and the PM's test login appeared to fail only because
+`/api/me` returned `None` for a login that had not actually succeeded.
+
+---
+
 ## 2026-10-01 — Add Project takes PM + allocation; uploads enforce capacity (GH-34, GH-35)
 
 Commits `99289ed` (**GH-34**) and `b080998` (**GH-35**).
