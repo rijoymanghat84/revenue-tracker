@@ -9,7 +9,80 @@ wasn't one) and the commit.
 
 ---
 
-## 2026-10-01 — Dropdown scroll fix + Logs section (GH-30, GH-31)
+## 2026-10-01 — Dashboard visibility, Active flag, popup formatting (GH-32, GH-33)
+
+Commits `43be591` (**GH-32**) and `aab483e` (**GH-33**).
+
+### GH-32 — a project with no resources never appeared on the Dashboard
+
+Rijoy: _"In the dashboard I added a project and it didn't get added"_ and _"The
+Bench project and all project that we add should be there in dashboard."_
+
+The Dashboard is built from **resource** rows, so a project with nobody assigned
+to it totals to nothing and produced **no row at all**. Measured: the `projects`
+table held **16** rows, the Dashboard showed **14**. Missing were
+`Internal / Bench` and `Print Mail / Quadient` — the project just added — both
+with 0 resources. So adding a project looked like it had silently failed, and it
+could not even be selected in the Dashboard project filter (also built from
+resource rows), leaving no way anywhere on the Dashboard to confirm it existed.
+
+- `_empty_project_groups()` emits an explicit zero row for any defined project
+  with no resources, flagged `empty`.
+- The row renders with a **"no team"** badge and a tinted background, so
+  all-zeros reads as "awaiting its first person" rather than a broken row.
+- The project filter's option list is unioned with the `projects` table.
+- Filters still apply, so client / project / PM filtering is unchanged.
+
+Verified: **16/16** projects on the Dashboard, **16** filter options, both empty
+rows badge correctly, Planned Revenue still **$2,738,187.02** with 64 resources.
+
+### GH-33 — popup fields collided; Active/Inactive moved to the first column
+
+Rijoy: _"when i click on edit/ merge a popup window opens they all details in the
+popup is not properly formatted ... should look professional"_ and _"the active
+or inactive flag ... should be the first flag to make sure that the resource is
+available — if inactive then they are no longer in the company."_
+
+**Popup cause was layout, not taste.** `.modal-body label.f` set only a colour,
+so a `<label>` stayed inline *beside* its input inside the grid cell. A long
+label ("Weekly capacity (hrs)", "Approved titles (comma-separated — PMs may book
+only these)") filled the cell and pushed the input against the next column — two
+fields read as one crammed blob. Fields are now **stacked label-over-control**,
+so a long label can only make its own row taller. Applies to every popup using
+`.assign-grid` / `.wb-field` (person, merge, project, assignment, new joiner).
+Verified: all 6 person-dialog fields stack with `overlap=false`.
+
+**Active/Inactive** is now column 1 and is a **toggle**, so status is changed
+where it is read instead of two clicks away inside Edit. Inactive rows are
+dimmed; the load bar keeps its own column so both signals stay visible.
+
+### A data-loss bug the toggle work exposed
+
+`api_person_update` declared `country` / `home_title` as `str | None = ""`. A
+request carrying only `{active}` therefore arrived with `country=""` and
+`home_title=""`, and the endpoint **wrote those blanks** — so toggling someone's
+status silently **erased their home title**. Caught by test: `'QA'` → `''`.
+
+Every field now defaults to `None`, so "omitted" is distinguishable from
+"explicitly cleared": `None` keeps the stored value, `""` clears it. The title is
+re-canonicalised against the rate card on save, matching the joiner path.
+
+| Check | Result |
+|---|---|
+| `PUT {active:0}` → 200 with `home_title` intact | **pass** |
+| Legacy full-edit payload | still 200 |
+| DB scanned after the fix | **0 of 49** people missing a home title |
+| Integrity | `ok` |
+| Console errors | 0 |
+
+**Process note:** two commits in this batch had to be re-issued because the
+citation was guessed instead of read back from GitHub (`#30/#31`, not `#33/#34`;
+then `#33`, not `#35`). Rewriting was done with `format-patch` + `reset --hard` +
+`am`, and the tree comparison caught that `sed` had also rewritten the same
+number inside code comments — harmless, but worth knowing that a "tree differ"
+after a message-only rewrite is not automatically a problem.
+
+---
 
 Two fixes from the same review pass. Commits `ed4a0c3` (**GH-30**) and
 `89ec9ed` (**GH-31**).
