@@ -17,6 +17,16 @@
   --radius: 14px;
   --orange: #fb923c;
 
+  /* ── ink ON a themed fill (feature #8 themes, 2026-10-02) ─────────
+     These three replace the hardcoded near-black inks that used to sit on
+     the accent, amber and red fills. On any theme with a dark accent, i.e.
+     every light theme, those literals measured 3.35-3.95:1 and were
+     unreadable. Each theme now solves its own value; these are midnight's,
+     and midnight IS :root. */
+  --on-accent: #070a15;
+  --on-warn: #070a15;
+  --on-hot: #070a15;
+  --amber-ink: #fbbf24;   /* amber text on its own amber tint */
   /* ── semantic surface scale (themeable) ───────────────────────────
      These reproduce the original dark palette 1:1, so the default look is
      unchanged. Every theme overrides them. */
@@ -587,7 +597,7 @@ td.meta-col { width: auto; min-width: 0; }
 #dashTable tr.total-row td { font-weight: 800; background: rgba(var(--accent-rgb), 0.08); border-top: 1px solid var(--border-strong); }
 .cur-chip {
   display: inline-block; font-size: 10.5px; font-weight: 700; padding: 2px 8px;
-  border-radius: 999px; background: rgba(var(--amber-rgb), 0.12); color: var(--amber);
+  border-radius: 999px; background: rgba(var(--amber-rgb), 0.12); color: var(--amber-ink);
   border: 1px solid rgba(var(--amber-rgb), 0.35);
 }
 .diffbar { display: inline-block; height: 6px; border-radius: 3px; vertical-align: middle; margin-left: 6px; }
@@ -639,7 +649,7 @@ input[type=number] { -moz-appearance: textfield; appearance: textfield; }
   border-radius: 8px; padding: 5px 6px; font-size: 12.5px; outline: none; margin-right: 6px; cursor: pointer;
 }
 .cur-sel:focus { border-color: var(--accent); }
-.cur-tag { color: var(--amber); font-size: 11.5px; font-weight: 700; margin-right: 3px; }
+.cur-tag { color: var(--amber-ink); font-size: 11.5px; font-weight: 700; margin-right: 3px; }
 tr.p-edit td { background: rgba(var(--accent-rgb), 0.06); }
 tr.p-edit .rate-inp, tr.p-edit .cur-sel { border-color: var(--accent); }
 
@@ -674,11 +684,11 @@ html[data-theme-dark="0"] #utilTable td.u-cell.red { color: #a3241a; }
 html[data-theme-dark="0"] #utilTable td.u-cell.green { color: #0b6b3a; }
 html[data-theme-dark="0"] #utilTable td.u-cell.yellow { color: #7a4d00; }
 html[data-theme-dark="0"] #utilTable td.u-cell.orange { color: #8a3d00; }
-/* The currency markers sit amber-on-amber-tint. On a light surface the default
-   amber measured 3.94:1 — under the 4.5 bar. Darken for light themes, exactly
-   like the status hues above. */
-html[data-theme-dark="0"] .cur-tag,
-html[data-theme-dark="0"] .cur-chip { color: #7a4d00; }
+/* The currency markers sit amber-on-amber-tint — a self-referential pair:
+   lightening --amber also lightens rgba(var(--amber-rgb),0.12), so the ratio
+   barely moves no matter how the hue is tuned (Solarized held at 3.95:1).
+   They now use --amber-ink, solved per theme against the composited tint, so
+   light themes no longer need the hardcoded #7a4d00 override. */
 #utilTable th.u-sub { font-size: 10px; color: var(--muted); background: var(--surface-5); }
 #utilTable th[colspan="2"] { text-align: center; }
 
@@ -707,7 +717,7 @@ html[data-theme-dark="0"] .cur-chip { color: #7a4d00; }
 /* the header pair (month cell + its P/A sub-cells) gets a clear top marker */
 #utilTable th.u-month-head-on,
 #utilTable th.u-sub.u-month-head-on {
-  background: var(--accent); color: #06101d; font-weight: 800;
+  background: var(--accent); color: var(--on-accent); font-weight: 800;
 }
 #utilTable td.u-month-active {
   box-shadow:
@@ -753,7 +763,7 @@ html[data-theme-dark="0"] .util-mode { background: rgba(0,0,0,0.05); }
 #utilTable tr.u-row-sub-wk th { top: 54px; }
 /* week-number band: quiet like the P/A row, current week marked */
 #utilTable th.u-wk { font-size: 10px; color: var(--muted); background: var(--surface-5); }
-#utilTable th.u-wk-now { background: var(--accent); color: #06101d; }
+#utilTable th.u-wk-now { background: var(--accent); color: var(--on-accent); }
 #utilTable th.u-mo-now { background: var(--surface-5); color: var(--text); }
 .u-month-label { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
 
@@ -997,7 +1007,7 @@ select option { background: var(--surface-4); color: var(--text); }
     align-items: center; justify-content: center;
     width: 48px; height: 48px; border-radius: 50%;
     background: linear-gradient(135deg, rgba(var(--accent-rgb),0.92), rgba(var(--accent2-rgb),0.92));
-    color: #06101d; font-size: 20px; font-weight: 800;
+    color: var(--on-accent); font-size: 20px; font-weight: 800;
     border: 0; cursor: pointer; box-shadow: 0 10px 26px rgba(0,0,0,0.5);
   }
   .rail-backdrop {
@@ -1495,9 +1505,9 @@ html[data-theme-dark="0"] .noowner-chip { color: #a3241a; }
   font-size: 8px;   /* reveal the date on hover even when hidden by the media query */
 }
 /* Booked / warn / over — the colours Rijoy was asking about. */
-.wb-wk.booked { background: var(--accent); color: #04202a; }
-.wb-wk.warn   { background: var(--amber);  color: #2b2000; }
-.wb-wk.hot    { background: var(--red);    color: #2a0806; }
+.wb-wk.booked { background: var(--accent); color: var(--on-accent); }
+.wb-wk.warn   { background: var(--amber);  color: var(--on-warn); }
+.wb-wk.hot    { background: var(--red);    color: var(--on-hot); }
 
 /* week-detail popup */
 .wk-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
@@ -1523,7 +1533,7 @@ html[data-theme-dark="0"] .noowner-chip { color: #a3241a; }
    ========================================================================== */
 /* month band on the Planned / Actuals grids */
 .month-row th.mo-now {
-  background: var(--accent); color: #04202a;
+  background: var(--accent); color: var(--on-accent);
   border-radius: 6px 6px 0 0; font-weight: 800;
 }
 /* current week column on those grids */
@@ -1534,7 +1544,7 @@ html[data-theme-dark="0"] .noowner-chip { color: #a3241a; }
 }
 /* load rail: current month band */
 .wb-mo.now {
-  color: #04202a; background: var(--accent);
+  color: var(--on-accent); background: var(--accent);
   border-radius: 4px; font-weight: 800;
 }
 /* load rail: current week block — ring, so it survives the colour coding.
@@ -1560,12 +1570,12 @@ html[data-theme-dark="0"] .wb-mo.now { color: #ffffff; }
 /* Light-theme ink for the load rail's week cells.
    The three cell fills are the LIGHT theme's darkened accents (accent #0d7d8f,
    amber #a3690a, red #c0362b). The inks inherited from the dark theme
-   (#04202a / #2b2000 / #2a0806) sit at 3.05-3.68 on those darker fills — below
+   the dark inks they replaced sat at 3.05-3.68 on those darker fills — below
    the 4.5 bar. Measured, the best ink for all three is white (4.83 / 4.58 /
    5.52), so on a light theme the cell text goes white. */
 html[data-theme-dark="0"] .wb-wk.booked,
 html[data-theme-dark="0"] .wb-wk.warn,
-html[data-theme-dark="0"] .wb-wk.hot { color: #ffffff; }
+html[data-theme-dark="0"] .wb-wk.hot { color: var(--on-accent); }
 /* The current-week ring must stay legible over a light fill: --text is a dark
    slate on Paper, which is exactly what we want, but state it so the intent is
    explicit rather than incidental. */
@@ -1590,7 +1600,7 @@ html[data-theme-dark="0"] .wk-now { color: #0a5f6d; border-color: rgba(13, 125, 
   font-size: 12px; font-weight: 600; padding: 6px 14px; border-radius: 7px; cursor: pointer;
 }
 .wb-modetab:hover { color: var(--text); }
-.wb-modetab.on { background: var(--accent); color: #04202a; }
+.wb-modetab.on { background: var(--accent); color: var(--on-accent); }
 
 .wb-phase {
   display: grid; align-items: center; gap: 8px; margin-bottom: 7px;
