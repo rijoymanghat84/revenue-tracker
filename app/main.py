@@ -5685,15 +5685,31 @@ def api_assignment_update(rid: int, body: AssignmentBody, request: Request):
             raise HTTPException(404, "Person not found")
         approved = _approved_titles(conn, pid)
         title = (body.title or row["role"] or p["home_title"] or "").strip()
+        prev_role = (row["role"] or "").strip()
         if not approved:
             raise HTTPException(400, f"{p['name']} has no title set. Set their home title first.")
-        if title not in approved:
+        # GH-54: grandfather an UNCHANGED booking that is not on the approved
+        # list. 8 live rows came from Excel booked under a non-approved title
+        # (a QA booked as a Platform Developer); re-checking the absolute state
+        # made those rows impossible to save at all. A PM still cannot INTRODUCE
+        # a non-approved title (that differs from prev_role and is refused), so
+        # this preserves legacy data without loosening the boundary.
+        if title not in approved and not (prev_role and title == prev_role):
             raise HTTPException(
                 400, f"'{title}' is not an approved title for {p['name']}. "
                      f"Approved: {', '.join(approved)}")
+        # A title CHANGING away from what is already booked on this row is also
+        # the case the owner wants eyes on (see _approved_titles / the reason rule).
+        title_changed = bool(prev_role) and title != prev_role
         exception = (body.title_exception or "").strip()
         home = (p["home_title"] or "").strip()
-        if title and (not home or title != home) and not exception:
+        # GH-54: require the reason only when the title is actually CHANGING to
+        # something other than the home title. 8 live rows are booked under a
+        # non-home title with no stored reason (a QA booked as a Platform
+        # Developer) — enforcing on the absolute state made those rows
+        # unsaveable, so the Edit dialog could never be used on them at all.
+        # An UNCHANGED legacy booking is allowed through; a real re-title is not.
+        if title and (not home or title != home) and not exception and title_changed:
             raise HTTPException(400, f"A reason is required when booking {p['name']} as '{title}'.")
         phases = parse_phases([x.model_dump() for x in (body.phases or [])]) if body.phases else []
         if phases:
@@ -5727,16 +5743,39 @@ def api_assignment_update(rid: int, body: AssignmentBody, request: Request):
         # pct x capacity across the whole window, so opening Edit to fix a title
         # (or to add a title_exception reason) silently erased a varied plan —
         # a person planned 40h most weeks and 20h in others came back flat.
+        #
+        # The comparison is against the EFFECTIVE previous state, not the raw
+        # stored columns: a legacy row has allocation_pct NULL and no dates, but
+        # the dialog legitimately opens on the DERIVED % and the DERIVED window
+        # and posts them straight back. Comparing against NULL would read that
+        # as a change and flatten the very plan this is protecting.
+        weeks_l, _ = _load_layout()
+        stats = _load_plan_stats(conn, [rid]).get(rid) or {}
         prev_alloc = float(row["allocation_pct"] or 0.0)
+        if prev_alloc <= 0:
+            prev_alloc = _snap_quarter(_allocation_peak(
+                {"capacity": row["capacity"], "peak_hours": stats.get("peak", 0.0)}))
+        prev_sd, prev_ed = _plan_window(weeks_l, stats, row["start_date"], row["end_date"])
         prev_phases = (row["phases"] or "").strip()
-        prev_sd = (row["start_date"] or "").strip()
-        prev_ed = (row["end_date"] or "").strip()
         new_phases = (json.dumps(phases) if phases else "")
+        posted_sd = (sd or "").strip()
+        posted_ed = (ed or "").strip()
+        # A blank posted date is AMBIGUOUS: it can mean "clear the window" OR
+        # "the dialog never had one". Never let it look like a change on its own
+        # — with this app's legacy rows the window is DERIVED, so a no-op save
+        # posts blanks and would otherwise re-spread the plan as full-year. A
+        # blank is only meaningful when it CLEARS an explicitly stored date.
+        sd_changed = bool(posted_sd) and posted_sd != prev_sd.strip()
+        ed_changed = bool(posted_ed) and posted_ed != prev_ed.strip()
+        if not posted_sd and prev_sd.strip():
+            sd = prev_sd.strip()
+        if not posted_ed and prev_ed.strip():
+            ed = prev_ed.strip()
         plan_changed = (
             abs(alloc - prev_alloc) > 1e-9
             or new_phases != prev_phases
-            or (sd or "").strip() != prev_sd
-            or (ed or "").strip() != prev_ed
+            or sd_changed
+            or ed_changed
         )
         conn.execute(
             "UPDATE resources SET person_id=?, role=?, rate=?, offshore_rate=?, "
@@ -5827,15 +5866,6 @@ def api_assignment_remove(rid: int, body: AssignmentRemoveBody, request: Request
         na = conn.execute("SELECT COUNT(*) FROM actual_hours WHERE resource_id=?", (rid,)).fetchone()[0]
         label = f"{row['name']} — {row['client']} · {row['project']}"
 
-        # The share to bench = their peak allocation, i.e. what this row was
-        # holding. Peak, not average, so a taper's opening leg is what is freed.
-        freed_pct = _allocation_peak({
-            "capacity": row["capacity"],
-            "peak_hours": conn.execute(
-                "SELECT COALESCE(MAX(hours),0) FROM weekly_hours WHERE resource_id=?",
-                (rid,)).fetchone()[0],
-        })
-
         # Resigned with work still elsewhere: ask before touching their status.
         if body.resigned and pid and not body.force:
             other = conn.execute(
@@ -5853,26 +5883,33 @@ def api_assignment_remove(rid: int, body: AssignmentRemoveBody, request: Request
                     "other_projects": others,
                 })
 
-        sd, ed = "", ""
-        if not body.resigned and pid:
-            # Bench for the freed share, from tomorrow forward so it does not
-            # touch the plan already recorded for the weeks they worked.
-            today = dt.date.today()
-            sd = (body.start_date or "").strip()
-            ed = (body.end_date or "").strip()
-            if not sd:
-                sd = (today + dt.timedelta(days=1)).isoformat()
-            if not ed:
-                ed = dt.date(today.year, 12, 31).isoformat()
-
         conn.execute("DELETE FROM weekly_hours WHERE resource_id=?", (rid,))
         conn.execute("DELETE FROM actual_hours WHERE resource_id=?", (rid,))
         conn.execute("DELETE FROM actual_notes WHERE resource_id=?", (rid,))
         conn.execute("DELETE FROM resources WHERE id=?", (rid,))
 
         benched = False
-        if not body.resigned and pid and p:
-            benched = _bench_person(conn, pid, p, freed_pct, sd, ed)
+        bench_pct = 0.0
+        # Removing the BENCH row itself must not re-bench: the person is already
+        # on Bench, so parking them back on it is circular (and would just
+        # recreate the row that was deleted). "Not resigned" here simply means
+        # they come off the bench record.
+        is_bench_row = (_norm_project(row["client"], row["project"])
+                        == _norm_project(BENCH_CLIENT, BENCH_PROJECT))
+        if not body.resigned and pid and p and not is_bench_row:
+            # Bench their AVAILABILITY, measured AFTER this row is gone — not the
+            # share this row happened to hold. the owner: "put the resource along with
+            # the availability back to bench". So a person 50% here and 50%
+            # elsewhere is benched 50%, not 100%; someone fully free is benched
+            # 100%. person_week_load excludes the deleted row, so this is the
+            # same single source of truth the rail and the 100% block use.
+            load = person_week_load(conn, pid)
+            free = max(0.0, 100.0 - float(load.get("peak_pct") or 0.0))
+            bench_pct = _snap_quarter(free)
+            today = dt.date.today()
+            sd = (body.start_date or "").strip() or (today + dt.timedelta(days=1)).isoformat()
+            ed = (body.end_date or "").strip() or dt.date(today.year, 12, 31).isoformat()
+            benched = _bench_person(conn, pid, p, bench_pct, sd, ed)
 
         deactivated = False
         if body.resigned and pid:
@@ -5880,9 +5917,11 @@ def api_assignment_remove(rid: int, body: AssignmentRemoveBody, request: Request
             deactivated = True
 
         outcome = ("resigned — person marked inactive" if deactivated
-                   else f"removed; benched at {_snap_quarter(freed_pct):g}%"
+                   else f"removed; back on Bench at {bench_pct:g}% of a week"
                         if benched
-                        else "removed (nothing to bench — already fully booked)")
+                        else ("removed from Bench" if is_bench_row
+                              else "removed — no person record to bench" if not pid
+                              else "removed — nothing to bench (already fully booked elsewhere)"))
         _log_activity(
             conn, request,
             "assignment.resign" if deactivated else "assignment.remove",
@@ -5891,7 +5930,7 @@ def api_assignment_remove(rid: int, body: AssignmentRemoveBody, request: Request
             project=f"{row['client']} · {row['project']}")
         conn.commit()
         return {"ok": True, "resigned": bool(deactivated), "benched": bool(benched),
-                "bench_pct": (_snap_quarter(freed_pct) if benched else 0.0),
+                "bench_pct": (bench_pct if benched else 0.0),
                 "name": row["name"], "outcome": outcome}
     finally:
         conn.close()

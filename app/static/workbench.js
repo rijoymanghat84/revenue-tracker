@@ -390,24 +390,36 @@ function renderWbTeam() {
     const l = WB.load.find((x) => x.id === t.person_id);
     const peak = l ? l.peak_pct : null;
     const cap = t.capacity || 40;
-    const pct = t.allocation_pct;
-    const weekly = pct == null ? "—" : Math.round(pct / 100 * cap * 10) / 10;
+    const pct = t.allocation_pct == null ? null : t.allocation_pct;
+    const weekly = t.weekly_hours != null
+      ? t.weekly_hours
+      : (pct == null ? null : Math.round(pct / 100 * cap * 10) / 10);
     const status = peak == null ? `<span class="pill">no load data</span>`
       : peak > 100 ? `<span class="pill wb-pill-over">Over ${peak}%</span>`
       : peak >= 80 ? `<span class="pill wb-pill-ok">Healthy ${peak}%</span>`
       : peak >= 50 ? `<span class="pill wb-pill-warn">${peak}%</span>`
       : `<span class="pill wb-pill-free">${peak}%</span>`;
     const exc = (t.title_exception || "").trim();
+    // GH-54: most resources came in from Excel with NO allocation % stored, so
+    // this cell (and the Edit dialog) used to render blank for almost the whole
+    // book. The server now derives the % from their planned hours; the "from
+    // plan" note says so, so a derived number is never mistaken for one someone
+    // actually typed. Saving Edit stores it.
+    const derived = !!t.allocation_derived;
+    const allocCell = (pct == null ? "—" : `${esc(pct)}%`)
+      + (derived
+        ? `<div class="muted-note" title="No allocation % is stored for this resource — it came in from the Excel import with hours only. Shown from their plan: peak week / ${fmtH(cap)}h, on the 25% grid. The hours themselves are untouched.">from plan</div>`
+        : "")
+      + ((t.phases && t.phases.length > 1)
+        ? `<div class="muted-note" title="${esc((t.phases || []).map((x) => x.allocation_pct + "% from " + (x.start_date || "start")).join(" · "))}">${t.phases.length} phases</div>`
+        : "");
     return `<tr data-rid="${t.id}" data-pid="${t.person_id}">
       <td><b>${esc(t.name)}</b>${exc ? `<div class="muted-note">⚑ ${esc(exc)}</div>` : ""}</td>
       <td>${esc(t.role || "—")}</td>
-      <td class="num">${pct == null ? "—" : esc(pct) + "%"}${
-        (t.phases && t.phases.length > 1)
-          ? `<div class="muted-note" title="${esc((t.phases || []).map((x) => x.allocation_pct + "% from " + (x.start_date || "start")).join(" · "))}">${t.phases.length} phases</div>`
-          : ""}</td>
+      <td class="num">${allocCell}</td>
       <td>${esc(t.start_date || "—")}</td>
       <td>${esc(t.end_date || "—")}</td>
-      <td class="num">${weekly}</td>
+      <td class="num">${weekly == null ? "—" : fmtH(weekly)}</td>
       <td>${peak == null ? "—" : loadBarHTML(peak)}</td>
       <td>${status}</td>
       <td class="wb-rowactions">
@@ -419,15 +431,148 @@ function renderWbTeam() {
   $$("#wbTeamBody tr").forEach((tr) => {
     const rid = +tr.dataset.rid, pid = +tr.dataset.pid;
     tr.querySelectorAll("button[data-act]").forEach((b) => b.addEventListener("click", async () => {
-      if (b.dataset.act === "edit") return openAssignModal(p, pid, rid);
       const t = p.team.find((x) => x.id === rid);
-      if (!confirm(`Remove ${t.name} from ${p.client} · ${p.project}?\n\nThis deletes their planned and actual hours on this project.`)) return;
-      try {
-        await api(`/api/assignments/${rid}`, { method: "DELETE" });
-        toast(`${t.name} removed from ${p.project}`);
-        await loadWorkbench();
-      } catch (e) { toast(e.message || "Remove failed", true); }
+      if (!t) return;
+      // Edit opens pre-filled with THIS resource — the person is not re-picked
+      // and the booked title/allocation/window come from the row (GH-54).
+      if (b.dataset.act === "edit") return openAssignModal(p, pid, rid);
+      // Remove asks the resigned question first (GH-54) instead of a bare
+      // browser confirm that only warned about deleted hours.
+      return openRemoveModal(p, t);
     }));
+  });
+}
+
+/* ---------------- Remove: resigned, or back to the bench? (GH-54) ----------------
+   the owner: "remove button should ask if the resource resigned — if not then put the
+   resource along with the availability back to bench and if resigned then remove
+   the resource and make the person inactive".
+
+   A browser confirm() cannot ask that, so this is a real in-app dialog that
+   states what is lost, offers the two outcomes, and warns BEFORE deactivating
+   someone who is still on other projects. The server re-checks everything; the
+   dialog is the explanation, not the guard. */
+function openRemoveModal(project, t) {
+  const isBench = String(project.client || "").trim().toUpperCase() === "INTERNAL"
+    && String(project.project || "").trim().toUpperCase() === "BENCH";
+  const person = WB.people.find((x) => x.id === t.person_id) || {};
+  const hereKey = `${String(project.client || "").trim().toUpperCase()}|${String(project.project || "").trim().toUpperCase()}`;
+  const others = (person.assignments || []).filter((a) =>
+    `${String(a.client || "").trim().toUpperCase()}|${String(a.project || "").trim().toUpperCase()}` !== hereKey);
+  const otherLabels = others.map((a) => `${a.client} · ${a.project}`);
+  const cap = t.capacity || 40;
+  const rowPct = t.allocation_pct == null ? 0 : t.allocation_pct;
+  // What goes back to Bench is their AVAILABILITY after this removal, not the
+  // share this one row held — 50% here + 50% elsewhere means 50% freed, not
+  // 100%. Mirrors what the server computes after deleting the row.
+  const pl = WB.load.find((x) => x.id === t.person_id);
+  const peakAll = pl ? (pl.peak_pct || 0) : rowPct;
+  const freeAfter = Math.max(0, Math.min(100, Math.floor((100 - peakAll + rowPct) / 25) * 25));
+  // Default to the non-destructive answer on BOTH cases: taking someone off a
+  // project must never default to marking them resigned.
+  let choice = "bench";                         // bench | resign
+  let armed = false;                            // second press for resign-with-others
+
+  const body = `
+    <div class="rm-head">
+      <div><b>${esc(t.name)}</b> <span class="muted-note">${esc(t.role || "—")}</span></div>
+      <div class="muted-note">Removing from <b>${esc(project.client)} · ${esc(project.project)}</b></div>
+    </div>
+    <div class="rm-loss">
+      This removes their assignment here — <b>${fmtH(t.planned_hours || 0)} planned hour(s)</b>
+      and any actual hours recorded against it.
+      ${otherLabels.length
+        ? `They stay on <b>${esc(otherLabels.slice(0, 4).join(", "))}</b>${otherLabels.length > 4 ? ` +${otherLabels.length - 4} more` : ""} — this is not their only project.`
+        : "This is their only project."}
+    </div>
+    <div class="rm-q">Did this person resign?</div>
+    <div class="rm-opts" id="rmOpts">
+      <button type="button" class="rm-opt on" data-choice="bench">
+        <b>${isBench ? "No — take them off Bench" : "No — keep them, back to Bench"}</b>
+        <span>${isBench
+          ? "Removes the Bench record. There is nowhere to re-bench them — they are already on Bench — so this simply clears it."
+          : `Removes them here and parks them on <b>Internal · Bench</b> for the <b>${freeAfter}%</b> of their week that frees up (${fmtH(freeAfter / 100 * cap)} h/week), so their availability stays visible instead of disappearing.`}</span>
+      </button>
+      <button type="button" class="rm-opt${isBench ? " on" : ""}" data-choice="resign">
+        <b>Yes — they resigned</b>
+        <span>Removes them here and marks them <b>Inactive</b> on the People list — they have left the company, so they stop appearing as available.</span>
+      </button>
+    </div>
+    <div id="rmWarn" class="rm-warn hidden"></div>
+    <div class="muted-note" id="rmNote" style="margin-top:10px"></div>
+  `;
+  showModalHTML(`Remove — ${t.name}`, body);
+
+  const warn = $("#rmWarn"), note = $("#rmNote");
+  function refresh() {
+    $$("#rmOpts .rm-opt").forEach((b) => b.classList.toggle("on", b.dataset.choice === choice));
+    if (isBench) {
+      warn.className = "rm-warn hidden"; warn.innerHTML = "";
+      note.innerHTML = "This is the Bench project — removing clears their bench allocation. Nothing is re-benched.";
+      return;
+    }
+    if (choice === "resign" && otherLabels.length) {
+      // The person is still booked elsewhere. Deactivating them is allowed but
+      // must be deliberate: they keep those assignments, so say so plainly.
+      warn.className = "rm-warn";
+      warn.innerHTML = armed
+        ? `<b>Confirmed.</b> Press <b>OK</b> once more to mark ${esc(t.name)} inactive.`
+        : `<b>Heads up:</b> ${esc(t.name)} is still on ${esc(otherLabels.slice(0, 4).join(", "))}. Marking them inactive leaves those assignments in place — it does not remove them.`;
+      note.innerHTML = armed ? "" : "Press <b>OK</b> once to acknowledge, then once more to confirm.";
+    } else if (choice === "resign") {
+      warn.className = "rm-warn hidden"; warn.innerHTML = "";
+      note.innerHTML = `${esc(t.name)} has no other project, so this is a clean offboard.`;
+    } else {
+      warn.className = "rm-warn hidden"; warn.innerHTML = "";
+      note.innerHTML = "Bench holds no rate, so this changes no cost or revenue.";
+    }
+  }
+  $$("#rmOpts .rm-opt").forEach((b) => b.addEventListener("click", () => {
+    if (b.dataset.choice === choice) return;   // a no-op click must not reset `armed`
+    choice = b.dataset.choice;
+    armed = false;
+    refresh();
+  }));
+  refresh();
+
+  // A person with NO person record cannot be benched or marked inactive — there
+  // is nobody to act on. Say so where the buttons are, not after the fact.
+  if (!t.person_id) {
+    warn.className = "rm-warn";
+    warn.innerHTML = "<b>This resource is not linked to a person record.</b> It will be removed from the project; there is no one to bench or mark inactive.";
+    $$("#rmOpts .rm-opt").forEach((b) => { b.disabled = true; b.style.opacity = ".5"; });
+  }
+
+  setModalOk(async () => {
+    // Resign-with-others takes two presses: the first arms, the second acts.
+    if (choice === "resign" && otherLabels.length && !armed) {
+      armed = true; refresh(); return;
+    }
+    const ok = $("#modalOk");
+    if (ok) ok.disabled = true;
+    try {
+      const res = await api(`/api/assignments/${t.id}/remove`, {
+        method: "POST",
+        body: JSON.stringify({ resigned: choice === "resign", force: armed }),
+      });
+      closeModal();
+      toast(res.outcome || `${t.name} removed from ${project.project}`);
+      await loadWorkbench();
+    } catch (e) {
+      // The server is the authority. A 409 still_assigned means the UI's
+      // "other projects" list was stale — arm rather than pretend it worked.
+      const det = e && e.detail ? e.detail : null;
+      if (det && det.code === "still_assigned") {
+        armed = true;
+        warn.className = "rm-warn";
+        warn.innerHTML = `<b>Still assigned elsewhere:</b> ${esc(det.message || "")}`;
+        note.innerHTML = "Press <b>OK</b> again to confirm.";
+      } else {
+        toast((det && det.message) || e.message || "Remove failed", true);
+      }
+    } finally {
+      if (ok) ok.disabled = false;
+    }
   });
 }
 
@@ -867,37 +1012,68 @@ function openAssignModal(project, pid, rid) {
   const editing = rid != null;
   const team = project.team || [];
   const alreadyIds = team.filter((t) => t.id !== rid).map((t) => t.person_id);
-  // On create, only offer people not already on this project — the server
-  // refuses duplicates anyway, but there is no reason to let the PM pick one.
-  const choices = WB.people.filter((p) =>
-    (editing ? true : !alreadyIds.includes(p.id)) &&
-    !(p.active === 0));
-  if (!choices.length) {
+  const cur = editing ? team.find((t) => t.id === rid) : null;
+  if (editing && !cur) { toast("That resource is no longer on this project", true); return; }
+
+  /* GH-54 — Edit is about THIS resource. the owner: "I don't have to select the
+     resource from the list when I am already selecting the Edit for the
+     resource". So editing shows NO person picker: the person is fixed and named,
+     and every field opens on what the resource ACTUALLY has.
+     On CREATE the picker stays — there is nobody to pre-choose. */
+  const choices = editing
+    ? [cur.person_id]
+    : WB.people.filter((x) => !alreadyIds.includes(x.id) && !(x.active === 0)).map((x) => x.id);
+  if (!editing && !choices.length) {
     showModalHTML("Add team member",
       `<p class="muted-note">Nobody left to add — everyone in the People list is already on this project.</p>`);
     return;
   }
-  const cur = editing ? team.find((t) => t.id === rid) : null;
-  const selPid = cur ? cur.person_id : pid || choices[0].id;
-  const p = WB.people.find((x) => x.id === selPid) || choices[0];
+  const selPid = editing ? cur.person_id : (pid || choices[0]);
+  const p = WB.people.find((x) => x.id === selPid) || null;
+  if (!p) {
+    showModalHTML(editing ? "Edit assignment" : "Add team member",
+      `<p class="muted-note">${editing
+        ? "This resource is not linked to a person record any more. Remove it from the project and add the person again."
+        : "That person could not be found in the People list."}</p>`);
+    return;
+  }
+
+  // The title the resource is booked under HERE — not their home title. Seeding
+  // the home title was a real defect: 8 live rows are booked under a different
+  // title (a QA booked as a Platform Developer), so Edit showed the home title
+  // and a save silently re-titled the booking.
+  const bookedTitle = (cur && (cur.role || "").trim()) || "";
+  // Open on the real values. Legacy rows store no %/window, so the server sends
+  // them DERIVED from the plan; defaulting to a flat 50% and blank dates here is
+  // what made Edit look empty.
+  const seedPct = cur && cur.allocation_pct != null ? cur.allocation_pct : 50;
+  const seedStart = cur ? (cur.start_date || "") : "";
+  const seedEnd = cur ? (cur.end_date || "") : "";
+  const seedException = cur ? (cur.title_exception || "") : "";
 
   const body = `
     <div class="assign-grid">
       <div>
-        <label class="f">Person</label>
-        <select id="wbPerson">
-          ${choices.map((x) => `<option value="${x.id}" ${x.id === selPid ? "selected" : ""}>
-            ${esc(x.name)} — ${esc(x.home_title || "no title")} — ${esc(peakLabel(x.id))}</option>`).join("")}
-        </select>
+        <label class="f">${editing ? "Resource" : "Person"}</label>
+        ${editing
+          ? `<div class="asg-locked">
+               <b>${esc(p.name)}</b>
+               <span class="muted-note">${esc(p.home_title || "no home title")}${p.country ? " · " + esc(p.country) : ""}</span>
+             </div>`
+          : `<select id="wbPerson">
+               ${choices.map((idv) => { const x = WB.people.find((y) => y.id === idv) || {};
+                 return `<option value="${idv}" ${idv === selPid ? "selected" : ""}>${esc(x.name)} — ${esc(x.home_title || "no title")} — ${esc(peakLabel(idv))}</option>`; }).join("")}
+             </select>`}
       </div>
       <div>
-        <label class="f">Title <span class="muted-note">(approved titles only)</span></label>
+        <label class="f">Booked title <span class="muted-note">(approved titles only)</span></label>
         <select id="wbTitle"></select>
+        ${editing && bookedTitle ? `<div class="muted-note" style="margin-top:5px">Booked on this project as <b>${esc(bookedTitle)}</b>.</div>` : ""}
       </div>
     </div>
     <div id="wbExcWrap" class="hidden">
       <label class="f">Why a different title? <span style="color:var(--red)">*required</span></label>
-      <textarea id="wbExc" placeholder="e.g. covering BA work on this engagement while the home title is Developer"></textarea>
+      <textarea id="wbExc" placeholder="e.g. covering BA work on this engagement while the home title is Developer">${esc(seedException)}</textarea>
       <div class="muted-note" style="margin-top:5px">the owner is flagged whenever the booked title differs from the home title.</div>
     </div>
     <div class="wb-modetabs" role="tablist">
@@ -917,16 +1093,16 @@ function openAssignModal(project, pid, rid) {
           <!-- 25% increments per the owner: 25 / 50 / 75 / 100. A finer step let the slider
              rest on values nobody allocates at (35%, 45%) while the chips beside it
              already offered only quarters. -->
-          <input type="range" id="wbPct" min="0" max="100" step="25" value="${cur && cur.allocation_pct != null ? cur.allocation_pct : 50}">
-          <span class="wb-pctval" id="wbPctVal">50%</span>
+          <input type="range" id="wbPct" min="0" max="100" step="25" value="${seedPct}">
+          <span class="wb-pctval" id="wbPctVal">${seedPct}%</span>
         </div>
         <div class="wb-chips" id="wbChips">
           ${[25, 50, 75, 100].map((v) => `<div class="wb-chip" data-v="${v}">${v}%</div>`).join("")}
         </div>
       </div>
       <div class="assign-grid" style="margin-top:14px">
-        <div><label class="f">Start date</label><input type="date" id="wbStart" value="${cur ? esc(cur.start_date || "") : ""}"></div>
-        <div><label class="f">End date</label><input type="date" id="wbEnd" value="${cur ? esc(cur.end_date || "") : ""}"></div>
+        <div><label class="f">Start date</label><input type="date" id="wbStart" value="${esc(seedStart)}"></div>
+        <div><label class="f">End date</label><input type="date" id="wbEnd" value="${esc(seedEnd)}"></div>
       </div>
     </div>
 
@@ -945,26 +1121,41 @@ function openAssignModal(project, pid, rid) {
     </div>
 
     <div class="wb-verdict ok" id="wbVerdict" style="margin-top:14px">Checking…</div>
-    <div class="muted-note" id="wbFillNote">Leave the dates blank to spread the allocation across the whole year. The app fills the weekly grid; you can fine-tune individual weeks afterwards on Planned.</div>
+    <div class="muted-note" id="wbFillNote">${editing
+      ? "Changing the allocation % or the dates re-spreads the weekly grid. Leaving them alone keeps every week exactly as planned."
+      : "Leave the dates blank to spread the allocation across the whole year. The app fills the weekly grid; you can fine-tune individual weeks afterwards on Planned."}</div>
   `;
-  showModalHTML(editing ? "Edit assignment" : `Add team member — ${project.client} · ${project.project}`, body);
+  showModalHTML(editing ? `Edit — ${p.name}` : `Add team member — ${project.client} · ${project.project}`, body);
 
-  const $p = $("#wbPerson");
+  const $p = $("#wbPerson");     // null when editing — the person is fixed
+  const homeOf = (pidv) => (WB.people.find((x) => x.id === pidv) || {}).home_title || "";
   function fillTitles() {
-    const pidv = +$p.value;
+    const pidv = $p ? +$p.value : selPid;
     const list = approvedTitles(pidv);
-    const home = (WB.people.find((x) => x.id === pidv) || {}).home_title || "";
+    const home = homeOf(pidv);
+    // Seed the CURRENT booking when editing, never the home title.
+    const want = editing ? bookedTitle : home;
     $("#wbTitle").innerHTML = list.length
-      ? list.map((t) => `<option value="${esc(t)}" ${t === home ? "selected" : ""}>${esc(t)}${t === home ? " (home)" : ""}</option>`).join("")
+      ? list.map((t) => `<option value="${esc(t)}" ${t === want ? "selected" : ""}>${esc(t)}${t === home ? " (home)" : ""}</option>`).join("")
       : `<option value="">— no approved title —</option>`;
+    if (editing && bookedTitle && !list.includes(bookedTitle)) {
+      // The booking is not on their approved list (legacy data). Keep it
+      // selectable so a no-op save cannot silently re-title them.
+      $("#wbTitle").innerHTML = `<option value="${esc(bookedTitle)}" selected>${esc(bookedTitle)} — current booking</option>`
+        + $("#wbTitle").innerHTML;
+    }
     syncException();
   }
   function syncException() {
-    const pidv = +$p.value;
-    const home = (WB.people.find((x) => x.id === pidv) || {}).home_title || "";
     const ttl = $("#wbTitle").value;
-    const diff = !home || (ttl && ttl !== home);
-    $("#wbExcWrap").classList.toggle("hidden", !diff);
+    const home = homeOf($p ? +$p.value : selPid);
+    // A title that is simply what they are ALREADY booked under is not a change,
+    // so never demand a reason for a legacy booking (8 live rows would become
+    // unsaveable). A real CHANGE to a non-home title still requires one.
+    const needs = editing
+      ? (ttl !== bookedTitle && (!home || ttl !== home))
+      : (!home || (ttl && ttl !== home));
+    $("#wbExcWrap").classList.toggle("hidden", !needs);
   }
   function syncChips() {
     const v = +$("#wbPct").value;
@@ -1402,7 +1593,7 @@ function renderPeople() {
       : "";
     return `<tr data-pid="${p.id}"${inactive ? ' class="p-inactive-row"' : ""}>
       <td class="p-act-cell">${actCell}</td>
-      <td><b>${esc(p.name)}</b>${p.country ? `<div class="muted-note">${esc(p.country)}</div>` : ""}${ownerFlag}</td>
+      <td><b>${esc(p.name)}</b>${inactive ? ` <span class="p-inactive-tag" title="Inactive — left the company. They are excluded from assignments.">Inactive</span>` : ""}${p.country ? `<div class="muted-note">${esc(p.country)}</div>` : ""}${ownerFlag}</td>
       <td>${esc(p.home_title || "—")}</td>
       <td>${titles}</td>
       <td class="num">${fmtH(p.capacity)}</td>
