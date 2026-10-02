@@ -247,6 +247,12 @@ function showApp() {
     dash: "dashboard", planned: "resources", actuals: "actuals",
     rates: "pricing", util: "utilization",
     access: ["users", "db_security"],
+    // GH-51 Resources: no NEW permission key on purpose. A regular admin's
+    // permissions are stored explicitly in `users.permissions`, so adding a key
+    // to ADMIN_PERMISSIONS would leave every existing admin without it (and hide
+    // the tab). The roster is gated on the people + resources capabilities they
+    // already have; the API behind it is _require_people.
+    resources: ["people", "resources"],
     // Logs is admin-only and needs no specific permission: the API already gates
     // it to admins, and "what just happened?" is a question any admin may ask.
     logs: null,
@@ -260,8 +266,10 @@ function showApp() {
     // A PM gets their OWN two tabs: the workbench (their projects + team load)
     // and Actuals. They never see Dashboard/Planned/Rate Card/Team & Access.
     // A PM's tabs: the workbench (projects + load rail), the WEEK SHEET (the
-    // weekly entry job), and the read-only year grids.
+    // weekly entry job), and the read-only year grids. GH-51 adds Resources —
+    // the whole roster, which is exactly what a PM needs to staff a project.
     if (!isAdmin) return t.dataset.tab === "workbench" || t.dataset.tab === "week"
+      || t.dataset.tab === "resources"
       || p === "actuals" || p === "utilization";
     return Array.isArray(p) ? p.some(can) : can(p);
   };
@@ -4777,6 +4785,8 @@ function renderView() {
   $("#utilView").classList.toggle("hidden", state.view !== "util");
   $("#actualsView").classList.toggle("hidden", state.view !== "actuals");
   $("#workbenchView").classList.toggle("hidden", state.view !== "workbench");
+  const _rv = document.getElementById("resourcesView");
+  if (_rv) _rv.classList.toggle("hidden", state.view !== "resources");
   $("#weekView").classList.toggle("hidden", state.view !== "week");
   $("#logsView").classList.toggle("hidden", state.view !== "logs");
   // Feature #12: the top strip reports which section you're in, since the nav
@@ -4790,6 +4800,7 @@ function renderView() {
     util: ["Utilization", "Booked hours ÷ capacity (40 hrs/week = 100%)"],
     access: ["Team & Access", "People, PMs, admins, permissions & database security"],
     workbench: ["My Projects", "Your projects, your team, and their week-by-week load"],
+    resources: ["Resources", "Find a person — the whole roster, ranked by who is free"],
     week: ["Weekly entry", "Enter one week of actual hours for everyone on your projects"],
     logs: ["Activity log", "Every change that touched people, money or access — newest first"],
   };
@@ -4811,6 +4822,7 @@ function renderView() {
   else if (state.view === "rates") renderPricing();
   else if (state.view === "access") renderAccess();
   else if (state.view === "workbench") loadWorkbench();
+  else if (state.view === "resources") { loadWorkbench(); renderResources(); }
   else if (state.view === "week") loadWeekSheet();
 }
 
@@ -4823,6 +4835,10 @@ bindPasswordModal();
    brick the app. */
 if (typeof bindWorkbench === "function") bindWorkbench();
 else console.warn("workbench.js not loaded — My Projects will be unavailable");
+/* GH-51: the Resources tab shares workbench.js. Guarded for the same reason as
+   the calls above — a missing file must degrade, never brick the app. */
+if (typeof bindResources === "function") bindResources();
+else console.warn("workbench.js not loaded — Resources will be unavailable");
 if (typeof bindWeekSheet === "function") bindWeekSheet();
 else console.warn("weeksheet.js not loaded — Weekly entry will be unavailable");
 if (typeof bindPeopleAndOt === "function") bindPeopleAndOt();
