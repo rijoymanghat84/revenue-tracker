@@ -2072,3 +2072,64 @@ thead .month-row th.ts-sortable,
 thead .week-row th.ts-sortable {
   position: sticky;
 }
+
+/* ============================================================================
+   GH-54 — Remove dialog (resigned vs back to Bench) + the locked resource field
+   in Edit. Colours come from theme tokens ONLY: every hardcoded ink here would
+   be invisible on one of the 15 themes (the bug class this app keeps hitting).
+   ========================================================================== */
+
+/* The Edit dialog names the resource instead of offering a picker — it must read
+   like a settled fact, not a disabled input. */
+.asg-locked {
+  display: flex; flex-direction: column; gap: 2px;
+  background: var(--surface-4); border: 1px solid var(--line);
+  border-radius: 9px; padding: 8px 10px; min-height: 38px;
+}
+.asg-locked b { color: var(--text); font-size: 13px; }
+
+.rm-head { display: flex; flex-direction: column; gap: 3px; margin-bottom: 10px; }
+.rm-head b { font-size: 13.5px; }
+
+.rm-loss {
+  border-radius: 11px; padding: 10px 12px; font-size: 12.5px; line-height: 1.55;
+  background: rgba(var(--amber-rgb), 0.12);
+  border: 1px solid rgba(var(--amber-rgb), 0.42);
+  color: var(--text);
+}
+.rm-q { margin: 14px 0 8px; font-weight: 800; font-size: 13px; color: var(--text); }
+
+.rm-opts { display: flex; flex-direction: column; gap: 8px; }
+.rm-opt {
+  display: flex; flex-direction: column; gap: 4px; text-align: left;
+  background: var(--surface-4); color: var(--text);
+  border: 1px solid var(--line); border-radius: 11px;
+  padding: 11px 13px; cursor: pointer; font: inherit;
+}
+.rm-opt:hover { background: var(--surface-3); }
+/* Selection is marked with an accent BAR, never accent-as-text: accent ink on
+   --surface-3 measured 2.66:1 on the drift theme. */
+.rm-opt.on {
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+  background: var(--surface-3);
+}
+.rm-opt b { font-size: 13px; color: var(--text); }
+.rm-opt > span { font-size: 12px; line-height: 1.5; color: var(--muted); }
+.rm-opt.on > span { color: var(--text); }
+
+.rm-warn {
+  margin-top: 10px; border-radius: 11px; padding: 10px 12px; font-size: 12.5px;
+  line-height: 1.55; color: var(--text);
+  background: var(--pill-red-bg);
+  border: 1px solid rgba(var(--red-rgb), 0.46);
+}
+
+/* The Inactive badge beside a person's name on the admin People list — the
+   resigned outcome from GH-54 must be visible where the master list lives. */
+.p-inactive-tag {
+  display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+  font-size: 10.5px; font-weight: 700; letter-spacing: .02em;
+  background: var(--pill-red-bg); color: var(--text);
+  border: 1px solid rgba(var(--red-rgb), 0.46);
+}
