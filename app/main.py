@@ -175,7 +175,7 @@ WEEK_COL_START = 10   # Excel column J
 WEEK_COL_END = 62     # Excel column BJ (53 weeks)
 FIRST_DATA_ROW = 3
 
-app = FastAPI(title="Revenue Recon")
+app = FastAPI(title="Recon")
 
 
 # ---------------- Auth (login + role-based sessions) ----------------

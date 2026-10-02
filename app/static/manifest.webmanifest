@@ -1,7 +1,7 @@
 {
-  "name": "Revenue Tracker 2026",
-  "short_name": "Revenue",
-  "description": "Resource billing & utilization tracker — Onsite, Offshore, Pricing, Utilization, Dashboard.",
+  "name": "Recon 2026",
+  "short_name": "Recon",
+  "description": "One reconciled source of truth for what was planned versus what was actually billed — planned vs actual hours, utilization, rates and team access.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
@@ -12,6 +12,6 @@
   "icons": [
     { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
     { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
-    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+    { "src": "/icons/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ]
 }
