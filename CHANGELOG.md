@@ -9,6 +9,69 @@ wasn't one) and the commit.
 
 ---
 
+## 2026-10-02 — "Why the shortfall?" asked for hours that were not short (GH-40)
+
+Commits `654a8e1`, `6d00a99` — **GH-40**, reported live by Rijoy on the PM
+*Weekly entry* tab.
+
+### The reproduction was a lie I had to earn back
+
+The prompt fired for **weeks the PM never opened**, and separately for
+**weeks that were exactly on plan**. Two different bugs, same sentence.
+
+**Bug 1 — on target asked for a shortfall reason.** `wkPreFlight`'s
+under-delivery block was guarded only by the overage `return true` above it, so
+`d === 0` fell straight through into it. The modal literally read
+*"Planned 40h, actual 40h (0h under). Why the shortfall? (required)"* —
+self-contradicting, and it made an on-plan week unsavable. Fixed with an
+explicit `if (d === 0) return true;` before that block, and the same guard in
+`actualsPrompt` (app.js) for a flagged week that resolves on target.
+
+**Bug 2 — one unrelated week blocked every save.** A save posts the full
+53-week array (the API requires a full-length row) and the server validated
+**every** week in it. Any other week already sitting below plan with no recorded
+reason therefore blocked the whole sheet and raised the under-delivery prompt
+for a week nobody opened. Live data had **5 such weeks** — Bhupesh Nandan
+(IMS/Quadient), 32h vs 40h planned in weeks 3, 8, 20, 23, 25 — so *every*
+weekly save for him asked about a week from March.
+
+A third, quieter defect sat in the same payload: the unrendered weeks carry the
+value the grid *rendered* — the **planned** hours — so the old write path stored
+planned hours back as if they were entered actuals. The write is now a merge:
+stored values, plus the edited weeks only.
+
+Fix: the client declares `edited: [weeks]`; the server judges only those and
+keeps every other week at its stored value. Backward compatible — with no
+`edited`, the server applies "weeks whose value actually moved". A week flagged
+in a prompt chain is added to `edited` so its verdict is written, while genuine
+edits are never dropped on a retry.
+
+`weeksheet.js` also called `wkWeekLabel(WK.week)` and wrote `notes[WK.week]`
+instead of the week being asked about (`w`), so the billing question named the
+wrong week and filed its note against it.
+
+### Verified on live, not just in tests
+
+`tests/test_actuals_save_scope.py` — 16 checks: save scope, data integrity, and
+all five under/over × billed/not-billed money outcomes. Driven through the real
+UI against a real account:
+
+- on target (40h vs 40h) → **no modal**, "Week saved — 1 person"
+- under (32h) → *Why the shortfall?* → *Will the client still be billed the
+  planned hours?* → not billed → optional note
+- over (48h) → *Is this OVERTIME?* → *Will this OT be BILLED to the client?*
+
+Every UI test wrote to real rows; each was reverted and the DB re-checked
+against the pre-work baseline (`actual_hrs 39540.25`, 65 resources) at each step
+via `revenue-safe-upgrade.sh`. No net data change.
+
+> **Deliberate, not a bug:** a week whose stored note already answers the OT
+> question (`is_ot` set) is **not** re-asked on re-entry. To be asked again, the
+> hours must change — which clears that week's note. This is what made the first
+> two OT probes come back silent; it is the recorded verdict being respected.
+
+---
+
 ## 2026-10-02 — Archive on admin delete too; the odd buttons fixed (GH-39)
 
 Commit `0bbce39` — **GH-39**. Two things from Rijoy, both about the recoverable
