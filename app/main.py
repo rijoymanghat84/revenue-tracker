@@ -338,6 +338,7 @@ ADMIN_PERMISSIONS = [
     "theming",        # Change own UI theme (feature #8)
     "people",         # PM access: People master list + project team assignment
     "ot_approval",    # Approve billable OT before it reaches the Dashboard
+    "allocation_approval",  # GH-53: decide resource reallocation requests
 ]
 
 
@@ -988,6 +989,57 @@ def init_db() -> None:
             client TEXT NOT NULL DEFAULT '',
             project TEXT NOT NULL,
             PRIMARY KEY (user_id, client, project)
+        );
+        -- Allocation requests (GH-53, 2026-10-02). A PM proposes taking part of
+        -- someone off a project they do NOT own; it applies ONLY when the
+        -- releasing project's PM approves. the owner's five decisions, 2026-10-02:
+        --   Q1 permanent OR loan, per request (until_date empty = permanent)
+        --   Q2 an ADMIN's move applies immediately (status 'applied'), but is
+        --      still recorded here + in the audit trail
+        --   Q3 any PM may request any resource from any project; the releasing
+        --      PM is the control. No PM on the source project -> an admin decides
+        --   Q4 the finder lives only on the Resources tab
+        --   Q5 a loan ends automatically, with a 7-day heads-up to both PMs
+        CREATE TABLE IF NOT EXISTS allocation_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            person_id INTEGER NOT NULL,
+            from_resource_id INTEGER,              -- row being reduced (NULL = pure add)
+            from_client TEXT NOT NULL DEFAULT '',
+            from_project TEXT NOT NULL DEFAULT '',
+            from_pct REAL NOT NULL DEFAULT 0,      -- % of capacity being released
+            to_client TEXT NOT NULL DEFAULT '',
+            to_project TEXT NOT NULL DEFAULT '',
+            to_pct REAL NOT NULL DEFAULT 0,        -- % being taken on
+            effective_from_week INTEGER NOT NULL,  -- never in the past (CHARTER #2)
+            until_date TEXT NOT NULL DEFAULT '',   -- '' = permanent, else the return date
+            reason TEXT NOT NULL DEFAULT '',
+            requester TEXT NOT NULL,
+            requester_role TEXT NOT NULL DEFAULT 'pm',
+            status TEXT NOT NULL DEFAULT 'pending',
+              -- pending | approved | rejected | cancelled | expired | applied
+            decided_by TEXT NOT NULL DEFAULT '',
+            decided_at TEXT NOT NULL DEFAULT '',
+            decision_note TEXT NOT NULL DEFAULT '',
+            applied_resource_ids TEXT NOT NULL DEFAULT '[]',
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        -- Every state change on a request, so "all these get tracked and noted"
+        -- is literally true and readable in order.
+        CREATE TABLE IF NOT EXISTS request_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id INTEGER NOT NULL,
+            at TEXT NOT NULL DEFAULT (datetime('now')),
+            actor TEXT NOT NULL DEFAULT '',
+            action TEXT NOT NULL DEFAULT '',
+            detail TEXT NOT NULL DEFAULT ''
+        );
+        -- A loan's 7-day warning fires once. Stored per request so the daily
+        -- sweep is idempotent (no repeat notification every morning).
+        CREATE TABLE IF NOT EXISTS request_marks (
+            request_id INTEGER NOT NULL,
+            mark TEXT NOT NULL,
+            at TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (request_id, mark)
         );
         -- People master list (2026-10-01, PM access redesign). A person exists
         -- ONCE; projects attach to them via resources.person_id. This is what
@@ -1808,6 +1860,7 @@ def api_permissions(request: Request):
         "theming": "Change own UI theme",
         "people": "Manage People & project team assignment",
         "ot_approval": "Approve billable OT",
+        "allocation_approval": "Decide resource reallocation requests",
     }
     return {"permissions": [
         {"key": k, "label": labels.get(k, k)} for k in ADMIN_PERMISSIONS
@@ -6203,6 +6256,603 @@ def api_ot_gate(request: Request, enabled: int = 1):
             ("1" if enabled else "0",))
         conn.commit()
         return {"ok": True, "gate_enabled": bool(enabled)}
+    finally:
+        conn.close()
+
+
+# ---------------- Allocation requests (GH-53) ----------------
+# the owner's spec, 2026-10-02:
+#   "lets say I want to move Nathan who is allocated 100% to Google and I want to
+#    take his 50% from google to a new project ... then I can do that but the
+#    allocation happen once Google PM approved, so there should be a notification
+#    bell icon on the top right hand side ... I can approve or reject and all
+#    these get tracked and noted. and the same option the admin should have too
+#    and incase of admin he can do it for any client and project and resource
+#    including PM"
+#
+# Decisions locked with him the same day (see the schema comment):
+#   Q1 per-request permanent-or-loan;  Q2 admin moves apply at once but are
+#   recorded;  Q3 any PM may request, the releasing PM decides (no PM on the
+#   source project -> an admin decides);  Q4 finder lives on Resources only;
+#   Q5 loans end automatically, warned 7 days ahead.
+#
+# THE TWO RULES THAT MUST NOT BE WEAKENED:
+#   * Past weeks are IMMUTABLE. Recorded actuals are the app's reason to exist
+#     (CHARTER #2), so `effective_from_week` is clamped to the current week and a
+#     request that could only touch the past is refused outright.
+#   * The 100% weekly hard block is re-checked AT APPROVAL, not just at request
+#     time — the world moves between the two.
+
+def _request_owner_username(conn: sqlite3.Connection, client: str, project: str) -> str:
+    """The PM who owns (client, project), or '' when nobody does."""
+    owners = _project_owners(conn)
+    key = ((client or "").strip().upper(), (project or "").strip().upper())
+    for (c, p), pm in owners.items():
+        if (c or "").strip().upper() == key[0] and (p or "").strip().upper() == key[1]:
+            return pm or ""
+    return ""
+
+
+def _may_decide(user: dict, conn: sqlite3.Connection, rec) -> bool:
+    """Who may approve/reject THIS request?
+
+    Q3: the releasing project's PM is the control. An admin (holding
+    allocation_approval) may always decide. If the source project has NO PM,
+    there is nobody to approve, so it routes to an admin — otherwise the request
+    would sit pending forever with no decider.
+    """
+    if user.get("r") != "pm":
+        return True                     # admin / super-admin
+    if user.get("super_admin"):
+        return True
+    owner = _request_owner_username(conn, rec["from_client"], rec["from_project"])
+    if owner and owner == user.get("u"):
+        return True
+    return False
+
+
+def _req_events(conn, request_id: int, actor: str, action: str, detail: str = "") -> None:
+    try:
+        conn.execute(
+            "INSERT INTO request_events (request_id, actor, action, detail) VALUES (?,?,?,?)",
+            (request_id, str(actor), str(action), str(detail)))
+    except Exception:  # noqa: BLE001 — the trail must never break the action
+        pass
+
+
+def _req_dict(conn, r) -> dict:
+    weeks, _ = _load_layout()
+    wl = weeks[r["effective_from_week"]] if 0 <= r["effective_from_week"] < len(weeks) else ""
+    per = conn.execute("SELECT name, home_title, capacity FROM people WHERE id=?",
+                       (r["person_id"],)).fetchone()
+    events = conn.execute(
+        "SELECT at, actor, action, detail FROM request_events WHERE request_id=? ORDER BY id",
+        (r["id"],)).fetchall()
+    try:
+        applied = json.loads(r["applied_resource_ids"] or "[]")
+    except Exception:  # noqa: BLE001
+        applied = []
+    return {
+        "id": r["id"],
+        "person_id": r["person_id"],
+        "person": (per["name"] if per else ""),
+        "person_title": (per["home_title"] if per else ""),
+        "from_client": r["from_client"], "from_project": r["from_project"],
+        "from_pct": r["from_pct"],
+        "to_client": r["to_client"], "to_project": r["to_project"],
+        "to_pct": r["to_pct"],
+        "effective_from_week": r["effective_from_week"],
+        "effective_label": wl,
+        "until_date": r["until_date"] or "",
+        "permanent": not (r["until_date"] or ""),
+        "reason": r["reason"],
+        "requester": r["requester"], "requester_role": r["requester_role"],
+        "status": r["status"],
+        "decided_by": r["decided_by"], "decided_at": r["decided_at"],
+        "decision_note": r["decision_note"],
+        "applied_resource_ids": applied,
+        "created_at": r["created_at"],
+        "from_owner": _request_owner_username(conn, r["from_client"], r["from_project"]),
+        "events": [dict(e) for e in events],
+        # Plain-language summary so the bell reads like a sentence, not a record.
+        "summary": (f"Move {int(r['from_pct'])}% of {(per['name'] if per else 'someone')} "
+                    f"from {r['from_client']} · {r['from_project']} to "
+                    f"{r['to_client']} · {r['to_project']} at {int(r['to_pct'])}%, "
+                    + ("permanent" if not (r["until_date"] or "") else f"until {r['until_date']}")
+                    + f", from {wl}"),
+    }
+
+
+class AllocationRequestBody(BaseModel):
+    person_id: int
+    from_client: str = ""
+    from_project: str = ""
+    from_pct: float = 0.0
+    to_client: str = ""
+    to_project: str = ""
+    to_pct: float = 0.0
+    effective_from_week: int | None = None
+    until_date: str = ""              # '' = permanent (Q1)
+    reason: str = ""
+
+
+def _validate_move(conn, body: AllocationRequestBody, user: dict,
+                   exclude_resource_id: int | None = None) -> dict:
+    """Shared validation for request-time AND approval-time.
+
+    Raises HTTPException on a hard violation. Returns context the caller needs
+    (person row, the source row, the clamped effective week).
+    """
+    person = conn.execute("SELECT * FROM people WHERE id=?", (body.person_id,)).fetchone()
+    if not person:
+        raise HTTPException(404, "Person not found")
+
+    to_client = (body.to_client or "").strip()
+    to_project = (body.to_project or "").strip()
+    if not to_project:
+        raise HTTPException(400, "The receiving project is required.")
+    for label, pct in (("releasing", body.from_pct), ("taking on", body.to_pct)):
+        if pct < 0 or pct > 100:
+            raise HTTPException(400, f"Allocation ({label}) must be between 0 and 100%.")
+        if abs(pct % 25) > 1e-9:
+            raise HTTPException(400, f"Allocation ({label}) must be a multiple of 25% "
+                                     f"(25, 50, 75 or 100) — got {pct:g}%.")
+    if body.from_pct <= 0:
+        raise HTTPException(400, "Nothing to release — the % taken off must be above zero.")
+    if not (body.from_project or "").strip():
+        raise HTTPException(400, "Pick the project this person is being moved OFF.")
+
+    weeks, _ = _load_layout()
+    cur_week = _current_period(weeks, _load_layout()[1]).get("week_index", 0)
+    # CHARTER #2: history is immutable. Clamp to the current week; never past.
+    eff = body.effective_from_week
+    eff = cur_week if eff is None else max(int(eff), cur_week)
+    eff = min(max(eff, 0), len(weeks) - 1)
+
+    # The source row must exist and actually carry a booking to release.
+    src = conn.execute(
+        "SELECT * FROM resources WHERE person_id=? AND TRIM(UPPER(client))=? AND TRIM(UPPER(project))=?",
+        (body.person_id, (body.from_client or "").strip().upper(), (body.from_project or "").strip().upper())
+    ).fetchone()
+    if not src:
+        raise HTTPException(404, f"{person['name']} is not booked on "
+                                 f"{body.from_client} · {body.from_project}.")
+    # You cannot release more than that project actually holds. Without this a
+    # request could ask for 100% off a 25% booking and the approval would silently
+    # drive the source negative (clamped to 0), quietly over-crediting the target.
+    src_pct = float(src["allocation_pct"] or 0.0)
+    if not src_pct:
+        sp = parse_phases(src["phases"])
+        src_pct = float(sp[0]["allocation_pct"] or 0.0) if sp else 0.0
+    if float(body.from_pct) > src_pct + 1e-9:
+        raise HTTPException(
+            400, f"{person['name']} is only at {src_pct:g}% on "
+                 f"{body.from_client} · {body.from_project} — "
+                 f"you cannot release {body.from_pct:g}%.")
+    return {"person": person, "src": src, "effective_from_week": eff,
+            "to_client": to_client, "to_project": to_project, "weeks": weeks}
+
+
+@app.post("/api/allocation-requests")
+def api_allocation_request_create(body: AllocationRequestBody, request: Request):
+    """Propose moving part of a person from one project to another.
+
+    A PM's request SITS PENDING until the releasing PM decides.
+    An ADMIN's (Q2) applies IMMEDIATELY — they are unconstrained by ownership
+    anyway — but is still recorded as 'applied' with the full trail, so the
+    outcome is instant while the history stays complete.
+    """
+    user = _require_people(request)
+    conn = get_db()
+    try:
+        ctx = _validate_move(conn, body, user)
+        person, weeks = ctx["person"], ctx["weeks"]
+        eff = ctx["effective_from_week"]
+
+        # 100% block, checked at REQUEST time so the PM learns early.
+        cap = person["capacity"] or CAP_WEEK_HOURS
+        v = validate_assignment(conn, body.person_id, body.to_pct,
+                                weeks[eff], ctx["src"]["end_date"],
+                                exclude_resource_id=ctx["src"]["id"])
+        if not v["ok"]:
+            raise HTTPException(409, _clash_message(person["name"], body.to_pct, v))
+
+        cur = conn.execute(
+            "INSERT INTO allocation_requests (person_id, from_resource_id, from_client, "
+            "from_project, from_pct, to_client, to_project, to_pct, effective_from_week, "
+            "until_date, reason, requester, requester_role) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (body.person_id, ctx["src"]["id"], (body.from_client or "").strip(),
+             (body.from_project or "").strip(), body.from_pct,
+             ctx["to_client"], ctx["to_project"], body.to_pct, eff,
+             (body.until_date or "").strip(), body.reason or "",
+             user.get("u", ""), user.get("r", "pm")))
+        rid = int(cur.lastrowid or 0)
+        _req_events(conn, rid, user.get("u", ""), "requested",
+                    f"{body.from_pct:g}% off {body.from_client} · {body.from_project}")
+        is_admin = user.get("r") != "pm"
+
+        if is_admin:
+            # Q2: apply now, record fully.
+            rec = conn.execute("SELECT * FROM allocation_requests WHERE id=?", (rid,)).fetchone()
+            applied = _apply_move(conn, rec, actor=user.get("u", ""))
+            conn.execute(
+                "UPDATE allocation_requests SET status='applied', decided_by=?, "
+                "decided_at=datetime('now'), decision_note=?, applied_resource_ids=? WHERE id=?",
+                (user.get("u", ""), "Applied immediately (admin move)", json.dumps(applied), rid))
+            _req_events(conn, rid, user.get("u", ""), "applied", "admin move applied immediately")
+            _log_activity(conn, request, "allocation.applied",
+                          f"{person['name']} {body.from_pct:g}% → {ctx['to_client']} · {ctx['to_project']}",
+                          f"admin move applied immediately (request #{rid})",
+                          f"{ctx['to_client']} · {ctx['to_project']}")
+        else:
+            _log_activity(conn, request, "allocation.requested",
+                          f"{person['name']} {body.from_pct:g}% → {ctx['to_client']} · {ctx['to_project']}",
+                          f"awaiting {_request_owner_username(conn, body.from_client, body.from_project) or 'an admin'} (request #{rid})",
+                          f"{ctx['to_client']} · {ctx['to_project']}")
+        conn.commit()
+        rec = conn.execute("SELECT * FROM allocation_requests WHERE id=?", (rid,)).fetchone()
+        return {"ok": True, "id": rid, "status": rec["status"], "request": _req_dict(conn, rec)}
+    finally:
+        conn.close()
+
+
+def _apply_move(conn, rec, actor: str) -> list[int]:
+    """Write the rows for an approved/applied request. Returns the touched ids.
+
+    The two halves:
+      1. the SOURCE row is reduced — via `phases` split at the effective week, so
+         every week BEFORE it keeps the original booking (CHARTER #2: the past is
+         never rewritten);
+      2. a row on the receiving project is created (or extended if the person is
+         already on it), with hours from the effective week.
+    """
+    weeks, _ = _load_layout()
+    person = conn.execute("SELECT * FROM people WHERE id=?", (rec["person_id"],)).fetchone()
+    if not person:
+        raise HTTPException(409, "The person no longer exists.")
+    cap = person["capacity"] or CAP_WEEK_HOURS
+
+    src = conn.execute("SELECT * FROM resources WHERE id=?",
+                       (rec["from_resource_id"],)).fetchone() if rec["from_resource_id"] else None
+    if not src:
+        raise HTTPException(409, "The original booking is gone — this request is stale.")
+    # Already-reduced guard: if the source no longer carries the booking, applying
+    # again would silently double the change.
+    eff = int(rec["effective_from_week"])
+    eff_date = _week_date(weeks[eff]) if eff < len(weeks) else None
+
+    # ---- 1. reduce the source row from the effective week forward ----
+    src_phases = parse_phases(src["phases"])
+    start_d = _iso_date(src["start_date"])
+    # Weeks strictly before the effective week keep the old %.
+    old_pct = float(src["allocation_pct"] or 0.0)
+    if not old_pct and src_phases:
+        old_pct = float(src_phases[0]["allocation_pct"] or 0.0)
+    new_pct = max(0.0, old_pct - float(rec["from_pct"] or 0.0))
+
+    if eff_date and start_d and eff_date > start_d:
+        # Split into two phases: everything BEFORE the effective week keeps the
+        # original %, and the effective week onward takes the reduced share. This
+        # is what makes the move honest — weeks already worked are untouched.
+        prev_end = eff_date - dt.timedelta(days=1)
+        phases = [{"allocation_pct": old_pct,
+                   "start_date": src["start_date"], "end_date": prev_end.isoformat()}]
+        if new_pct > 0:
+            phases.append({"allocation_pct": new_pct,
+                           "start_date": eff_date.isoformat(),
+                           "end_date": (src["end_date"] or "")})
+        # headline stays the ORIGINAL share (the row's identity is "this person on
+        # this project"); the phase list carries the reduction forward.
+        conn.execute("UPDATE resources SET allocation_pct=?, phases=? WHERE id=?",
+                     (old_pct, json.dumps(phases), src["id"]))
+        _write_phase_hours(conn, src["id"], phases, cap)
+    else:
+        # The move starts at (or before) the booking's own start, so the whole
+        # row simply takes the reduced share — nothing to preserve in front of it.
+        conn.execute("UPDATE resources SET allocation_pct=?, phases='' WHERE id=?",
+                     (new_pct, src["id"]))
+        _write_allocation_hours(conn, src["id"], new_pct, cap,
+                                src["start_date"], src["end_date"])
+
+    # ---- 2. create/extend the receiving row ----
+    tgt = conn.execute(
+        "SELECT * FROM resources WHERE person_id=? AND TRIM(UPPER(client))=? AND TRIM(UPPER(project))=?",
+        (rec["person_id"], (rec["to_client"] or "").strip().upper(),
+         (rec["to_project"] or "").strip().upper())).fetchone()
+    until = (rec["until_date"] or "").strip()
+    end_date = until or (src["end_date"] or "")
+    approved = _approved_titles(conn, rec["person_id"])
+    title = (person["home_title"] or "").strip() or (approved[0] if approved else "")
+    pr = _pricing_row(conn, title)
+
+    if tgt:
+        # Already on the project: add the share rather than duplicate the row.
+        tgt_old = float(tgt["allocation_pct"] or 0.0)
+        if not tgt_old:
+            tp = parse_phases(tgt["phases"])
+            tgt_old = float(tp[0]["allocation_pct"] or 0.0) if tp else 0.0
+        want = min(100.0, tgt_old + float(rec["to_pct"] or 0.0))
+        conn.execute("UPDATE resources SET allocation_pct=?, start_date=?, end_date=?, phases='' WHERE id=?",
+                     (want, (tgt["start_date"] or src["start_date"]), end_date, tgt["id"]))
+        _write_allocation_hours(conn, tgt["id"], want, cap,
+                                src["start_date"], end_date)
+        target_id = tgt["id"]
+    else:
+        sort = conn.execute("SELECT COALESCE(MAX(sort_order),0)+1 FROM resources").fetchone()[0]
+        cur = conn.execute(
+            "INSERT INTO resources (country, client, project, name, role, rate, offshore_rate, "
+            "sort_order, capacity, person_id, allocation_pct, start_date, end_date, phases) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'')",
+            ((person["country"] or ""), rec["to_client"], rec["to_project"],
+             person["name"], title, (pr["rate"] if pr else None),
+             (pr["offshore_rate"] if pr else None), sort, cap, rec["person_id"],
+             float(rec["to_pct"] or 0.0), src["start_date"], end_date))
+        target_id = int(cur.lastrowid or 0)
+        _write_allocation_hours(conn, target_id, float(rec["to_pct"] or 0.0), cap,
+                                src["start_date"], end_date)
+    return [src["id"], target_id]
+
+
+@app.get("/api/allocation-requests")
+def api_allocation_requests(request: Request, status: str = ""):
+    """Requests visible to me.
+
+    A PM sees: the ones they raised, plus the ones awaiting THEIR decision (they
+    own the releasing project). Admins see everything.
+    """
+    user = _require_people(request)
+    conn = get_db()
+    try:
+        rows = conn.execute("SELECT * FROM allocation_requests ORDER BY id DESC LIMIT 300").fetchall()
+        out = []
+        for r in rows:
+            if status and r["status"] != status:
+                continue
+            if user.get("r") == "pm" and not user.get("super_admin"):
+                mine = r["requester"] == user.get("u")
+                decidable = _may_decide(user, conn, r)
+                if not (mine or decidable):
+                    continue
+            d = _req_dict(conn, r)
+            d["can_decide"] = (r["status"] == "pending") and _may_decide(user, conn, r)
+            d["mine"] = r["requester"] == user.get("u")
+            out.append(d)
+        return {"requests": out, "count": len(out)}
+    finally:
+        conn.close()
+
+
+@app.get("/api/notifications")
+def api_notifications(request: Request):
+    """The bell: what needs ME to decide, what I sent, and what was decided.
+
+    Counted separately so the badge can show only the actionable number.
+    """
+    user = _require_people(request)
+    conn = get_db()
+    try:
+        rows = conn.execute("SELECT * FROM allocation_requests ORDER BY id DESC LIMIT 300").fetchall()
+        needs, sent, decided = [], [], []
+        for r in rows:
+            d = _req_dict(conn, r)
+            d["can_decide"] = (r["status"] == "pending") and _may_decide(user, conn, r)
+            d["mine"] = r["requester"] == user.get("u")
+            if d["can_decide"]:
+                needs.append(d)
+            elif d["mine"] and r["status"] in ("pending", "approved", "applied", "expired"):
+                sent.append(d)
+            elif r["status"] in ("approved", "rejected", "applied", "expired", "cancelled") and r["decided_by"]:
+                # Visible to both sides once decided.
+                if d["mine"] or d["from_owner"] == user.get("u") or user.get("r") != "pm":
+                    decided.append(d)
+        return {"needs_deciding": needs, "sent": sent, "decided": decided,
+                "unread": len(needs), "can_approve": bool(
+                    user.get("r") != "pm" or user.get("super_admin")
+                    or any(needs))}
+    finally:
+        conn.close()
+
+
+class AllocationDecision(BaseModel):
+    note: str | None = ""
+
+
+@app.post("/api/allocation-requests/{rid}/approve")
+def api_allocation_approve(rid: int, request: Request, body: AllocationDecision | None = None):
+    """The releasing PM (or an admin) approves. This is what applies the move."""
+    user = _require_people(request)
+    conn = get_db()
+    try:
+        rec = conn.execute("SELECT * FROM allocation_requests WHERE id=?", (rid,)).fetchone()
+        if not rec:
+            raise HTTPException(404, "Request not found")
+        if rec["status"] != "pending":
+            raise HTTPException(409, f"Request #{rid} is already {rec['status']}.")
+        if not _may_decide(user, conn, rec):
+            raise HTTPException(403, "Only the releasing project's PM (or an admin) can decide this.")
+
+        # Re-validate against the CURRENT data — the world moves between the
+        # request and the decision (Q: the 100% block is checked twice).
+        weeks, _ = _load_layout()
+        person = conn.execute("SELECT * FROM people WHERE id=?", (rec["person_id"],)).fetchone()
+        eff = int(rec["effective_from_week"])
+        v = validate_assignment(conn, rec["person_id"], rec["to_pct"], weeks[eff],
+                                (rec["until_date"] or ""), exclude_resource_id=rec["from_resource_id"])
+        if not v["ok"]:
+            conn.execute("UPDATE allocation_requests SET status='expired', decided_by=?, "
+                         "decided_at=datetime('now'), decision_note=? WHERE id=?",
+                         (user.get("u", ""), "no longer fits — would exceed 100%", rid))
+            _req_events(conn, rid, user.get("u", ""), "expired",
+                        "the receiving project no longer has room (100% rule)")
+            conn.commit()
+            raise HTTPException(409, _clash_message(person["name"], rec["to_pct"], v)
+                                     + " — the request is now expired.")
+
+        applied = _apply_move(conn, rec, actor=user.get("u", ""))
+        conn.execute("UPDATE allocation_requests SET status='approved', decided_by=?, "
+                     "decided_at=datetime('now'), decision_note=?, applied_resource_ids=? WHERE id=?",
+                     (user.get("u", ""), (body.note if body and body.note else ""),
+                      json.dumps(applied), rid))
+        _req_events(conn, rid, user.get("u", ""), "approved",
+                    (body.note if body and body.note else "approved"))
+        _log_activity(conn, request, "allocation.approved",
+                      f"{person['name']} {rec['from_pct']:g}% {rec['from_client']} · {rec['from_project']} → {rec['to_client']} · {rec['to_project']}",
+                      f"request #{rid} approved by {user.get('u','')}",
+                      f"{rec['to_client']} · {rec['to_project']}")
+        conn.commit()
+        return {"ok": True, "id": rid, "status": "approved", "applied_resource_ids": applied}
+    finally:
+        conn.close()
+
+
+@app.post("/api/allocation-requests/{rid}/reject")
+def api_allocation_reject(rid: int, request: Request, body: AllocationDecision | None = None):
+    """Reject with a reason. The source booking is left completely untouched."""
+    user = _require_people(request)
+    conn = get_db()
+    try:
+        rec = conn.execute("SELECT * FROM allocation_requests WHERE id=?", (rid,)).fetchone()
+        if not rec:
+            raise HTTPException(404, "Request not found")
+        # Settled-state is checked BEFORE the reason: a request that is already
+        # decided should say so, not demand a reason it no longer needs.
+        if rec["status"] != "pending":
+            raise HTTPException(409, f"Request #{rid} is already {rec['status']}.")
+        if not _may_decide(user, conn, rec):
+            raise HTTPException(403, "Only the releasing project's PM (or an admin) can decide this.")
+        note = (body.note if body and body.note else "").strip()
+        if not note:
+            raise HTTPException(400, "A reason is required when rejecting a reallocation.")
+        conn.execute("UPDATE allocation_requests SET status='rejected', decided_by=?, "
+                     "decided_at=datetime('now'), decision_note=? WHERE id=?",
+                     (user.get("u", ""), note, rid))
+        _req_events(conn, rid, user.get("u", ""), "rejected", note)
+        _log_activity(conn, request, "allocation.rejected",
+                      f"request #{rid} ({rec['person_id']})", note,
+                      f"{rec['to_client']} · {rec['to_project']}")
+        conn.commit()
+        return {"ok": True, "id": rid, "status": "rejected"}
+    finally:
+        conn.close()
+
+
+@app.post("/api/allocation-requests/{rid}/cancel")
+def api_allocation_cancel(rid: int, request: Request):
+    """The requester withdraws their own pending request."""
+    user = _require_people(request)
+    conn = get_db()
+    try:
+        rec = conn.execute("SELECT * FROM allocation_requests WHERE id=?", (rid,)).fetchone()
+        if not rec:
+            raise HTTPException(404, "Request not found")
+        if rec["requester"] != user.get("u") and user.get("r") == "pm":
+            raise HTTPException(403, "You can only cancel a request you raised.")
+        if rec["status"] != "pending":
+            raise HTTPException(409, f"Request #{rid} is already {rec['status']}.")
+        conn.execute("UPDATE allocation_requests SET status='cancelled', decided_by=?, "
+                     "decided_at=datetime('now') WHERE id=?", (user.get("u", ""), rid))
+        _req_events(conn, rid, user.get("u", ""), "cancelled", "withdrawn by the requester")
+        conn.commit()
+        return {"ok": True, "id": rid, "status": "cancelled"}
+    finally:
+        conn.close()
+
+
+@app.post("/api/allocation-requests/sweep")
+def api_allocation_sweep(request: Request):
+    """Expire loans whose return date has passed (Q5), and warn 7 days ahead.
+
+    Idempotent: the 7-day warning is recorded in request_marks so a daily caller
+    cannot spam the same person every morning. Ending a loan restores the released
+    share to the source project and removes the receiving row's booking from the
+    return week on.
+    """
+    user = _require_people(request)
+    if user.get("r") == "pm" and not user.get("super_admin"):
+        _require_perm(request, "allocation_approval")
+    conn = get_db()
+    try:
+        today = dt.date.today()
+        weeks, _ = _load_layout()
+        warned, ended = [], []
+        rows = conn.execute("SELECT * FROM allocation_requests WHERE status IN ('approved','applied') "
+                            "AND TRIM(COALESCE(until_date,''))<>''").fetchall()
+        for rec in rows:
+            try:
+                until = dt.date.fromisoformat(rec["until_date"])
+            except ValueError:
+                continue
+            days = (until - today).days
+            if days == 7:
+                already = conn.execute("SELECT 1 FROM request_marks WHERE request_id=? AND mark='warn7'",
+                                       (rec["id"],)).fetchone()
+                if not already:
+                    conn.execute("INSERT OR IGNORE INTO request_marks (request_id, mark) VALUES (?, 'warn7')",
+                                 (rec["id"],))
+                    _req_events(conn, rec["id"], "system", "loan_ending",
+                                f"returns {rec['until_date']} in 7 days")
+                    warned.append(rec["id"])
+            elif days <= 0:
+                _end_loan(conn, rec, weeks)
+                conn.execute("UPDATE allocation_requests SET status='expired', "
+                             "decision_note='loan period ended' WHERE id=?", (rec["id"],))
+                _req_events(conn, rec["id"], "system", "loan_ended",
+                            f"returned automatically on {rec['until_date']}")
+                ended.append(rec["id"])
+        conn.commit()
+        return {"ok": True, "warned": warned, "ended": ended}
+    finally:
+        conn.close()
+
+
+def _end_loan(conn, rec, weeks) -> None:
+    """Put the released share back on the source project and stop the target row."""
+    try:
+        until = dt.date.fromisoformat(rec["until_date"])
+    except ValueError:
+        return
+    # The first week whose Monday is AFTER the return date. Weeks up to and
+    # including the return date stay as booked; from here the loan is over.
+    after = []
+    for i, w in enumerate(weeks):
+        wd = _week_date(w)
+        if wd is not None and wd > until:
+            after.append(i)
+    first_after = min(after) if after else None
+    src = conn.execute("SELECT * FROM resources WHERE id=?",
+                       (rec["from_resource_id"],)).fetchone()
+    person = conn.execute("SELECT * FROM people WHERE id=?", (rec["person_id"],)).fetchone()
+    if not src or not person:
+        return
+    cap = person["capacity"] or CAP_WEEK_HOURS
+    restored = min(100.0, float(src["allocation_pct"] or 0.0) + float(rec["from_pct"] or 0.0))
+    conn.execute("UPDATE resources SET allocation_pct=?, phases='' WHERE id=?",
+                 (restored, src["id"]))
+    if first_after is not None:
+        _write_allocation_hours(conn, src["id"], restored, cap, weeks[first_after], src["end_date"])
+    # Stop the receiving booking from the return week on.
+    for rid in json.loads(rec["applied_resource_ids"] or "[]"):
+        if rid == src["id"]:
+            continue
+        tgt = conn.execute("SELECT * FROM resources WHERE id=?", (rid,)).fetchone()
+        if not tgt:
+            continue
+        _write_allocation_hours(conn, rid, 0.0, cap, rec["until_date"], tgt["end_date"] or "")
+
+
+@app.get("/api/allocation-requests/{rid}/trail")
+def api_allocation_trail(rid: int, request: Request):
+    """The full audit trail for one request — 'all these get tracked and noted'."""
+    user = _require_people(request)
+    conn = get_db()
+    try:
+        rec = conn.execute("SELECT * FROM allocation_requests WHERE id=?", (rid,)).fetchone()
+        if not rec:
+            raise HTTPException(404, "Request not found")
+        if user.get("r") == "pm" and not user.get("super_admin"):
+            if rec["requester"] != user.get("u") and not _may_decide(user, conn, rec):
+                raise HTTPException(403, "Not your request")
+        return _req_dict(conn, rec)
     finally:
         conn.close()
 
