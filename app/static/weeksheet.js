@@ -46,6 +46,9 @@ async function loadWeekSheet() {
   // Reuse /api/actuals: it is already PM-scoped (only their projects, no rates),
   // so the sheet cannot show a person the PM does not own.
   const d = await api("/api/actuals");
+  // GH-45: same string-key trap as app.js — normalise before any reader sees it,
+  // so a stored shortfall reason / OT verdict is not silently missed here either.
+  if (typeof normalizeActualNotes === "function") normalizeActualNotes(d.resources);
   WK.loaded = true;
   WK.data = d;
   // Default to the week we are ACTUALLY in — the one a PM is entering. Read it
