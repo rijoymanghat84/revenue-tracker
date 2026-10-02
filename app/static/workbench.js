@@ -788,13 +788,70 @@ function wbLoadCard(x, r, opts) {
         <div>
           ${pill}${partTime} <span class="sub">free ${r.freeWeeks}/${r.weeks} wks</span>
           <button class="btn mini" data-act="move" data-pid="${x.id}" title="Move part of this person to another project (needs the releasing PM's approval)">Move…</button>
-          <button class="btn mini" data-act="view" title="Add this person to one of your projects">Assign…</button>
+          <button class="btn mini" data-act="view" data-pid="${x.id}" title="Add this person to a project">Assign…</button>
         </div>
       </div>
       <div class="sub">${projs}</div>
       ${why}
+      ${wbAdminStrip(x)}
       ${weekGridHTML(x)}
     </div>`;
+}
+
+/* ---------------------------------------------------------------------------
+   Admin controls on the SAME card (Rijoy, 2026-10-02).
+
+   "I want you to split the Teams and Access section for admin to team and
+   Resource, move the resource from the tab to resource tab but with the look and
+   functionality of the resource from PM section ... that should be option to Add
+   new resource and by default it gets added to bench and then make a resource
+   active or inactive, their home title, Approved titles, capacity, project they
+   are in. Option to assign them to project from back."
+
+   So the MASTER LIST IS THIS CARD. An admin sees the same card a PM does, plus
+   this strip. Everything here writes the person record, which the server mirrors
+   onto every project row — one edit, visible everywhere.
+   Returns "" for a PM, so their view is byte-for-byte what it was.
+   --------------------------------------------------------------------------- */
+function wbAdminStrip(x) {
+  if (typeof canPerm !== "function" || !canPerm("people")) return "";
+  const p = (WB.people || []).find((y) => y.id === x.id);
+  if (!p) return "";
+  const inactive = p.active === 0;
+  // Which projects they are on, with the title booked there. Rijoy asked for
+  // "project they are in" on the card; the resource rows already carry it.
+  const assigns = (p.assignments || []);
+  // "title differs": a row booked under something other than the home title is
+  // deliberate (an exception) and is FLAGGED rather than silently re-titled when
+  // the admin edits the home title — see the propagation rule in main.py.
+  const differs = assigns.filter((a) => (a.role || "").trim() && p.home_title
+    && (a.role || "").trim() !== (p.home_title || "").trim());
+  const approved = (p.titles || []).length
+    ? p.titles.map(esc).join(", ")
+    : `<span class="wb-note">none — home title only</span>`;
+  const projChips = assigns.length
+    ? assigns.map((a) => `<span class="wb-ptag" title="${esc((a.role || "no title"))}">${esc(a.client || "")}${a.project ? " · " + esc(a.project) : ""} <b>${esc(a.role || "—")}</b></span>`).join("")
+    : `<span class="wb-note">no project work booked</span>`;
+  return `<div class="wb-admin">
+    <div class="wb-admin-row">
+      <button class="btn mini p-act${inactive ? " off" : " on"}" data-act="toggle-active" data-pid="${x.id}"
+        title="${inactive ? "Inactive — they have left the company. Click to mark active." : "Active — click to mark inactive (left the company)"}"
+        aria-pressed="${inactive ? "false" : "true"}">${inactive ? "Inactive" : "Active"}</button>
+      <span class="wb-adm-kv"><span class="muted-note">Home title</span> <b>${esc(p.home_title || "—")}</b></span>
+      <span class="wb-adm-kv"><span class="muted-note">Approved titles</span> ${approved}</span>
+      <span class="wb-adm-kv"><span class="muted-note">Capacity</span> <b>${fmtH(p.capacity)}</b> h/wk</span>
+      <span class="wb-adm-kv"><span class="muted-note">Projects</span> <b>${assigns.length}</b></span>
+      <span class="wb-admin-actions">
+        <button class="btn mini" data-act="edit-person" data-pid="${x.id}" title="Edit this person's name, home title, approved titles and capacity — updates every project">Edit</button>
+        <button class="btn mini" data-act="merge" data-pid="${x.id}" title="Merge a duplicate record into this one">Merge</button>
+        <button class="btn mini" data-act="del-person" data-pid="${x.id}" title="Delete this person (only when they hold no projects)">Delete</button>
+      </span>
+    </div>
+    <div class="wb-admin-row">
+      <span class="wb-adm-kv wb-adm-projects"><span class="muted-note">Project they are in</span> ${projChips}</span>
+      ${differs.length ? `<span class="noowner-chip" title="Booked under a title other than their home title — left alone on purpose">⚠ title differs: ${esc(differs.map((d) => d.role).join(", "))}</span>` : ""}
+    </div>
+  </div>`;
 }
 
 /* ---------------------------------------------------------------------------
@@ -1294,7 +1351,47 @@ function renderWbLoad() {
 
   $$("#wbLoad .wb-load button[data-act=view]").forEach((b) => b.addEventListener("click", () => {
     const pid = +b.closest(".wb-load").dataset.pid;
-    openAssignModal(wbSel(), pid, null);
+    openAssignPicker(pid);
+  }));
+  // ---- Admin-only card actions (2026-10-02) ----
+  // Delegated through these four selectors rather than a big dispatcher, so a
+  // PM (whose cards never render them) cannot reach an admin path even by
+  // hand-crafting a click. The server re-checks every one of them anyway.
+  $$("#wbLoad .wb-load button[data-act=toggle-active]").forEach((b) => b.addEventListener("click", async () => {
+    const pid = +b.dataset.pid;
+    const p = (WB.people || []).find((y) => y.id === pid);
+    if (!p) return;
+    const next = p.active === 0 ? 1 : 0;
+    b.disabled = true;
+    try {
+      // Send ONLY the status: api_person_update keeps every other field when it
+      // is omitted (GH-33), so a toggle can never blank a name or capacity.
+      await api(`/api/people/${pid}`, { method: "PUT", body: JSON.stringify({ active: next }) });
+      toast(`${p.name} is now ${next ? "active" : "inactive (left the company)"}`);
+      if (typeof loadActivity === "function") loadActivity();
+      await loadPeople(); await refreshLoadOnly();
+    } catch (e) { toast(e.message || "Could not change status", true); b.disabled = false; }
+  }));
+  $$("#wbLoad .wb-load button[data-act=edit-person]").forEach((b) => b.addEventListener("click", () => {
+    const p = (WB.people || []).find((y) => y.id === +b.dataset.pid);
+    if (p) openPersonModal(p);
+  }));
+  $$("#wbLoad .wb-load button[data-act=merge]").forEach((b) => b.addEventListener("click", () => {
+    const p = (WB.people || []).find((y) => y.id === +b.dataset.pid);
+    if (p) openMergeModal(p);
+  }));
+  $$("#wbLoad .wb-load button[data-act=del-person]").forEach((b) => b.addEventListener("click", async () => {
+    const pid = +b.dataset.pid;
+    const p = (WB.people || []).find((y) => y.id === pid);
+    if (!p) return;
+    const lost = (p.assignments || []).map((a) => `${a.client} · ${a.project}`).join(", ") || "no project work";
+    if (!confirm(`Delete ${p.name}?\n\nOnly possible when they hold no project assignments.\nCurrently: ${lost}\n\nThis cannot be undone.`)) return;
+    try {
+      await api(`/api/people/${pid}`, { method: "DELETE" });
+      toast(`${p.name} deleted`);
+      if (typeof loadActivity === "function") loadActivity();
+      await loadPeople(); await refreshLoadOnly();
+    } catch (e) { toast(e.message || "Delete failed", true); }
   }));
   // GH-53: Move is on EVERY row, not only inside the compare panel. Rijoy had to
   // ask "how does the move resource work, where do I do that?" — a feature you
@@ -1328,9 +1425,79 @@ function approvedTitles(pid) {
   return out;
 }
 
-function openAssignModal(project, pid, rid) {
+/* ---------------------------------------------------------------------------
+   Assign… from a resource card (2026-10-02).
+
+   Rijoy asked for "option to assign them to project from back" on the master
+   list. The assignment dialog is PROJECT-anchored — it needs a project to open
+   its team, validate capacity and offer the right titles — so a card-first click
+   has to choose the project first. Two steps, but the second step is the SAME
+   validated dialog Add team member uses: one code path for the 100% block, the
+   phased taper and the title-exception rule, so they can never disagree.
+
+   The project list comes from /api/my-projects — for a PM that is their own
+   projects; for an admin it is EVERY project (the endpoint applies no ownership
+   filter when the caller is not a PM). Using that one source rather than
+   /api/projects matters twice over: it is gated on `people` (which the admin on
+   this page has) rather than `projects` (which they may not), and it carries each
+   project's TEAM, so step 2 opens with a correct capacity preview.
+   --------------------------------------------------------------------------- */
+async function openAssignPicker(pid) {
+  const p = (WB.people || []).find((x) => x.id === pid);
+  if (!p) { toast("Person not found", true); return; }
+  // The Resource tab loads this already; fetch only if something opened the
+  // picker before the roster was in memory.
+  if (!(WB.projects || []).length) {
+    try { await loadWorkbench(); } catch (e) { /* handled by the empty state */ }
+  }
+  // De-dupe and sort (a project can appear once per resource row in the payload).
+  const seen = new Set();
+  const projects = (WB.projects || []).filter((x) => {
+    const k = wbKey(x.client, x.project);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  }).sort((a, b) => `${a.client} · ${a.project}`.localeCompare(`${b.client} · ${b.project}`));
+
+  if (!projects.length) {
+    showModalHTML("Assign to a project",
+      `<p class="muted-note">No projects available. Create one on the Planned tab first.</p>`);
+    return;
+  }
+  const onKeys = new Set(((p.assignments || []).map((a) => wbKey(a.client, a.project))));
+  const body = `
+    <p class="muted-note">Add <b>${esc(p.name)}</b> to a project. Projects they are already on are marked — the server refuses a duplicate.</p>
+    <div class="wb-apick">
+      ${projects.map((x, i) => {
+        const on = onKeys.has(wbKey(x.client, x.project));
+        const n = (x.team || []).length;
+        return `<label class="wb-apick-row${on ? " on" : ""}">
+          <input type="radio" name="asgProj" value="${i}"${on ? " disabled" : ""}>
+          <span class="wb-apick-name"><b>${esc(x.client || "—")}</b> · ${esc(x.project || "—")}</span>
+          <span class="wb-note">${n} ${n === 1 ? "person" : "people"}</span>
+          ${on ? `<span class="wb-note">already assigned</span>` : ""}
+        </label>`;
+      }).join("")}
+    </div>`;
+  showModalHTML(`Assign ${p.name} to a project`, body);
+  const okBtn = $("#modalOk");
+  okBtn.textContent = "Next →";
+  setModalOk(() => {
+    const sel = document.querySelector('input[name="asgProj"]:checked');
+    if (!sel) { toast("Pick a project first", true); return; }
+    openAssignModal(projects[+sel.value], pid, null, { lockPerson: true });
+  });
+}
+
+function openAssignModal(project, pid, rid, opts) {
   if (!project) { toast("Pick a project first", true); return; }
+  const o = opts || {};
   const editing = rid != null;
+  // lockPerson: the person is already chosen (Assign… from a resource card) so
+  // the picker is replaced by a locked name — same treatment as Edit, because
+  // re-asking what the user just clicked is the defect GH-54 fixed on the Edit
+  // side. `editing` already locks; this extends it to the create path.
+  const lockPerson = editing || !!o.lockPerson;
   const team = project.team || [];
   const alreadyIds = team.filter((t) => t.id !== rid).map((t) => t.person_id);
   const cur = editing ? team.find((t) => t.id === rid) : null;
@@ -1341,15 +1508,15 @@ function openAssignModal(project, pid, rid) {
      resource". So editing shows NO person picker: the person is fixed and named,
      and every field opens on what the resource ACTUALLY has.
      On CREATE the picker stays — there is nobody to pre-choose. */
-  const choices = editing
-    ? [cur.person_id]
+  const choices = lockPerson
+    ? [editing ? cur.person_id : pid]
     : WB.people.filter((x) => !alreadyIds.includes(x.id) && !(x.active === 0)).map((x) => x.id);
-  if (!editing && !choices.length) {
+  if (!lockPerson && !choices.length) {
     showModalHTML("Add team member",
       `<p class="muted-note">Nobody left to add — everyone in the People list is already on this project.</p>`);
     return;
   }
-  const selPid = editing ? cur.person_id : (pid || choices[0]);
+  const selPid = lockPerson ? (editing ? cur.person_id : pid) : (pid || choices[0]);
   const p = WB.people.find((x) => x.id === selPid) || null;
   if (!p) {
     showModalHTML(editing ? "Edit assignment" : "Add team member",
@@ -1376,7 +1543,7 @@ function openAssignModal(project, pid, rid) {
     <div class="assign-grid">
       <div>
         <label class="f">${editing ? "Resource" : "Person"}</label>
-        ${editing
+        ${lockPerson
           ? `<div class="asg-locked">
                <b>${esc(p.name)}</b>
                <span class="muted-note">${esc(p.home_title || "no home title")}${p.country ? " · " + esc(p.country) : ""}</span>
@@ -2221,11 +2388,33 @@ async function openJoinerModal() {
 }
 
 function bindPeopleAndOt() {
-  // Bind every entry point: admins find it on Team & Access (People toolbar), PMs
-  // find it on their week sheet. The SERVER decides who may actually add one.
+  // Bind every entry point: admins find it on the Resource tab (master-list
+  // toolbar), PMs find it on their week sheet. The SERVER decides who may
+  // actually add one.
   $$(".js-add-joiner").forEach((b) => b.addEventListener("click", () => openJoinerModal()));
   const add = $("#btnAddPerson");
   if (add) add.addEventListener("click", () => openPersonModal(null));
+  // 2026-10-02: the People TABLE is now collapsed by default on the Resource tab
+  // — the card list is the master list, and the table's remaining unique job is
+  // spotting duplicate records. These two controls reveal it (the second also
+  // scrolls it into view, since it sits at the bottom of a long page).
+  const rev = (scroll) => {
+    const w = $("#peopleWrap");
+    if (!w) return;
+    const show = w.classList.contains("hidden");
+    w.classList.toggle("hidden", !show);
+    const b = $("#btnPeopleTableToggle");
+    if (b) b.textContent = show ? "✓ Hide records" : "⚙ Show records";
+    if (show && scroll) w.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    if (show && typeof renderPeople === "function") renderPeople();
+  };
+  const tt = $("#btnPeopleTableToggle");
+  if (tt && tt.dataset.bound !== "1") { tt.dataset.bound = "1"; tt.addEventListener("click", () => rev(false)); }
+  const mh = $("#btnPeopleMergeHint");
+  if (mh && mh.dataset.bound !== "1") {
+    mh.dataset.bound = "1";
+    mh.addEventListener("click", () => rev(true));
+  }
   const gate = $("#btnOtGate");
   if (gate) gate.addEventListener("click", async () => {
     const on = gate.textContent.includes("on");

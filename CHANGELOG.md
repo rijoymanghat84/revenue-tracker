@@ -9,6 +9,84 @@ wasn't one) and the commit.
 
 ---
 
+## 2026-10-02 — Resource master list: Team split from Resource, admin controls on the shared card (GH-55)
+
+**Rijoy:** *"split the Teams and Access section for admin to team and Resource,
+move the resource from the tab to resource tab but with the look and functionality
+of the resource from PM section ... option to Add new resource and by default it
+gets added to bench and then make a resource active or inactive, their home title,
+Approved titles, capacity, project they are in. Option to assign them to project
+from back. This will be the master table for resource any change to this will
+reflect everywhere and any change to resource by PM or any body should replce here
+too."*
+
+Five decisions were asked and answered one at a time before any code was written
+(the standing preference for feature builds): one list not two; Team = accounts
+only; add → Bench; Assign via a project picker into the one validated dialog;
+propagate name/title edits.
+
+**1. The tab split.** `Team` (`data-tab="access"`, so every binding and permission
+gate survives) now holds ONLY accounts: PMs, admins + permissions, OT approvals,
+DB security. The **People** master list and the **Capacity** editor moved to the
+**Resource** tab, which is now the master list for both roles. The card list is
+**shared** — an admin sees exactly the card a PM sees, plus a control strip.
+
+**2. Admin controls on that card.** Active/Inactive (one click), home title,
+approved titles, capacity, **projects they are in** (with the title booked on
+each), Edit / Merge / Delete, and **Assign…**. Gated on `canPerm("people")` —
+NOT `|| isPmRole`, which is how the first cut leaked "+ Add resource"/"Merge" to
+the `testPM` account (caught only by logging in as a PM; the API refused the
+writes, so it was a leak of controls, not of data).
+
+**3. Add resource → Bench.** `POST /api/people` now also parks the new person on
+`Internal · Bench` as a **zero-rate marker row with NO hours**. The obvious
+implementation — write 100% × capacity, which a blank window expands to the whole
+year — would have made a brand-new person read as **100% booked**, the exact
+opposite of the "appears as available" this is for, and would have inflated
+planned hours with work nobody did. With no hours their load is 0%, so they show
+as free; zero rates keep it financially inert like `/api/bench`.
+
+**4. First real assignment releases the placeholder.** A lone Bench row is a
+placeholder, so `POST /api/assignments` deletes it (clearing its `weekly_hours` /
+`actual_hours` / `actual_notes` children first) before validating — otherwise the
+placeholder counted against the 100% rule and the very first project was refused
+with a nonsensical clash against "Internal · Bench". A Bench row sitting
+**alongside** real projects is honest leftover and is left alone.
+
+**5. "Reflect everywhere" — the propagation rule.** `people` is the master; each
+`resources` row is a denormalized MIRROR of `name`/`role`/`capacity` that the
+Planned grid, Dashboard, Utilization, exports and team panels all read. So
+`PUT /api/people/{pid}` now:
+- rewrites `name` on **every** project row;
+- rewrites `role` only on rows still booked under the **OLD home title** — a row
+  on a deliberate exception title keeps it, and the card flags it
+  ⚠ **title differs** instead of the edit silently re-titling it;
+- mirrors `capacity`, which is the denominator of the 100% rule and is read off
+  each **resource row**, not off `people` — without this the capacity field on the
+  master list was a silent no-op on the one number it exists to change;
+- keeps the home title in the stored approved set (the server unions them anyway);
+- logs a `person.propagate` activity row with the counts.
+`weekly_hours` is never touched, so **the money cannot move**: verified
+byte-for-byte (rev $2,655,515.13 / exp $1,139,258.07 / 61,209.25 h / 1,898 hour
+rows) after a live add → assign → rename → cleanup cycle.
+
+**Two layout defects fixed while verifying live:** `.sheet-note` is a **flex**
+container, so once a toolbar carried three buttons the note was squeezed and each
+text run between its `<b>` tags became its own narrow column — the sentence read
+vertically. Measured 4 columns at 687px on the master-list toolbar; now
+`display:block` for the `.pm-toolbar` / `.wb-load-bar` variants. (Pre-existing on
+the Find-a-person bar too, which this fixes as well.)
+
+**Tests:** `tests/test_resource_master.py` — 34 assertions covering the Bench
+default, the release rule, each propagation path, the exception-title carve-out
+and the no-money-moved guarantee. All suites (6) pass; added to
+`scripts/run-tests.sh` and the CI workflow.
+
+**Not changed on purpose:** the Excel importer and `ResourceUpdate` still do not
+touch `allocation_pct`, so a bulk load cannot trip the quarter-grid check.
+
+---
+
 ## 2026-10-02 — My Projects panel: fill the allocation, Edit pre-fills it, Remove asks resigned vs bench (GH-54)
 
 **Rijoy (PM login → My Projects → click a project):** three changes to the right-hand

@@ -4621,6 +4621,12 @@ class PersonBody(BaseModel):
     active: int | None = None
     notes: str | None = None
     titles: list[str] | None = None
+    # New resource (2026-10-02): by DEFAULT a freshly added person is parked on
+    # Internal · Bench at 100% so they appear on the board as available with zero
+    # project work. Bench holds zero rates, so the row is financially inert; the
+    # first real assignment releases it. `False` skips benching (e.g. importing a
+    # historical record that must carry no bookings at all).
+    bench: bool | None = True
 
 
 class Phase(BaseModel):
@@ -5172,8 +5178,37 @@ def api_person_create(body: PersonBody, request: Request):
             conn.execute("INSERT OR IGNORE INTO person_titles (person_id, title) VALUES (?,?)", (pid, t))
         _log_activity(conn, request, "person.create", target=name,
                       details=f"Title(s): {', '.join(titles) or '—'}. Capacity {float(body.capacity or CAP_WEEK_HOURS)}h/wk.")
+        # ---- Park a new resource on the Bench (Rijoy, 2026-10-02) --------------
+        # "by default it gets added to bench". Bench is this app's holding pen, so
+        # a brand-new person lands somewhere visible instead of nowhere.
+        #
+        # Deliberately a MARKER row: zero rates (financially inert — same
+        # guarantee /api/bench gives) and NO weekly hours written. Writing the
+        # full-year 40h/wk that a blank window implies would make the new person
+        # read as 100% BOOKED — the exact opposite of the "appears as available"
+        # this is for, and it would inflate planned hours/utilization with work
+        # nobody did. With no hours their load is 0%, so they show as free and
+        # the Planned grid stays honest. The first real assignment releases it.
+        bench_rid = None
+        if body.bench is not False:
+            try:
+                if ensure_bench(conn):
+                    cap_new = float(body.capacity if body.capacity is not None else CAP_WEEK_HOURS)
+                    sort = conn.execute(
+                        "SELECT COALESCE(MAX(sort_order),0)+1 s FROM resources").fetchone()["s"]
+                    bench_rid = conn.execute(
+                        "INSERT INTO resources (country, client, project, name, role, rate, "
+                        "offshore_rate, sort_order, capacity, person_id, allocation_pct, "
+                        "start_date, end_date, phases) VALUES (?,?,?,?,?,0,0,?,?,?,?,?,?, '')",
+                        ((body.country or "").strip(), BENCH_CLIENT, BENCH_PROJECT, name,
+                         (body.home_title or "").strip(), sort, cap_new, pid, 100.0, "", "")
+                    ).lastrowid
+                    _log_activity(conn, request, "bench_add", name,
+                                  "new resource parked on bench at 100% (zero-rate marker)")
+            except Exception:  # noqa: BLE001 — never lose the person over the bench
+                bench_rid = None
         conn.commit()
-        return {"ok": True, "id": pid}
+        return {"ok": True, "id": pid, "bench_resource_id": bench_rid}
     finally:
         conn.close()
 
@@ -5233,12 +5268,67 @@ def api_person_update(pid: int, body: PersonBody, request: Request):
             conn.execute("DELETE FROM person_titles WHERE person_id=?", (pid,))
             for t in keep:
                 conn.execute("INSERT OR IGNORE INTO person_titles (person_id, title) VALUES (?,?)", (pid, t))
-        # Keep the denormalized name/role on the resource rows in step so grids,
-        # exports and reports never show a stale name.
+        # The home title is ALWAYS an approved title — `_approved_titles` unions
+        # the set with the home title, so leaving this out of the stored rows
+        # made the master list display a title the server would accept while the
+        # card showed it as missing. Keep the stored set in step with the rule.
+        if canonical and not conn.execute(
+                "SELECT 1 FROM person_titles WHERE person_id=? AND TRIM(LOWER(title))=?",
+                (pid, canonical.lower())).fetchone():
+            conn.execute("INSERT OR IGNORE INTO person_titles (person_id, title) VALUES (?,?)",
+                         (pid, canonical))
+        # ---- Propagate to the assignment rows (Rijoy, 2026-10-02) --------------
+        # "This will be the master table for resource ... any change to this will
+        # reflect everywhere." The `people` row is the master; each `resources`
+        # row is a denormalized MIRROR of name/role that the Planned grid, the
+        # Dashboard, Utilization, the exports and the team panels all read. So a
+        # rename that stops at `people` shows a stale name on every grid — which
+        # is exactly what Rijoy asked to fix. Only these two mirror columns are
+        # rewritten; weekly_hours is never touched, so the money cannot move.
+        mirror = {"name_rows": 0, "title_rows": 0, "title_kept": 0, "cap_rows": 0}
         if name != row["name"]:
-            conn.execute("UPDATE resources SET name=? WHERE person_id=?", (name, pid))
+            cur = conn.execute(
+                "UPDATE resources SET name=? WHERE person_id=? AND TRIM(name)<>TRIM(?)",
+                (name, pid, name))
+            mirror["name_rows"] = cur.rowcount or 0
+        # Capacity is the DENOMINATOR of the 100% rule, and the rule reads it off
+        # each resources ROW (see person_week_load), not off `people`. So editing
+        # it on the master list without mirroring it here would be a silent
+        # no-op on the one number it exists to change — the exact failure mode
+        # this master list is meant to end. "Reflect everywhere" means every one
+        # of the person's rows, so no fragile "only if it still matches"
+        # predicate: update any row whose capacity actually differs.
+        new_cap = float(body.capacity if body.capacity is not None else row["capacity"] or CAP_WEEK_HOURS)
+        if abs(new_cap - float(row["capacity"] or CAP_WEEK_HOURS)) > 1e-9:
+            cur = conn.execute(
+                "UPDATE resources SET capacity=? WHERE person_id=? AND ABS(COALESCE(capacity,?) - ?) > 0.001",
+                (new_cap, pid, CAP_WEEK_HOURS, new_cap))
+            mirror["cap_rows"] = cur.rowcount or 0
+        # A home-title change follows the rows still booked on the OLD home
+        # title. Rows on a DIFFERENT (exception) title are deliberately left
+        # alone — a QA booked as a Quadient Developer must not be silently
+        # re-titled by the admin editing their home title; the card flags those
+        # as "title differs" instead. `old_home` empty (first-ever title) means
+        # there is nothing to match on, so only the name propagation applies.
+        old_home = (row["home_title"] or "").strip()
+        if canonical and old_home and canonical != old_home:
+            cur = conn.execute(
+                "UPDATE resources SET role=? WHERE person_id=? AND TRIM(role)=TRIM(?)",
+                (canonical, pid, old_home))
+            mirror["title_rows"] = cur.rowcount or 0
+            mirror["title_kept"] = conn.execute(
+                "SELECT COUNT(*) n FROM resources WHERE person_id=? AND TRIM(role)<>TRIM(?) "
+                "AND TRIM(role)<>''", (pid, old_home)).fetchone()["n"]
+        if mirror["name_rows"] or mirror["title_rows"] or mirror["cap_rows"]:
+            _log_activity(
+                conn, request, "person.propagate", target=name,
+                details=(f"{mirror['name_rows']} project row(s) renamed, "
+                         f"{mirror['title_rows']} re-titled, "
+                         f"{mirror['cap_rows']} re-capacitated"
+                         + (f"; {mirror['title_kept']} left on a different title."
+                            if mirror["title_kept"] else ".")))
         conn.commit()
-        return {"ok": True}
+        return {"ok": True, "mirror": mirror}
     finally:
         conn.close()
 
@@ -5462,6 +5552,35 @@ def api_assignment_create(body: AssignmentBody, request: Request):
         ).fetchone()
         if dup:
             raise HTTPException(409, f"{p['name']} is already assigned to {client} · {project}.")
+
+        # ---- Release a lone Bench row (Rijoy, 2026-10-02) ---------------------
+        # A new resource is parked on Internal · Bench as a marker. If that bench
+        # row is the person's ONLY assignment it is pure placeholder — it holds no
+        # hours and exists only so the person is visible — so the first REAL
+        # assignment replaces it. Without this the placeholder would count against
+        # the 100% rule and the very first project would be refused with a
+        # nonsensical clash against "Internal · Bench".
+        #
+        # Only when it is the SOLE row: a bench row alongside real projects is
+        # honest leftover (the documented partial-bench case) and is left alone.
+        bench_released = None
+        if client.upper() != BENCH_CLIENT.upper() or project.upper() != BENCH_PROJECT.upper():
+            rows = conn.execute(
+                "SELECT id, client, project FROM resources WHERE person_id=?",
+                (body.person_id,)).fetchall()
+            if len(rows) == 1 and (_norm_project(rows[0]["client"], rows[0]["project"])
+                                   == _norm_project(BENCH_CLIENT, BENCH_PROJECT)):
+                bench_released = rows[0]["id"]
+                # Clear hours FIRST — a delete leaves weekly_hours / actual_hours
+                # / actual_notes children pointing at a row that no longer exists.
+                for tbl in ("weekly_hours", "actual_hours", "actual_notes"):
+                    try:
+                        conn.execute(f"DELETE FROM {tbl} WHERE resource_id=?", (bench_released,))
+                    except sqlite3.Error:
+                        pass
+                conn.execute("DELETE FROM resources WHERE id=?", (bench_released,))
+                _log_activity(conn, request, "bench_release", p["name"],
+                              f"bench placeholder released on assignment to {client} · {project}")
 
         # Time-phased mode when phases are supplied; otherwise the flat path.
         phases = parse_phases([x.model_dump() for x in (body.phases or [])]) if body.phases else []

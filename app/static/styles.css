@@ -419,6 +419,15 @@ main { padding: 0 14px 40px; }
   padding: 10px 14px; margin-bottom: 12px; flex-wrap: wrap;
 }
 .sheet-note { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+/* A .sheet-note is a FLEX container, so every text run between its <b> tags
+   becomes its own flex item. That is invisible while the note has room, but as
+   soon as a toolbar carries several buttons the note is squeezed and each item
+   wraps INSIDE its own narrow column — the sentence reads vertically, one word
+   group per column. Measured 2026-10-02 on the Resource master-list toolbar
+   (3 buttons): the note collapsed to 4 columns at 687px. Restore normal inline
+   text flow for the toolbar variants that carry multiple actions. */
+.pm-toolbar .sheet-note { display: block; }
+.pm-toolbar .sheet-note .dot { margin-right: 6px; }
 .sheet-note .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .sheet-note .dot.on { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
 .sheet-note .dot.off { background: var(--amber); box-shadow: 0 0 8px var(--amber); }
@@ -2073,7 +2082,8 @@ textarea.fb-inp { min-height: 72px; resize: vertical; }
       under every theme (dark and light). */
 
 .wb-load-bar { flex-direction: column; align-items: stretch; gap: 8px; }
-.wb-load-bar .sheet-note { width: 100%; }
+.wb-load-bar .sheet-note { width: 100%; display: block; }
+.wb-load-bar .sheet-note .dot { margin-right: 6px; }
 .wb-load-search { display: flex; justify-content: flex-start; align-items: center; gap: 9px; width: 100%; flex-wrap: wrap; }
 .wb-load-search .search { max-width: 340px; margin: 0; }
 .wb-load-lbl { font-size: 12px; }

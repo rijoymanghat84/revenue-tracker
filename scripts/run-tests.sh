@@ -31,6 +31,7 @@ SUITES=(
   tests/test_actuals_save_scope.py
   tests/test_gh54_panel.py
   tests/test_allocation_requests.py
+  tests/test_resource_master.py
 )
 
 fail=0
