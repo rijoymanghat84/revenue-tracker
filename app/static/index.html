@@ -157,7 +157,7 @@
           <span class="bell-badge hidden" id="bellBadge">0</span>
         </button>
 
-        <div class="bell-panel glass hidden" id="bellPanel">
+        <div class="bell-panel hidden" id="bellPanel">
           <div class="bell-head">
             <b>Notifications</b>
             <button class="btn mini" id="bellRefresh" title="Refresh">⟳</button>
@@ -401,6 +401,19 @@
        Everything here comes from the booked-% payload the PM already receives.
        No rates, no money — CHARTER clause 1. -->
   <section id="resourcesView" data-view="resources" class="view hidden">
+    <!-- GH-53: a plain-language guide. the owner had to ask where the move feature
+         lives — if the flow needs explaining, explain it ON the screen. -->
+    <details class="glass wb-guide">
+      <summary><b>How this works</b> — find someone, compare them, move their time <span class="muted-note">(click to expand)</span></summary>
+      <ol class="wb-guide-list">
+        <li><b>Find someone.</b> Pick a <b>Window</b> ("available" always means available <i>over that period</i>) and optionally a <b>Title</b>, then search by name. Everyone is listed — people with no free time appear under <b>fully booked</b>, with the week they are booked out.</li>
+        <li><b>Compare.</b> Tick <b>Compare</b> on two or more people to line them up side by side — % free, whether they can take a <i>full</i> slot, and <b>every project they are currently on with their %</b>.</li>
+        <li><b>Move their time.</b> Press <b>Move…</b> (on any row, or in the compare panel). Choose the project to take <b>off</b>, the <b>% of capacity</b> to move, the project to move <b>to</b>, and whether it is <b>permanent</b> or a <b>loan</b> with a return date.</li>
+        <li><b>Someone has to agree.</b> A move takes the releasing project's capacity, so it applies only once that <b>project's PM approves</b> it — a 🔔 appears top-right for them. If that project has no PM, an admin decides. <b>Admins' own moves apply immediately</b> (and are still recorded).</li>
+        <li><b>Nothing before this week changes.</b> A move always starts from the <b>current week forward</b>; weeks already worked are never rewritten. Loans come back automatically on the return date.</li>
+      </ol>
+      <div class="muted-note">Every request, approval and rejection is recorded — open the 🔔 and press <b>Details</b> on any item to see who asked, who decided, when and why.</div>
+    </details>
     <div class="toolbar glass wb-load-bar">
       <div class="sheet-note"><span class="dot on"></span><b>Find a person</b> — filter by title, ranked by who is free for <span id="wbLoadScope" class="wb-scope">the next 12 weeks</span>. Red = over 100%; those people cannot take new work and are listed at the bottom.</div>
       <div class="wb-load-search">
