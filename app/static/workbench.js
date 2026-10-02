@@ -541,45 +541,71 @@ function wbLoadWindow(mode) {
   return from(12, "the next 12 weeks");
 }
 
-/* Availability = 100 − the worst booked% across the window: how much of a full
-   week this person still has in their BUSIEST week of that window. `peakWeek`
-   is the label of that week, so an unavailable person can be told WHY. */
+/* Availability, measured over the window.
+ *
+ * TWO numbers, because they answer two different questions a PM asks:
+ *
+ *   freePct  = 100 − AVERAGE booked% across the window
+ *              "how much of this person is available over this period" — the
+ *              headline number, and what the 100/75/50/25 buckets use.
+ *   fullSlot = 100 − WORST booked% in the window  (minimum headroom)
+ *              "can they take a full-time slot?" — 0 means every week is
+ *              already at 100%, so they can only ever take part-time work.
+ *
+ * Why average and not peak: measured on live data 2026-10-02, peak-of-window
+ * reported **Ankish Mittal and Khushi Bhatia as 0% free and unavailable** when
+ * their actual pattern was [100,0,0,0,0,0,0,0,0,0,0,0] — busy in ONE week (the
+ * current week) and free for the other eleven. Peak collapsed "busy this week"
+ * into "no capacity", which is what Rijoy spotted as the % not being right.
+ * Average over the window is what a PM means by "how much of them can I use".
+ */
 function wbAvailability(x, win) {
+  const vals = win.idx.map((i) => (x.weeks || [])[i] || 0);
+  const n = vals.length || 1;
+  const avg = Math.round((vals.reduce((a, b) => a + b, 0) / n) * 10) / 10;
   let peak = 0, peakIdx = win.idx.length ? win.idx[0] : 0;
   win.idx.forEach((i) => {
     const v = (x.weeks || [])[i] || 0;
     if (v > peak) { peak = v; peakIdx = i; }
   });
-  peak = Math.round(peak);
+  const free = Math.max(0, Math.round(100 - avg));
+  const fullSlot = Math.max(0, Math.round(100 - peak));
+  const freeWeeks = vals.filter((v) => v < 100).length;
   return {
-    avail: Math.max(0, 100 - peak),
-    peak,
+    free,                       // headline: % free, averaged over the window
+    avg,
+    fullSlot,                   // worst-week headroom (can they take a full slot?)
+    peak: Math.round(peak),
     peakWeek: (WB.weekLabels || [])[peakIdx] || "",
     peakProjects: (((x.detail || [])[peakIdx]) || []).map((d) => d.label).filter(Boolean),
+    freeWeeks,
+    weeks: n,
   };
 }
 
-/* One availability card — shared by the available list and the unavailable one,
-   so the two can never drift apart. */
+/* One resource row — shared by the available list and the busy one, so the two
+   can never drift apart. `r` comes from wbAvailability(). */
 function wbLoadCard(x, r, opts) {
   const o = opts || {};
-  const pill = o.unavailable
-    ? `<span class="pill wb-pill-over">${r.peak}% booked</span>`
-    : r.avail >= 100 ? `<span class="pill wb-pill-free">free</span>`
-    : r.avail >= 75 ? `<span class="pill wb-pill-ok">${r.avail}% free</span>`
-    : r.avail >= 50 ? `<span class="pill wb-pill-warn">${r.avail}% free</span>`
-    : `<span class="pill wb-pill-over">${r.avail}% free</span>`;
+  // Headline is % free, averaged over the window; the worst-week headroom is
+  // shown separately because "free on average" and "can take a full slot" are
+  // different questions (see wbAvailability).
+  const cls = r.free >= 75 ? "wb-pill-ok" : r.free >= 50 ? "wb-pill-warn"
+    : r.free > 0 ? "wb-pill-over" : "wb-pill-over";
+  const pill = `<span class="pill ${cls}">${r.free}% free</span>`;
+  const partTime = r.fullSlot === 0 && r.free > 0
+    ? ` <span class="wb-note">part-time only</span>` : "";
   const projs = (x.projects || []).length
     ? x.projects.map(esc).join(" + ")
-    : "no project work booked";
-  // WHY they cannot take work: the week they peak, and what is already on them.
-  const why = o.unavailable
-    ? `<div class="sub wb-why">Fully booked ${esc(r.peakWeek)}${r.peakProjects.length ? " — " + r.peakProjects.map(esc).join(" + ") : ""}</div>`
+    : `<span class="wb-note">no project work booked</span>`;
+  // WHY someone has no room: the week they are fully booked, and what is on them.
+  const why = r.fullSlot === 0
+    ? `<div class="sub wb-why">No full-time capacity — fully booked ${esc(r.peakWeek)}${r.peakProjects.length ? " (" + r.peakProjects.map(esc).join(" + ") + ")" : ""}</div>`
     : "";
   return `<div class="wb-load" data-pid="${x.id}">
       <div class="h">
         <div><b>${esc(x.name)}</b> <span class="sub">${esc(x.home_title || "—")}</span></div>
-        <div>${pill}${o.unavailable ? "" : ` <span class="sub">peak ${r.peak}%</span>`} <button class="btn mini" data-act="view">Assign…</button></div>
+        <div>${pill}${partTime} <span class="sub">free ${r.freeWeeks}/${r.weeks} wks</span> <button class="btn mini" data-act="view">Assign…</button></div>
       </div>
       <div class="sub">${projs}</div>
       ${why}
@@ -634,35 +660,41 @@ function renderWbLoad() {
     return true;
   }).map((x) => ({ x, ...wbAvailability(x, win) }));
 
-  const open = matched.filter((r) => r.peak < 100)
-    .sort((a, b) => (b.avail - a.avail) || a.x.name.localeCompare(b.x.name));
-  const busy = matched.filter((r) => r.peak >= 100)
-    .sort((a, b) => (a.peak - b.peak) || a.x.name.localeCompare(b.x.name));
+  const open = matched.filter((r) => r.free > 0)
+    .sort((a, b) => (b.free - a.free) || (b.fullSlot - a.fullSlot) || a.x.name.localeCompare(b.x.name));
+  const busy = matched.filter((r) => r.free === 0)
+    .sort((a, b) => (b.fullSlot - a.fullSlot) || a.x.name.localeCompare(b.x.name));
 
+  // A title/search filter can remove everyone in one group; say so rather than
+  // silently emptying a section.
   if (!matched.length) {
-    box.innerHTML = `<div class="wb-empty">No people match${t ? " that title" : ""}. Try clearing the title filter or the search box.</div>`;
+    box.innerHTML = `<div class="wb-empty">No resources match${t ? " that title" : ""}. Try clearing the title filter or the search box.</div>`;
     return;
   }
 
-  let html = "";
+  let html = `<div class="wb-count">${matched.length} of ${WB.load.length} resources — <b>${open.length} with free capacity</b>, ${busy.length} fully booked</div>`;
+
   let last = null;
   open.forEach((r) => {
-    const bucket = WB_BUCKETS.find((b) => r.avail >= b.min);
+    const bucket = WB_BUCKETS.find((b) => r.free >= b.min);
     if (bucket !== last) {
       last = bucket;
-      html += `<div class="wb-bucket">${esc(bucket.label)} <span class="wb-bucket-n">${open.filter((o) => WB_BUCKETS.find((b) => o.avail >= b.min) === bucket).length}</span></div>`;
+      html += `<div class="wb-bucket">${esc(bucket.label)} <span class="wb-bucket-n">${open.filter((o) => WB_BUCKETS.find((b) => o.free >= b.min) === bucket).length}</span></div>`;
     }
     html += wbLoadCard(r.x, r, {});
   });
   if (!open.length) {
-    html += `<div class="wb-empty">Nobody is free in this window${t ? " for that title" : ""} — everyone matching is fully booked.</div>`;
+    html += `<div class="wb-empty">Nobody has free capacity in this window${t ? " for that title" : ""}.</div>`;
   }
 
-  // GH-51: the people who cannot take work are SHOWN, not dropped.
+  // Rijoy (2026-10-02): "the list should have all the resources not just few all
+  // available, non available ones too." So this group is OPEN by default — a
+  // closed <details> made the busy half of the roster look missing. It stays a
+  // <details> so it can be collapsed, but it renders expanded.
   if (busy.length) {
-    html += `<details class="wb-unavail">
-      <summary>Not available in this window <span class="wb-bucket-n">${busy.length}</span> <span class="muted-note">— fully booked; click to see who and why</span></summary>
-      ${busy.map((r) => wbLoadCard(r.x, r, { unavailable: true })).join("")}
+    html += `<details class="wb-unavail" open>
+      <summary>Fully booked — no free capacity in this window <span class="wb-bucket-n">${busy.length}</span> <span class="muted-note">— click to collapse</span></summary>
+      ${busy.map((r) => wbLoadCard(r.x, r, {})).join("")}
     </details>`;
   }
   box.innerHTML = html;
