@@ -1793,10 +1793,29 @@ class ProjectBody(BaseModel):
 
 @app.get("/api/projects")
 def api_projects(request: Request):
-    """List all (client, project) entries with their start/end dates."""
-    _require_admin(request)
+    """List (client, project) entries with their start/end dates.
+
+    GH-37: a PM sees only the projects they OWN rather than a 403. Without this a
+    PM could create a project but never list it, and `loadProjects()` (which the
+    Add/Edit dialog and the delete path both depend on) failed for them. The
+    filter is on ownership, so this exposes nothing beyond what the workbench
+    already shows.
+    """
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(401, "Unauthorized")
     conn = get_db()
     try:
+        if user.get("r") == "pm":
+            mine = _pm_projects(user["u"], conn)
+            want = {((c or "").strip().upper(), (p or "").strip().upper()) for c, p in mine}
+            rows = [r for r in conn.execute(
+                "SELECT id, client, project, start_date, end_date FROM projects ORDER BY client, project"
+            ).fetchall()
+                if ((r["client"] or "").strip().upper(),
+                    (r["project"] or "").strip().upper()) in want]
+            return [dict(r) for r in rows]
+        _require_perm(request, "projects")
         rows = conn.execute(
             "SELECT id, client, project, start_date, end_date FROM projects ORDER BY client, project"
         ).fetchall()
@@ -1819,8 +1838,14 @@ def api_project_create(body: ProjectBody, request: Request):
     leaves the project defined (visible as a "no team" row) instead of losing the
     whole submission. The refusal names the clashing weeks exactly as the
     assignment endpoint does.
+
+    GH-37: a PM may create a project too. The PM is then auto-assigned as its
+    owner, so they can immediately staff it and (per the delete rules) remove it
+    again. the owner: "if the PM adds it should show up on the dashboard too" — the
+    "no team" row from GH-32 already guarantees that, and their own workbench
+    lists it because ownership is written here.
     """
-    _require_perm(request, "projects")
+    user = _may_manage_projects(request)
     conn = get_db()
     try:
         client = (body.client or "").strip()
@@ -1829,6 +1854,10 @@ def api_project_create(body: ProjectBody, request: Request):
             raise HTTPException(400, "client and project are required")
         if conn.execute("SELECT 1 FROM projects WHERE client=? AND project=?", (client, project)).fetchone():
             raise HTTPException(409, f"'{client}/{project}' already exists")
+        # A PM always owns what they create. An explicit `pm` from an admin still
+        # wins; a PM naming someone else is ignored rather than trusted.
+        if user.get("r") == "pm":
+            body.pm = user["u"]
 
         cur = conn.execute(
             "INSERT INTO projects (client, project, start_date, end_date) VALUES (?,?,?,?)",
@@ -1898,18 +1927,44 @@ def api_project_create(body: ProjectBody, request: Request):
 
 @app.put("/api/projects/{pid}")
 def api_project_update(pid: int, body: ProjectBody, request: Request):
-    _require_perm(request, "projects")
+    """Rename / re-date a project. GH-37: a PM may edit their OWN project.
+
+    Ownership is checked before any write, so a PM can only touch projects they
+    own; an admin needs the `projects` permission. Renaming keeps ownership and
+    the resource rows in step, because both are matched on (client, project).
+    """
+    user = _may_manage_projects(request)
     conn = get_db()
     try:
         row = conn.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
         if not row:
             raise HTTPException(404, "project not found")
-        client = (body.client or "").strip() or row["client"]
-        project = (body.project or "").strip() or row["project"]
+        _pm_may_touch(conn, user, row["client"], row["project"])
+        old_c, old_p = (row["client"] or "").strip(), (row["project"] or "").strip()
+        client = (body.client or "").strip() or old_c
+        project = (body.project or "").strip() or old_p
+        if (client.upper(), project.upper()) != (old_c.upper(), old_p.upper()):
+            if conn.execute(
+                "SELECT 1 FROM projects WHERE TRIM(UPPER(client))=TRIM(UPPER(?)) "
+                "AND TRIM(UPPER(project))=TRIM(UPPER(?)) AND id<>?",
+                (client, project, pid)).fetchone():
+                raise HTTPException(409, f"'{client}/{project}' already exists")
         conn.execute(
             "UPDATE projects SET client=?, project=?, start_date=?, end_date=? WHERE id=?",
             (client, project, (body.start_date or "").strip(), (body.end_date or "").strip(), pid),
         )
+        # Keep the riders and the ownership row pointing at the new name —
+        # otherwise a rename silently orphans every resource on the project.
+        if (client, project) != (old_c, old_p):
+            for sql in (
+                "UPDATE resources SET client=?, project=? WHERE "
+                "TRIM(UPPER(client))=TRIM(UPPER(?)) AND TRIM(UPPER(project))=TRIM(UPPER(?))",
+                "UPDATE user_projects SET client=?, project=? WHERE "
+                "TRIM(UPPER(client))=TRIM(UPPER(?)) AND TRIM(UPPER(project))=TRIM(UPPER(?))",
+            ):
+                conn.execute(sql, (client, project, old_c, old_p))
+            _log_activity(conn, request, "project.rename",
+                          target=f"{old_c} · {old_p} → {client} · {project}")
         conn.commit()
         return {"ok": True}
     finally:
@@ -1917,13 +1972,101 @@ def api_project_update(pid: int, body: ProjectBody, request: Request):
 
 
 @app.delete("/api/projects/{pid}")
-def api_project_delete(pid: int, request: Request):
-    _require_perm(request, "projects")
+def api_project_delete(pid: int, request: Request, force: bool = False):
+    """Delete a project — and its assignments/hours with it.
+
+    GH-37. Two problems this fixes at once:
+
+    1. **It used to orphan data.** The old body was a bare
+       `DELETE FROM projects WHERE id=?`, which removed the definition while
+       leaving every `resources` row (and its `weekly_hours` / `actual_hours`
+       children) pointing at a project that no longer existed. Those rows still
+       appeared in the Planned grid and still counted in Utilization and the
+       Dashboard. Measured before the fix: 17 projects but several resource rows
+       referencing deleted ones.
+    2. **A PM may delete their OWN project.** the owner: "The PM should be able to
+       delete the project he created as well." Ownership comes from
+       `user_projects`, so `_pm_may_touch` decides it; a PM can never reach a
+       project they do not own.
+
+    Refuses while people are still assigned, unless `?force=true`. Deleting a
+    project with a team on it silently discards real bookings, so the caller has
+    to say so explicitly — and the response reports exactly what went.
+    """
+    user = _may_manage_projects(request)
     conn = get_db()
     try:
+        row = conn.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
+        if not row:
+            raise HTTPException(404, "project not found")
+        client, project = (row["client"] or "").strip(), (row["project"] or "").strip()
+        _pm_may_touch(conn, user, client, project)
+
+        # `TRIM(UPPER(...))` to match how the rest of the app keys projects — a
+        # case/space difference would otherwise leave orphans behind again.
+        # NOTE: two forms of the same predicate. The subquery form needs the `res`
+        # alias; the direct `DELETE FROM resources` must NOT use it, because
+        # `resources` is not aliased in that statement (doing so raised
+        # "no such column: res.client" and turned every delete into a 500).
+        where_res = ("TRIM(UPPER(res.client))=TRIM(UPPER(?)) "
+                     "AND TRIM(UPPER(res.project))=TRIM(UPPER(?))")
+        where_plain = ("TRIM(UPPER(client))=TRIM(UPPER(?)) "
+                       "AND TRIM(UPPER(project))=TRIM(UPPER(?))")
+        riders = conn.execute(
+            f"SELECT res.id, res.name, COUNT(wh.week) AS wks "
+            f"FROM resources res LEFT JOIN weekly_hours wh ON wh.resource_id=res.id "
+            f"WHERE {where_res} GROUP BY res.id, res.name",
+            (client, project)).fetchall()
+        n_people = len(riders)
+        n_weeks = sum(int(r["wks"] or 0) for r in riders)
+        n_actual = conn.execute(
+            f"SELECT COUNT(*) FROM actual_hours ah JOIN resources res ON res.id=ah.resource_id "
+            f"WHERE {where_res}", (client, project)).fetchone()[0]
+        n_assign = conn.execute(
+            f"SELECT COUNT(*) FROM user_projects up WHERE "
+            f"TRIM(UPPER(up.client))=TRIM(UPPER(?)) AND TRIM(UPPER(up.project))=TRIM(UPPER(?))",
+            (client, project)).fetchone()[0]
+
+        if n_people and not force:
+            names = ", ".join(r["name"] for r in riders[:5])
+            more = f" (+{n_people - 5} more)" if n_people > 5 else ""
+            raise HTTPException(409, {
+                "message": (f"{client} · {project} still has {n_people} person(s) "
+                            f"assigned ({names}{more}) with {n_weeks} planned week(s) "
+                            f"and {n_actual} actual week(s). Deleting it discards those "
+                            f"hours. Confirm to delete anyway, or remove the team first."),
+                "code": "has_assignments",
+                "people": n_people, "planned_weeks": n_weeks, "actual_weeks": n_actual,
+            })
+
+        # Children first, then the rider rows, then the definition. actual_notes /
+        # actual_hours are keyed on resource_id and have no FK cascade, so they
+        # must be cleared explicitly or they become unreachable rows.
+        conn.execute(
+            f"DELETE FROM actual_notes WHERE resource_id IN "
+            f"(SELECT res.id FROM resources res WHERE {where_res})", (client, project))
+        conn.execute(
+            f"DELETE FROM actual_hours WHERE resource_id IN "
+            f"(SELECT res.id FROM resources res WHERE {where_res})", (client, project))
+        conn.execute(
+            f"DELETE FROM weekly_hours WHERE resource_id IN "
+            f"(SELECT res.id FROM resources res WHERE {where_res})", (client, project))
+        conn.execute(f"DELETE FROM resources WHERE {where_plain}", (client, project))
+        # Release the PM assignment too — otherwise the leftover user_projects row
+        # makes the project name permanently unusable.
+        conn.execute(
+            "DELETE FROM user_projects WHERE "
+            "TRIM(UPPER(client))=TRIM(UPPER(?)) AND TRIM(UPPER(project))=TRIM(UPPER(?))",
+            (client, project))
         conn.execute("DELETE FROM projects WHERE id=?", (pid,))
         conn.commit()
-        return {"ok": True}
+        _log_activity(conn, request, "project.delete", target=f"{client} · {project}",
+                      details=(f"{n_people} assignment(s), {n_weeks} planned week(s), "
+                               f"{n_actual} actual week(s) removed"))
+        return {"ok": True, "deleted": {"client": client, "project": project,
+                                        "people": n_people, "planned_weeks": n_weeks,
+                                        "actual_weeks": n_actual,
+                                        "pm_assignments": n_assign}}
     finally:
         conn.close()
 
@@ -4073,6 +4216,27 @@ def _pm_may_touch(conn, user, client: str, project: str) -> None:
         raise HTTPException(403, "Not assigned to this project")
 
 
+def _may_manage_projects(request):
+    """Who may create / delete a PROJECT (GH-37).
+
+    Admins need the `projects` permission. A PM is allowed too — the owner: "The PM
+    should be able to add project too - not the pricing, but create a project add
+    resource and PM just like admin can do but not the revenue or dollar value".
+    Their scope is enforced per-project by _pm_may_touch(), so a PM can only ever
+    see or remove projects they own; this helper only decides whether the route is
+    reachable for them at all.
+
+    Returns the user dict (r == "pm" for a PM, otherwise an admin).
+    """
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(401, "Unauthorized")
+    if user.get("r") == "pm":
+        return user
+    _require_perm(request, "projects")
+    return user
+
+
 @app.get("/api/people")
 def api_people(request: Request):
     """People master list. PMs get the same list (they must pick from it) but
@@ -4970,9 +5134,12 @@ def api_my_projects(request: Request):
             "ON h.resource_id=r.id WHERE TRIM(r.project)!='' GROUP BY TRIM(r.client), TRIM(r.project) "
             "ORDER BY TRIM(r.client), TRIM(r.project)").fetchall()
         out = []
+        seen: set[tuple[str, str]] = set()
         for r in rows:
             if projs is not None and not _pm_owns(projs, r["client"], r["project"]):
                 continue
+            key = ((r["client"] or "").upper(), (r["project"] or "").upper())
+            seen.add(key)
             meta = conn.execute(
                 "SELECT start_date, end_date FROM projects WHERE TRIM(UPPER(client))=? AND TRIM(UPPER(project))=?",
                 ((r["client"] or "").upper(), (r["project"] or "").upper())).fetchone()
@@ -4988,6 +5155,29 @@ def api_my_projects(request: Request):
                 "end_date": (meta["end_date"] if meta else "") or "",
                 "team": [{**dict(t), "phases": parse_phases(t["phases"])} for t in team],
             })
+        # GH-37: a project this PM owns but has NOBODY on yet has no resource rows,
+        # so the query above cannot see it and a freshly created project vanished
+        # from the very list it was meant to appear in (the same class of bug as the
+        # Dashboard's GH-32). Add those as empty entries — they are the ones a PM
+        # most needs, because staffing them is the next thing they do.
+        if projs is not None:
+            for cl, pr in projs:
+                key = ((cl or "").strip().upper(), (pr or "").strip().upper())
+                if not pr or key in seen:
+                    continue
+                meta = conn.execute(
+                    "SELECT start_date, end_date FROM projects WHERE "
+                    "TRIM(UPPER(client))=? AND TRIM(UPPER(project))=?",
+                    (key[0], key[1])).fetchone()
+                if not meta:
+                    continue          # owned but not defined (legacy row) — skip
+                out.append({
+                    "client": (cl or "").strip(), "project": pr.strip(),
+                    "people": 0, "booked_hours": 0.0,
+                    "start_date": meta["start_date"] or "", "end_date": meta["end_date"] or "",
+                    "team": [], "empty": True,
+                })
+            out.sort(key=lambda x: ((x["client"] or "").lower(), (x["project"] or "").lower()))
         return {"projects": out, "role": user.get("r"), "weeks": len(weeks)}
     finally:
         conn.close()

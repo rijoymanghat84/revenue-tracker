@@ -284,6 +284,12 @@ body {
   color: var(--accent); border: 1px solid rgba(var(--accent-rgb, 90,160,255), 0.45);
   border-radius: 999px; padding: 1px 6px; margin-left: 6px; white-space: nowrap;
 }
+/* GH-37: the Dashboard delete column. Quiet until hovered — it must not compete
+   with the numbers, but it has to be findable when wanted. */
+#dashTable th:last-child, #dashTable td.dash-actions { width: 46px; text-align: right; }
+.dash-del { opacity: 0.35; padding: 3px 7px; line-height: 1; }
+#dashTable tr:hover .dash-del { opacity: 1; }
+.dash-del:hover { color: #ff8b8b; border-color: rgba(255,139,139,0.5); }
 
 /* ---------- GH-36: refresh + "last updated" stamp ---------- */
 .util-refreshbar {
@@ -984,6 +990,13 @@ select option { background: var(--surface-4); color: var(--text); }
 }
 
 /* ---------- login ---------- */
+/* GH-37: the PM workbench's "New project" action. */
+.wb-master-actions { padding: 0 12px 10px; }
+.wb-master-actions .btn { width: 100%; }
+/* Per-project delete on the PM's own project list. */
+.wb-prow .wb-pdel { opacity: 0.3; padding: 2px 6px; line-height: 1; margin-left: auto; }
+.wb-prow:hover .wb-pdel { opacity: 1; }
+.wb-pdel:hover { color: #ff8b8b; border-color: rgba(255,139,139,0.5); }
 .login-wrap {
   min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px;
 }
