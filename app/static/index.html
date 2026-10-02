@@ -6,10 +6,12 @@
 <meta name="theme-color" content="#0b1020">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Revenue">
+<meta name="apple-mobile-web-app-title" content="Recon">
 <link rel="manifest" href="/manifest.webmanifest">
-<link rel="apple-touch-icon" href="/icons/icon-192.png">
-<title>Revenue Recon</title>
+<link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/icons/favicon-16.png">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<title>Recon</title>
 <link rel="stylesheet" href="/styles.css?v=83">
 </head>
 <body>
@@ -35,8 +37,8 @@
       <div class="login-err" id="loginErr"></div>
     </form>
     <div class="brand login-brand">
-      <span class="logo">₿</span>
-      <h1>Revenue Recon <span class="year-badge">2026</span></h1>
+      <span class="logo"><svg class="logo-mark" viewBox="0 0 200 200" aria-hidden="true"><defs><linearGradient id="reconGradLogin" x1="0" y1="0" x2="200" y2="0" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#22d3ee"/><stop offset="1" stop-color="#a78bfa"/></linearGradient></defs><g fill="none" stroke="url(#reconGradLogin)" stroke-linecap="round"><path d="M148.9 61.8 A62 62 0 1 1 78.8 41.7" stroke-width="13"/><path d="M123.6 81.5 A30 30 0 1 1 89.7 71.8" stroke-width="11"/><path d="M100 100 L139.5 60.5" stroke-width="13"/></g><circle cx="100" cy="100" r="10" fill="url(#reconGradLogin)"/></svg></span>
+      <h1>Recon <span class="year-badge">2026</span></h1>
     </div>
   </div>
 </div>
@@ -55,9 +57,9 @@
        permission summary the JS writes. -->
   <aside class="rail glass" id="rail">
     <div class="rail-brand">
-      <span class="logo">₿</span>
+      <span class="logo"><svg class="logo-mark" viewBox="0 0 200 200" aria-hidden="true"><defs><linearGradient id="reconGradRail" x1="0" y1="0" x2="200" y2="0" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#22d3ee"/><stop offset="1" stop-color="#a78bfa"/></linearGradient></defs><g fill="none" stroke="url(#reconGradRail)" stroke-linecap="round"><path d="M148.9 61.8 A62 62 0 1 1 78.8 41.7" stroke-width="13"/><path d="M123.6 81.5 A30 30 0 1 1 89.7 71.8" stroke-width="11"/><path d="M100 100 L139.5 60.5" stroke-width="13"/></g><circle cx="100" cy="100" r="10" fill="url(#reconGradRail)"/></svg></span>
       <div class="rail-brand-txt">
-        <h1>Revenue Recon</h1>
+        <h1>Recon</h1>
         <span class="year-badge">2026</span>
       </div>
       <button class="rail-pin" id="btnRailPin" title="Pin sidebar open / unpin" aria-pressed="false">📌</button>
@@ -162,7 +164,7 @@
             </div>
             <button class="user-menu-item" id="umPassword"><span>🔑</span>Change password</button>
             <a class="user-menu-item" id="umGitHub" href="https://github.com/rijoymanghat84/revenue-tracker" target="_blank" rel="noopener"><span>💻</span>GitHub repo</a>
-            <a class="user-menu-item" id="umIssue" href="https://github.com/rijoymanghat84/revenue-tracker/issues/new" target="_blank" rel="noopener"><span>🐞</span>Raise a bug / feature</a>
+            <button class="user-menu-item" id="umIssue"><span>🐞</span>Raise a bug / feature</button>
             <div class="user-menu-sep"></div>
             <button class="user-menu-item danger" id="umLogout"><span>⏻</span>Sign out</button>
           </div>
@@ -683,6 +685,33 @@
       <button class="btn primary" id="plannedModalSave">Save</button>
     </div>
   </div>
+</div>
+
+<!-- ============ FEEDBACK: raise a bug / feature (2026-10-02) ============
+     Replaces the raw GitHub "new issue" link that used to sit in the account
+     menu. Three steps: Where -> What -> Review. The body is built here and
+     handed to GitHub's new-issue page pre-filled; the reporter submits it
+     under THEIR OWN account, so they own the issue, get notifications, and
+     can attach screenshots in the thread.
+     NOTHING about this app's data is attached — counts and version only. -->
+<div id="fbModal" class="modal hidden">
+  <div class="modal-box glass fb-box">
+    <h3 id="fbTitle">Report a bug or request a feature</h3>
+    <div class="fb-sub" id="fbSub">Tell us where it happened — two taps, then the details.</div>
+
+    <div class="fb-notice">
+      <span>⚠</span>
+      <div><b>Please don't include client or project names, rates, or people's names.</b>
+      Reports are posted on a public page. Describe it generically — “a project”, “a resource”.
+      We'll come back to you in the issue if we need specifics.</div>
+    </div>
+
+    <div class="fb-steps" id="fbSteps"></div>
+    <div id="fbBody" class="modal-body"></div>
+
+    <div class="modal-actions" id="fbActions"></div>
+  </div>
+  <input type="file" id="fbShotInput" accept="image/*" hidden>
 </div>
 
 <!-- workbench.js MUST load before app.js: app.js calls bindWorkbench() at

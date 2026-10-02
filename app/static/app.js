@@ -370,6 +370,14 @@ function initUserMenu() {
     close();
     openPasswordModal();
   });
+
+  // "Raise a bug / feature" (2026-10-02): opens the in-app 3-step form, which
+  // builds a pre-filled GitHub issue. Used to be a raw link straight to
+  // GitHub's blank new-issue page, which asked the reporter nothing.
+  $("#umIssue").addEventListener("click", () => {
+    close();
+    openFeedback();
+  });
   $("#umLogout").addEventListener("click", () => {
     close();
     $("#btnLogout").click();
@@ -4706,3 +4714,331 @@ boot();
 setInterval(() => flush(), 3000);
 setInterval(() => pFlush(), 3000);
 setInterval(() => aFlush(), 3000);
+
+/* ============================================================================
+   FEEDBACK — "Raise a bug / feature" (2026-10-02)
+
+   Replaces the raw github.com/.../issues/new link. Three steps: Where (the app
+   walk) -> What -> Review, then hands a fully pre-filled issue to GitHub, which
+   the reporter submits under THEIR OWN account.
+
+   Two deliberate properties:
+     * Nothing about the data is attached. The client/project scope has no input
+       at all, so the most leak-prone value cannot be sent by accident — the
+       amber banner is a reminder, not the only guard.
+     * The body is shown verbatim on step 3 before anything opens, so what gets
+       posted is exactly what the reporter read.
+   ============================================================================ */
+
+const FB_REPO = "https://github.com/rijoymanghat84/revenue-tracker";
+
+// Module -> screens, mirroring the real tabs. Kept explicit (not generated from
+// the DOM) so the wording reads like a person describing a screen, not a view id.
+const FB_MODULES = [
+  ["dash", "\u25a4", "Dashboard", ["Overview cards", "Client / project table", "Filters", "Month scope"]],
+  ["planned", "\u270e", "Planned", ["Grid (hours and rates)", "Add / Edit Resource", "Add / Edit Client Project", "Planned Hours wizard", "Import / Export"]],
+  ["week", "\u270d", "Weekly entry", ["Week sheet", "Overtime", "Save / submit"]],
+  ["actuals", "\u2713", "Actuals", ["Week entry", "Reconciliation (why a number changed)", "Overtime approval", "Filters / month view"]],
+  ["workbench", "\u25a6", "My Projects", ["Project list", "Assignments / load"]],
+  ["rates", "\u20bf", "Rate Card", ["Rate library", "Apply to resources", "Update all pricing"]],
+  ["util", "\u25d4", "Utilization", ["Month view", "Week view", "Available people", "Filters"]],
+  ["access", "\ud83d\udd11", "Team & Access", ["Team members", "Permissions", "Capacity", "Database security"]],
+  ["logs", "\ud83d\udd58", "Logs", ["Activity log", "Who changed what"]],
+];
+
+// Ring buffer of console errors so an opt-in report can carry real evidence.
+const FB_ERRORS = [];
+window.addEventListener("error", (e) => {
+  FB_ERRORS.push(`${e.message} @ ${(e.filename || "").split("/").pop()}:${e.lineno || 0}`);
+  if (FB_ERRORS.length > 10) FB_ERRORS.shift();
+});
+window.addEventListener("unhandledrejection", (e) => {
+  FB_ERRORS.push(`Unhandled promise: ${(e.reason && e.reason.message) || e.reason}`);
+  if (FB_ERRORS.length > 10) FB_ERRORS.shift();
+});
+
+const fbState = {
+  step: 1, module: null, screen: null, kind: "bug",
+  severity: "Blocks my work", freq: "Every time",
+  expected: "", happened: "", console: "off", shots: [], version: "unknown", _title: null,
+};
+
+function fbRole() {
+  const me = state.me || {};
+  if (me.super_admin) return "Administrator (owner)";
+  return me.role === "admin" ? "Administrator" : "Project Manager";
+}
+
+function fbBrowser() {
+  const ua = navigator.userAgent;
+  const b = /Edg\//.test(ua) ? "Edge" : /OPR\//.test(ua) ? "Opera"
+    : /Firefox\//.test(ua) ? "Firefox" : /Chrome\//.test(ua) ? "Chrome"
+    : /Safari\//.test(ua) ? "Safari" : "Browser";
+  const os = /Windows/.test(ua) ? "Windows" : /Mac OS/.test(ua) ? "macOS"
+    : /Android/.test(ua) ? "Android" : /iPhone|iPad/.test(ua) ? "iOS"
+    : /Linux/.test(ua) ? "Linux" : "?";
+  return `${b} \u00b7 ${os} \u00b7 ${window.innerWidth}\u00d7${window.innerHeight}`;
+}
+
+function fbMonth() {
+  return state.globalMonth && state.globalMonth !== "all" ? state.globalMonth : "All months";
+}
+
+function fbPath() {
+  const m = FB_MODULES.find((x) => x[0] === fbState.module);
+  if (!m) return "";
+  return fbState.screen ? `${m[2]} \u203a ${fbState.screen}` : m[2];
+}
+
+function fbTitleText() {
+  const kind = fbState.kind.charAt(0).toUpperCase() + fbState.kind.slice(1);
+  const where = fbPath() || "App";
+  const what = (fbState.happened || fbState.expected || "").trim().slice(0, 70);
+  return `[${where}] ${what || kind}`;
+}
+
+function fbBody() {
+  const me = state.me || {};
+  const lines = [
+    "### Where", fbPath() || "(not specified)", "",
+    "### What I expected", fbState.expected || "(not given)", "",
+    "### What happened", fbState.happened || "(not given)", "",
+    "### App context (automatic)",
+    `Version : Recon ${new Date().getFullYear()} \u00b7 build ${fbState.version}`,
+    `Screen  : ${fbPath()}`,
+    `Reported by: ${me.username || "?"} (${fbRole()})`,
+    `Month   : ${fbMonth()}`,
+    `Browser : ${fbBrowser()}`,
+    `Type    : ${fbState.kind} \u00b7 ${fbState.severity} \u00b7 ${fbState.freq}`,
+  ];
+  if (fbState.console === "on") {
+    const errs = FB_ERRORS.length ? FB_ERRORS : ["(none recorded)"];
+    lines.push("", "### Console errors (last 10)", "```", ...errs, "```");
+  }
+  return lines.join("\n");
+}
+
+function fbRenderSteps() {
+  const labels = ["Where", "What", "Review"];
+  $("#fbSteps").innerHTML = labels.map((l, i) => {
+    const n = i + 1;
+    const cls = fbState.step === n ? "on" : (fbState.step > n ? "done" : "");
+    const mark = fbState.step > n ? "\u2713" : n;
+    return `<span class="fb-step ${cls}"><span class="n">${mark}</span>${l}</span>`
+      + (n < 3 ? '<span class="fb-arrow">\u2192</span>' : "");
+  }).join("");
+}
+
+function fbStep1() {
+  const chips = FB_MODULES.map(([id, ico, label]) =>
+    `<button type="button" class="fb-chip ${fbState.module === id ? "on" : ""}" data-mod="${id}">`
+    + `<span>${ico}</span>${label}${fbState.module === id ? ' <span style="color:var(--accent)">\u25be</span>' : ""}</button>`).join("");
+  const mod = FB_MODULES.find((x) => x[0] === fbState.module);
+  const screens = mod ? `
+    <div class="fb-screen-wrap">
+      <div class="fb-path">Selected: <b>${mod[2]}</b></div>
+      <label class="f">Which screen inside ${mod[2]}?</label>
+      <div class="fb-chips">${mod[3].map((s) =>
+        `<button type="button" class="fb-chip ${fbState.screen === s ? "on" : ""}" data-screen="${s.replace(/"/g, "&quot;")}">${s}</button>`).join("")}
+      </div>
+    </div>` : "";
+  $("#fbBody").innerHTML = `
+    <div class="fb-field">
+      <label class="f">Which area of Recon?</label>
+      <div class="fb-chips">${chips}</div>
+    </div>
+    ${screens}
+    <details class="fb-auto">
+      <summary>\ud83d\udcce What we'll attach automatically \u2014 <b>you'll see it before anything is sent</b></summary>
+      <div class="fb-kv">
+        <div><span>Version</span><span>build ${fbState.version}</span></div>
+        <div><span>Screen</span><span>${fbPath() || "\u2014"}</span></div>
+        <div><span>You</span><span>${(state.me || {}).username || "?"} (${fbRole()})</span></div>
+        <div><span>Month filter</span><span>${fbMonth()}</span></div>
+        <div><span>Browser</span><span>${fbBrowser()}</span></div>
+        <div><span>Your data</span><span>never \u2014 no client, project, rate or hour values</span></div>
+      </div>
+    </details>`;
+  $$("[data-mod]").forEach((b) => b.addEventListener("click", () => {
+    fbState.module = b.dataset.mod; fbState.screen = null; fbRender();
+  }));
+  $$("[data-screen]").forEach((b) => b.addEventListener("click", () => {
+    fbState.screen = b.dataset.screen; fbRender();
+  }));
+}
+
+function fbStep2() {
+  const kinds = [["bug", "\ud83d\udc1e Bug"], ["feature", "\ud83d\udca1 Feature"], ["slow", "\u26a1 Slow"], ["confusing", "\u2753 Confusing"]];
+  $("#fbBody").innerHTML = `
+    <div class="fb-field">
+      <label class="f">This is a\u2026</label>
+      <div class="fb-seg" id="fbKind">${kinds.map(([v, l]) =>
+        `<button type="button" data-kind="${v}" class="${fbState.kind === v ? "on" : ""}">${l}</button>`).join("")}</div>
+    </div>
+    <div class="fb-row2">
+      <div class="fb-field">
+        <label class="f">How bad?</label>
+        <select class="fb-inp" id="fbSeverity">
+          ${["Blocks my work", "A number looks wrong", "Cosmetic / annoying"]
+            .map((s) => `<option ${fbState.severity === s ? "selected" : ""}>${s}</option>`).join("")}
+        </select>
+      </div>
+      <div class="fb-field">
+        <label class="f">How often?</label>
+        <select class="fb-inp" id="fbFreq">
+          ${["Every time", "Sometimes", "Seen once"]
+            .map((s) => `<option ${fbState.freq === s ? "selected" : ""}>${s}</option>`).join("")}
+        </select>
+      </div>
+    </div>
+    <div class="fb-field">
+      <label class="f">What did you expect?</label>
+      <textarea class="fb-inp" id="fbExpected" placeholder="e.g. I saved 8h and the week should show 8h.">${fbState.expected}</textarea>
+    </div>
+    <div class="fb-field">
+      <label class="f">What actually happened?</label>
+      <textarea class="fb-inp" id="fbHappened" placeholder="e.g. It saved, but the cell still shows 6h after I refreshed.">${fbState.happened}</textarea>
+    </div>
+    <div class="fb-row2">
+      <div class="fb-field">
+        <label class="f">Screenshot <span class="fb-hint" style="display:inline">(optional)</span></label>
+        <button type="button" class="btn ghost mini" id="fbShotBtn">\ud83d\udcf7 Attach a screenshot</button>
+        <div class="fb-hint">We'll copy it to your clipboard so you can paste it straight into the issue.</div>
+        <div class="fb-shots" id="fbShots"></div>
+      </div>
+      <div class="fb-field">
+        <label class="f">Console errors</label>
+        <div class="fb-seg" id="fbConsole">
+          <button type="button" data-con="off" class="${fbState.console === "off" ? "on" : ""}">Off</button>
+          <button type="button" data-con="on" class="${fbState.console === "on" ? "on" : ""}">Attach last 10</button>
+        </div>
+        <div class="fb-hint">Technical, but often pins the cause. Off unless you turn it on.</div>
+      </div>
+    </div>`;
+  $$("#fbKind button").forEach((b) => b.addEventListener("click", () => { fbState.kind = b.dataset.kind; fbRender(); }));
+  $$("#fbConsole button").forEach((b) => b.addEventListener("click", () => { fbState.console = b.dataset.con; fbRender(); }));
+  const ce = $("#fbExpected"), ch = $("#fbHappened");
+  if (ce) ce.addEventListener("input", () => { fbState.expected = ce.value; });
+  if (ch) ch.addEventListener("input", () => { fbState.happened = ch.value; });
+  const sv = $("#fbSeverity"), fq = $("#fbFreq");
+  if (sv) sv.addEventListener("change", () => { fbState.severity = sv.value; });
+  if (fq) fq.addEventListener("change", () => { fbState.freq = fq.value; });
+  fbRenderShots();
+  const sb = $("#fbShotBtn");
+  if (sb) sb.addEventListener("click", () => $("#fbShotInput").click());
+}
+
+function fbRenderShots() {
+  const wrap = $("#fbShots");
+  if (!wrap) return;
+  wrap.innerHTML = fbState.shots.map((s, i) =>
+    `<div class="fb-shot"><img src="${s.url}" alt="screenshot ${i + 1}">
+     <button type="button" data-del="${i}" title="Remove">\u2715</button></div>`).join("");
+  $$("[data-del]", wrap).forEach((b) => b.addEventListener("click", () => {
+    fbState.shots.splice(Number(b.dataset.del), 1); fbRenderShots();
+  }));
+}
+
+function fbStep3() {
+  const me = state.me || {};
+  const esc = (t) => t.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+  $("#fbBody").innerHTML = `
+    <div class="fb-field">
+      <label class="f">Title</label>
+      <input class="fb-inp" id="fbTitleInp" value="${(fbState._title || fbTitleText()).replace(/"/g, "&quot;")}">
+    </div>
+    <label class="f">Body \u2014 exactly what gets posted</label>
+    <div class="fb-preview">${esc(fbBody())}</div>
+    <div class="fb-field" style="margin-top:14px">
+      <label class="f">Submitted as</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <span class="fb-badge">\ud83d\udc64 ${me.username || "?"} (${fbRole()})</span>
+        <span class="fb-badge">\ud83d\udd13 Public page \u2014 no client names included</span>
+        ${fbState.shots.length ? `<span class="fb-badge">\ud83d\udcf7 ${fbState.shots.length} screenshot(s) to paste</span>` : ""}
+      </div>
+      <div class="fb-hint">You'll need to be signed in to GitHub to submit. The issue is yours \u2014
+      you'll get notified as it moves, and you can attach files in the thread.</div>
+    </div>`;
+  const ti = $("#fbTitleInp");
+  if (ti) ti.addEventListener("input", () => { fbState._title = ti.value; });
+}
+
+function fbNav() {
+  const canNext = fbState.step === 1 ? Boolean(fbState.module && fbState.screen)
+    : fbState.step === 2 ? Boolean((fbState.expected || "").trim() || (fbState.happened || "").trim())
+    : true;
+  const labels = ["", "Next: what happened \u2192", "Next: review \u2192", ""];
+  let html = `<span class="fb-spacer">Step ${fbState.step} of 3</span>`;
+  html += `<button type="button" class="btn ghost" id="fbCancel">${fbState.step === 1 ? "Cancel" : "\u2190 Back"}</button>`;
+  if (fbState.step === 3) {
+    html += `<button type="button" class="btn ghost" id="fbCopy">\ud83d\udccb Copy instead</button>`;
+    html += `<button type="button" class="btn primary" id="fbGo">Open GitHub with this filled in \u2197</button>`;
+  } else {
+    html += `<button type="button" class="btn primary" id="fbNext" ${canNext ? "" : "disabled"}>${labels[fbState.step]}</button>`;
+  }
+  $("#fbActions").innerHTML = html;
+  $("#fbCancel").addEventListener("click", () => { fbState.step === 1 ? fbClose() : (fbState.step--, fbRender()); });
+  const next = $("#fbNext");
+  if (next) next.addEventListener("click", () => { if (canNext) { fbState.step++; fbRender(); } });
+  const copy = $("#fbCopy");
+  if (copy) copy.addEventListener("click", () => {
+    const text = fbBody();
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text)
+        .then(() => toast("Copied \u2014 paste it into a new GitHub issue"))
+        .catch(() => toast("Copy failed \u2014 select the text manually", true));
+    } else { toast("Copy unavailable in this browser", true); }
+  });
+  const go = $("#fbGo");
+  if (go) go.addEventListener("click", fbOpenGitHub);
+}
+
+function fbRender() {
+  fbRenderSteps();
+  if (fbState.step === 1) fbStep1();
+  else if (fbState.step === 2) fbStep2();
+  else fbStep3();
+  fbNav();
+  $("#fbTitle").textContent = fbState.step === 3 ? "Review & send" : "Report a bug or request a feature";
+  $("#fbSub").textContent = fbState.step === 1 ? "Tell us where it happened \u2014 two taps, then the details."
+    : fbState.step === 2 ? "Plain words are perfect. Short is fine."
+    : "This is exactly what gets posted. Nothing is sent until you press Submit on GitHub.";
+}
+
+function fbOpenGitHub() {
+  const title = fbState._title || fbTitleText();
+  const url = `${FB_REPO}/issues/new?title=${encodeURIComponent(title)}&body=${encodeURIComponent(fbBody())}`;
+  window.open(url, "_blank", "noopener");
+  if (fbState.shots.length && navigator.clipboard && window.ClipboardItem) {
+    navigator.clipboard.write([new ClipboardItem({ "image/png": fbState.shots[0].blob })])
+      .then(() => toast("Issue opened \u2014 first screenshot copied, paste it in the issue"))
+      .catch(() => toast("Issue opened \u2014 add your screenshot on the GitHub page"));
+  } else {
+    toast("Issue opened \u2014 press \u201cSubmit new issue\u201d on GitHub");
+  }
+  fbClose();
+}
+
+function fbClose() { $("#fbModal").classList.add("hidden"); }
+
+function openFeedback() {
+  fbState.step = 1; fbState.module = null; fbState.screen = null;
+  fbState.expected = ""; fbState.happened = ""; fbState.shots = [];
+  fbState._title = null; fbState.version = "unknown"; fbState.kind = "bug";
+  const guess = FB_MODULES.find((m) => m[0] === state.view);
+  if (guess) fbState.module = state.view;
+  $("#fbModal").classList.remove("hidden");
+  fbRender();
+  api("/api/version").then((d) => {
+    fbState.version = (d && d.commit) || "unknown";
+    if (!$("#fbModal").classList.contains("hidden")) fbRender();
+  }).catch(() => {});
+}
+
+$("#fbShotInput").addEventListener("change", (e) => {
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  fbState.shots.push({ url: URL.createObjectURL(f), blob: f });
+  fbRenderShots();
+  e.target.value = "";
+});
