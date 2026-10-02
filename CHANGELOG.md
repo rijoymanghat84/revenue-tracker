@@ -81,6 +81,62 @@ active), with every touched table restored to baseline (66 resources / 49 people
 
 ---
 
+## 2026-10-02 — Resource table on My Projects: readable, and dates as dd/mmm/yy (GH-53)
+
+**the owner:** *"the resource details section of the My Project page the table is not
+proper, the name title and other details are mentioned so clustered. it should look
+professional and better, make it better start and endate can be mentioned like
+dd/mmm/yy format"*
+
+### Why it looked clustered
+
+`#wbTeamTable` carried **no class of its own**, so it inherited the generic
+`thead th` / `tbody td` rules — which were written for the **dense week grid**:
+`padding: 4px 6px`, text centred, 11px, and `white-space: nowrap; height: 30px`.
+A normal reading table was being rendered at week-grid density, with no hierarchy
+between a person's name and their title.
+
+It now has its own rules: 11px/12px padding, left-aligned text, a real header
+band, row hover and rules, a **name as a block heading with the title muted
+beneath it**, right-aligned tabular figures so numbers line up down the column,
+and Edit/Remove as real spaced buttons.
+
+### Dates: `dd/mmm/yy`
+
+Start and End are now **one `Period` column**: `25/May/26 → 20/Sep/26`, with a
+machine-readable `<time datetime="2026-05-25">` kept around each. `dd/MON/yy` is
+unambiguous for a mixed Canada/India team — `03/02` could read as Mar 2 or Feb 3,
+`02/Mar/26` cannot. `fmtDMY` passes anything that is not a plain ISO date through
+untouched rather than rendering `Invalid Date`. 19/19 assertions.
+
+### Four defects found by measuring, not by looking
+
+The screenshot looked fine before each of these; the numbers did not.
+
+| # | Found | Evidence | Fix |
+|---|---|---|---|
+| 1 | Table overflowed its pane | **1067px inside 715px** — Load and Status cut off | Merged Load+Status into one column, shortened headers |
+| 2 | Still overflowed | **958px inside 715px** — trimming headers bought only 109px | `table-layout: fixed` + a `<colgroup>` with real proportions |
+| 3 | `Remove` clipped, name truncated | at 780×437 | Actions 10%→15%, `.wb-rowactions` wraps, person 19%→20% |
+| 4 | Name clipped mid-word even after `overflow-wrap` | `white-space` was still `nowrap` | the generic **`tbody td { white-space: nowrap; height: 30px }`** (line ~513, written for the week grid) was winning. Re-stated `white-space: normal; height: auto` on the team table |
+
+### A silent, pre-existing bug this uncovered
+
+**`.bar` and `.bar i` had no CSS at all.** `loadBarHTML()` emits
+`<div class="bar"><i class="hot|warn|booked">`, and there was no rule for either
+selector anywhere in the stylesheet — so **both** tables that use it (My Projects
+*and* the Resources list) were rendering a zero-height, background-less element.
+The Load column was showing a silent gap where a bar should be. Now styled to the
+app's existing bar idiom with the same accent/amber/red semantics as `.wb-strip`.
+
+### Verified
+
+Measured live after deploy: `overflowPx: 0`, both names full (no truncation), all
+four buttons inside the pane, dates rendering `25/May/26→20/Sep/26`, load bar
+7px tall with a real fill colour. Plus 19/19 on the date formatter.
+
+---
+
 ## 2026-10-02 — PM landing page, and the compare panel's buttons (GH-53)
 
 **the owner, 2026-10-02:**
