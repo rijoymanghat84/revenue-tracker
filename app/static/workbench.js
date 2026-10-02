@@ -33,6 +33,7 @@ let WB = {
   filter: "",
   loadFilter: "",
   loadTitle: "",         // GH-50: title selected in the Find-a-person dropdown
+  loadWindow: "auto",    // GH-51: window selector — auto | 12w | 26w | year
 };
 const wbKey = (cl, pr) => `${cl}||${pr}`;
 
@@ -65,6 +66,18 @@ function renderWorkbench() {
   renderWbProjects();
   renderWbTeam();
   renderWbProgress();
+  // GH-51: the load rail lives on the Resources tab now, so only re-render it
+  // when that view is the one on screen (renderWbLoad guards on #wbLoad).
+  if (state.view === "resources") renderWbLoad();
+}
+
+/* GH-51: the Resources tab. Ensures the roster is loaded (the tab can be the
+   first thing a PM opens, before My Projects has ever fetched anything) and
+   then renders the rail. */
+async function renderResources() {
+  if (!(WB.load || []).length) {
+    try { await loadWorkbench(); } catch (e) { /* rail renders its own empty state */ }
+  }
   renderWbLoad();
 }
 
@@ -456,16 +469,22 @@ function weekGridHTML(x) {
   return `<div class="wb-grid-rail" style="${cols}">${band}${cells}</div>`;
 }
 
-/* ---------------- the load rail ----------------
-   GH-50 (Paige) — "Find a person should be much more informative: a dropdown by
-   title, listing people under that title with the most free first (100/75/50/25),
-   skipping anyone unavailable." So the rail is a STAFFING finder, not just a
-   warning list: pick a title and the people holding it are ranked by how free
-   they are for THIS project WINDOW (Option A) — the window the work actually
-   runs, so "free in January" cannot masquerade as "free when I need them".
-   Availability = 100 − worst booked% inside the window; anyone whose window peak
-   is >= 100% cannot take the work and is skipped. Every number comes from the
-   booked-% payload the PM already receives — no rates, no money (CHARTER #1). */
+/* ---------------------------------------------------------------------------
+   GH-51 — the Resources tab.
+   the owner: "lets also include the unavailable folks too and we will move this to
+   another tab on the left called Resources."
+
+   This is the GH-50 finder promoted out of My Projects and widened to the whole
+   roster, with two changes that matter:
+     1. Nobody is dropped. People who cannot take work are rendered in a
+        COLLAPSED section that says WHY — which week they peak and on how many
+        projects. Hiding them was the thing the owner asked to fix.
+     2. The window is an explicit choice. "Available" is meaningless without a
+        period, so the rail offers auto (this project, else 12 weeks), 12w, 26w
+        or the whole year, and always names what it used.
+   Every number comes from the booked-% payload a PM already receives; no rates
+   and no money cross this surface (CHARTER clause 1).
+   --------------------------------------------------------------------------- */
 
 const WB_BUCKETS = [
   { min: 100, label: "100% available" },
@@ -474,49 +493,115 @@ const WB_BUCKETS = [
   { min: 0,   label: "under 50% available" },
 ];
 
-/* Which week indices the selected project runs. Week labels are Mondays and
-   'Jan-02' is the year-start stub, so parse with the 0-based month map and keep
-   weeks whose Monday falls inside [start, end].
+/* Resolve the window the rail measures against.
+   mode: "auto" (default) uses the selected project's own range, falling back to
+   the near-term horizon; "12w"/"26w"/"year" are explicit choices.
 
-   When the project has no dates (14 of 16 legacy projects, imported without
-   them) we use the NEAR-TERM staffing horizon — the current week + 12 — not the
-   whole year. Measured on live data 2026-10-02: a 53-week window leaves only
-   11 of 49 people "available" because 38 are booked to >=100% at SOME point in
-   the year, which makes the finder useless as a shortlist. A 12-week horizon
-   shows 20. Label says which, so the number is never a mystery. */
-function wbLoadWindow() {
-  const p = wbSel();
+   When a project has no dates (14 of 16 legacy projects, imported without them)
+   we use a NEAR-TERM horizon rather than the whole year. Measured on live data
+   2026-10-02: a 53-week window leaves only 11 of 49 people "available" because
+   38 are booked to >=100% at SOME point in the year, while 12 weeks shows 20.
+   The label always says which horizon produced the number. */
+function wbLoadWindow(mode) {
   const all = WB.weekLabels.map((_, i) => i);
-  const rolling = () => {
-    let start = (WB.current && typeof WB.current.week_index === "number") ? WB.current.week_index : -1;
-    if (start < 0) {
+  const startIdx = () => {
+    let s = (WB.current && typeof WB.current.week_index === "number") ? WB.current.week_index : -1;
+    if (s < 0) {
       const today = new Date();
       const first = all.find((i) => { const d = weekLabelToDate(WB.weekLabels[i]); return d && d >= today; });
-      start = first == null ? 0 : first;
+      s = first == null ? 0 : first;
     }
-    const idx = all.filter((i) => i >= start && i < start + 12);
-    return idx.length ? { idx, label: "the next 12 weeks" } : { idx: all, label: "the rest of the year" };
+    return s;
   };
-  if (!p || !p.start_date || !p.end_date) return rolling();
-  const start = new Date(p.start_date + "T00:00:00");
-  const end = new Date(p.end_date + "T00:00:00");
-  if (isNaN(start) || isNaN(end) || end < start) return rolling();
-  const idx = all.filter((i) => {
-    const d = weekLabelToDate(WB.weekLabels[i]);
-    return d && d >= start && d <= end;
-  });
-  return idx.length ? { idx, label: `${p.start_date} → ${p.end_date}` } : rolling();
+  const from = (n, label) => {
+    const s = startIdx();
+    const idx = all.filter((i) => i >= s && i < s + n);
+    if (!idx.length) return { idx: all, label: "the rest of the year" };
+    // Be honest when the year runs out: asking for 26 weeks in October can only
+    // reach the end of 2026, and a label claiming 26 would be a lie.
+    return { idx, label: idx.length < n ? `the next ${idx.length} weeks (to year end)` : label };
+  };
+  const m = mode || WB.loadWindow || "auto";
+  if (m === "year") return { idx: all, label: "all of 2026" };
+  if (m === "26w") return from(26, "the next 26 weeks");
+  if (m === "12w") return from(12, "the next 12 weeks");
+  // auto
+  const p = wbSel();
+  if (p && p.start_date && p.end_date) {
+    const start = new Date(p.start_date + "T00:00:00");
+    const end = new Date(p.end_date + "T00:00:00");
+    if (!isNaN(start) && !isNaN(end) && end >= start) {
+      const idx = all.filter((i) => {
+        const d = weekLabelToDate(WB.weekLabels[i]);
+        return d && d >= start && d <= end;
+      });
+      if (idx.length) return { idx, label: `${p.start_date} → ${p.end_date}` };
+    }
+  }
+  return from(12, "the next 12 weeks");
 }
 
 /* Availability = 100 − the worst booked% across the window: how much of a full
-   week this person still has in their BUSIEST week of that window. */
+   week this person still has in their BUSIEST week of that window. `peakWeek`
+   is the label of that week, so an unavailable person can be told WHY. */
 function wbAvailability(x, win) {
-  let peak = 0;
-  win.idx.forEach((i) => { peak = Math.max(peak, (x.weeks || [])[i] || 0); });
+  let peak = 0, peakIdx = win.idx.length ? win.idx[0] : 0;
+  win.idx.forEach((i) => {
+    const v = (x.weeks || [])[i] || 0;
+    if (v > peak) { peak = v; peakIdx = i; }
+  });
   peak = Math.round(peak);
-  return { avail: Math.max(0, 100 - peak), peak };
+  return {
+    avail: Math.max(0, 100 - peak),
+    peak,
+    peakWeek: (WB.weekLabels || [])[peakIdx] || "",
+    peakProjects: (((x.detail || [])[peakIdx]) || []).map((d) => d.label).filter(Boolean),
+  };
 }
 
+/* One availability card — shared by the available list and the unavailable one,
+   so the two can never drift apart. */
+function wbLoadCard(x, r, opts) {
+  const o = opts || {};
+  const pill = o.unavailable
+    ? `<span class="pill wb-pill-over">${r.peak}% booked</span>`
+    : r.avail >= 100 ? `<span class="pill wb-pill-free">free</span>`
+    : r.avail >= 75 ? `<span class="pill wb-pill-ok">${r.avail}% free</span>`
+    : r.avail >= 50 ? `<span class="pill wb-pill-warn">${r.avail}% free</span>`
+    : `<span class="pill wb-pill-over">${r.avail}% free</span>`;
+  const projs = (x.projects || []).length
+    ? x.projects.map(esc).join(" + ")
+    : "no project work booked";
+  // WHY they cannot take work: the week they peak, and what is already on them.
+  const why = o.unavailable
+    ? `<div class="sub wb-why">Fully booked ${esc(r.peakWeek)}${r.peakProjects.length ? " — " + r.peakProjects.map(esc).join(" + ") : ""}</div>`
+    : "";
+  return `<div class="wb-load" data-pid="${x.id}">
+      <div class="h">
+        <div><b>${esc(x.name)}</b> <span class="sub">${esc(x.home_title || "—")}</span></div>
+        <div>${pill}${o.unavailable ? "" : ` <span class="sub">peak ${r.peak}%</span>`} <button class="btn mini" data-act="view">Assign…</button></div>
+      </div>
+      <div class="sub">${projs}</div>
+      ${why}
+      ${weekGridHTML(x)}
+    </div>`;
+}
+
+/* The Resources tab's own bindings. Kept separate from bindWorkbench() so the
+   workbench can be hidden for a PM who only has Resources. */
+function bindResources() {
+  const lt = $("#wbLoadTitle");
+  if (lt) lt.addEventListener("change", () => { WB.loadTitle = lt.value; renderResources(); });
+  const lf = $("#wbLoadFilter");
+  if (lf) lf.addEventListener("input", () => { WB.loadFilter = lf.value; renderResources(); });
+  const ws = $("#wbLoadWindowSel");
+  if (ws) ws.addEventListener("change", () => { WB.loadWindow = ws.value; renderResources(); });
+}
+
+/* Render the whole roster into #wbLoad: available people first, ranked and
+   bucketed, then a collapsed "cannot take work" section.
+   (Name kept as renderWbLoad so existing callers — renderWorkbench — do not
+   silently stop updating the rail.) */
 function renderWbLoad() {
   const box = $("#wbLoad");
   if (!box) return;
@@ -529,6 +614,8 @@ function renderWbLoad() {
       WB.titles.map((t) => `<option value="${esc(t)}">${esc(t)}</option>`).join("");
     sel.value = WB.loadTitle || "";
   }
+  const ws = $("#wbLoadWindowSel");
+  if (ws && ws.value !== (WB.loadWindow || "auto")) ws.value = WB.loadWindow || "auto";
 
   const win = wbLoadWindow();
   const scope = $("#wbLoadScope");
@@ -537,7 +624,7 @@ function renderWbLoad() {
   const f = WB.loadFilter.trim().toLowerCase();
   const t = (WB.loadTitle || "").trim().toLowerCase();
 
-  let rows = WB.load.filter((x) => {
+  const matched = WB.load.filter((x) => {
     if (f && !x.name.toLowerCase().includes(f)) return false;
     if (t) {
       const held = approvedTitles(x.id).map((s) => (s || "").toLowerCase());
@@ -545,40 +632,39 @@ function renderWbLoad() {
       if (home !== t && !held.includes(t)) return false;
     }
     return true;
-  }).map((x) => ({ x, ...wbAvailability(x, win) }))
-    .filter((r) => r.peak < 100)                       // cannot take work → skip
-    .sort((a, b) => (b.avail - a.avail) || a.x.name.localeCompare(b.x.name));
+  }).map((x) => ({ x, ...wbAvailability(x, win) }));
 
-  if (!rows.length) {
-    box.innerHTML = `<div class="wb-empty">No available people match${t ? " that title" : ""} — everyone matching is fully booked in this window. Try another title or project.</div>`;
+  const open = matched.filter((r) => r.peak < 100)
+    .sort((a, b) => (b.avail - a.avail) || a.x.name.localeCompare(b.x.name));
+  const busy = matched.filter((r) => r.peak >= 100)
+    .sort((a, b) => (a.peak - b.peak) || a.x.name.localeCompare(b.x.name));
+
+  if (!matched.length) {
+    box.innerHTML = `<div class="wb-empty">No people match${t ? " that title" : ""}. Try clearing the title filter or the search box.</div>`;
     return;
   }
 
   let html = "";
   let last = null;
-  rows.forEach((r) => {
+  open.forEach((r) => {
     const bucket = WB_BUCKETS.find((b) => r.avail >= b.min);
     if (bucket !== last) {
       last = bucket;
-      html += `<div class="wb-bucket">${esc(bucket.label)}</div>`;
+      html += `<div class="wb-bucket">${esc(bucket.label)} <span class="wb-bucket-n">${open.filter((o) => WB_BUCKETS.find((b) => o.avail >= b.min) === bucket).length}</span></div>`;
     }
-    const x = r.x;
-    const pill = r.avail >= 100 ? `<span class="pill wb-pill-free">free</span>`
-      : r.avail >= 75 ? `<span class="pill wb-pill-ok">${r.avail}% free</span>`
-      : r.avail >= 50 ? `<span class="pill wb-pill-warn">${r.avail}% free</span>`
-      : `<span class="pill wb-pill-over">${r.avail}% free</span>`;
-    const projs = (x.projects || []).length
-      ? x.projects.map(esc).join(" + ")
-      : "no project work booked";
-    html += `<div class="wb-load" data-pid="${x.id}">
-      <div class="h">
-        <div><b>${esc(x.name)}</b> <span class="sub">${esc(x.home_title || "—")}</span></div>
-        <div>${pill} <span class="sub">peak ${r.peak}% in window</span> <button class="btn mini" data-act="view">Assign…</button></div>
-      </div>
-      <div class="sub">${projs}</div>
-      ${weekGridHTML(x)}
-    </div>`;
+    html += wbLoadCard(r.x, r, {});
   });
+  if (!open.length) {
+    html += `<div class="wb-empty">Nobody is free in this window${t ? " for that title" : ""} — everyone matching is fully booked.</div>`;
+  }
+
+  // GH-51: the people who cannot take work are SHOWN, not dropped.
+  if (busy.length) {
+    html += `<details class="wb-unavail">
+      <summary>Not available in this window <span class="wb-bucket-n">${busy.length}</span> <span class="muted-note">— fully booked; click to see who and why</span></summary>
+      ${busy.map((r) => wbLoadCard(r.x, r, { unavailable: true })).join("")}
+    </details>`;
+  }
   box.innerHTML = html;
 
   $$("#wbLoad .wb-load button[data-act=view]").forEach((b) => b.addEventListener("click", () => {
