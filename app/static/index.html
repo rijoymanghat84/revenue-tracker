@@ -204,6 +204,16 @@
       </table>
     </div>
 
+    <!-- GH-36: answer "how does the data get updated?" in the UI itself.
+         Every number on this page is recomputed per request (no server cache),
+         so a refresh is only needed when someone else has changed data since the
+         page loaded. The stamp says when this view was rendered; the button
+         re-fetches. -->
+    <div class="util-refreshbar">
+      <button class="btn mini" id="btnUtilRefresh" title="Re-fetch the latest numbers for this view">⟳ Refresh</button>
+      <span class="hint" id="utilUpdated"></span>
+    </div>
+
     <!-- GH-29: who has headroom for the selected month. Month capacity and
          planned hours come straight off the payload, which was already summed
          across a person's projects — so this needs no extra server field. -->
@@ -382,6 +392,11 @@
     <div class="filterbar glass" id="dashFilters"></div>
     <!-- KPI bar: one horizontal row of key metrics -->
     <div class="kpis glass" id="dashCards"></div>
+    <!-- GH-36: same "how does this update?" answer as Utilization. -->
+    <div class="dash-refreshbar">
+      <button class="btn mini" id="btnDashRefresh" title="Re-fetch the latest numbers">⟳ Refresh</button>
+      <span class="hint" id="dashUpdated"></span>
+    </div>
     <div class="table-wrap glass narrow" id="dashWrap">
       <table id="dashTable"></table>
     </div>
@@ -665,7 +680,7 @@
 <script src="/workbench.js?v=12"></script>
 <!-- weeksheet.js also loads BEFORE app.js, for the same reason as workbench.js. -->
 <script src="/weeksheet.js?v=11"></script>
-<script src="/app.js?v=110"></script>
+<script src="/app.js?v=111"></script>
 <script>
   // PWA: register the service worker (only after load; skip on failure)
   if ("serviceWorker" in navigator) {

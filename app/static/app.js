@@ -2340,6 +2340,42 @@ function initUtilExtras() {
   bindAvailSearch();
 }
 
+/* ---------------- "when was this last fetched?" (GH-36) ----------------
+   Rijoy: "how does the data get updated? do I need to refresh or is there a
+   button that I can use to update all the logics when needed?"
+
+   Answer: every figure is recomputed per request — there is no server-side cache
+   — so the numbers are as fresh as the last fetch and nothing needs a manual
+   "recalculate". A refresh only matters when someone else changed data since the
+   page loaded. This stamps the fetch time so that is visible instead of guessed,
+   and the button beside it re-fetches on demand. */
+function markUpdated(sel) {
+  const el = $(sel);
+  if (!el) return;
+  const d = new Date();
+  el.textContent = `Updated ${d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" })} — every figure is recalculated on load, so nothing needs a manual rebuild.`;
+}
+function initRefreshButtons() {
+  const u = $("#btnUtilRefresh");
+  if (u && u.dataset.bound !== "1") {
+    u.dataset.bound = "1";
+    u.addEventListener("click", () => {
+      u.disabled = true;
+      renderUtilization();
+      setTimeout(() => { u.disabled = false; }, 900);
+    });
+  }
+  const d = $("#btnDashRefresh");
+  if (d && d.dataset.bound !== "1") {
+    d.dataset.bound = "1";
+    d.addEventListener("click", () => {
+      d.disabled = true;
+      renderDashboard();
+      setTimeout(() => { d.disabled = false; }, 900);
+    });
+  }
+}
+
 function renderUtilization() {
   const m = state.globalMonth === "all" ? "" : state.globalMonth;
   api(`/api/utilization?${utilFiltersQS()}`).then((data) => {
@@ -2353,6 +2389,7 @@ function renderUtilization() {
     state.utilOptions = data.options || null;
     renderUtilFilters(data.options);
     initUtilExtras();
+    initRefreshButtons();
     // The Month/Week toggle only means something on the full-year board; the
     // single-month drill-down is already one month.
     const seg = $("#utilModeSeg");
@@ -2520,6 +2557,7 @@ function renderUtilization() {
     // sticky alignment for the 3-column frozen block (Resource + Projects + Cap/wk)
     alignUtilSticky();
     renderAvailability(data);
+    markUpdated("#utilUpdated");
   }).catch((e) => toast(`Utilization failed: ${e.message}`, true));
   // The capacity editor lives on this tab (2026-10-01 split) — keep it in sync
   // with whatever the grid just rendered.
@@ -2870,6 +2908,7 @@ function renderDashboard() {
 
     bindDashFilters();
     syncExportLinks();
+    initRefreshButtons();
 
     let rows = `<thead><tr><th>Country</th><th>Client</th><th>Project</th><th>Resource(s)</th><th>Planned Revenue</th><th>Planned Expense</th><th>Planned Savings</th><th>Revenue till date</th><th>Expense till date</th><th>Savings till date</th></tr></thead><tbody>`;
     for (const g of groups) {
@@ -2908,6 +2947,7 @@ function renderDashboard() {
     }
     rows += "</tbody>";
     $("#dashTable").innerHTML = rows;
+    markUpdated("#dashUpdated");
   }).catch((e) => toast(`Dashboard failed: ${e.message}`, true));
 }
 
@@ -4380,9 +4420,19 @@ async function switchView(view) {
   // to duplicate all of that AND return early for Actuals/Utilization, which
   // meant renderView never ran on those two tabs and the top-strip title kept
   // showing the PREVIOUS section. Route everything through renderView instead.
-  if (view === "actuals") { renderView(); loadActuals(); return; }
-  if (view === "util") { renderView(); renderUtilization(); return; }
-  if (view === "logs") { renderView(); initLogsView(); loadActivity(); return; }
+  // Views an ADMIN gets from /api/state (it carries the full resource list).
+  const needsState = view === "planned" || view === "dash" || view === "rates"
+    || view === "access";
+  // A PM cannot call /api/state at all: it is admin-only. Their views are served
+  // by their own endpoints, so they must NOT fall through to loadState() — that
+  // 403 aborted the render and left the page frozen until a refresh.
+  const isPm = !!(state.me && state.me.role === "pm");
+  if (isPm || !needsState) {
+    renderView();                       // renderView() renders every view
+    if (view === "actuals") loadActuals();
+    else if (view === "logs") { initLogsView(); loadActivity(); }
+    return;
+  }
   await loadState();   // loadState ends by calling renderView()
 }
 

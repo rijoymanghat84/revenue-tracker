@@ -9,6 +9,77 @@ wasn't one) and the commit.
 
 ---
 
+## 2026-10-01 — Add Project takes PM + allocation; uploads enforce capacity (GH-34, GH-35)
+
+Commits `99289ed` (**GH-34**) and `b080998` (**GH-35**).
+
+### GH-34 — Add Project must ask for the PM and the allocation
+
+Rijoy: _"While adding project, it asked the name and other details but it should
+also ask for the PM and then the percentage allocation phase or full time etc and
+then if it exceed the allocation it should error."_
+
+The create dialog asked only for client / project / dates, so a new project
+landed ownerless with nobody on it — and therefore appeared nowhere the user
+looked (the GH-32 symptom).
+
+`POST /api/projects` now accepts:
+
+- **`pm`** — writes `user_projects`, the single source of truth for ownership. An
+  unknown PM, or a project another PM already owns, returns a **non-fatal
+  warning** rather than discarding the submission.
+- **`capacity_mode`** (`full` | `partial`) with `allocation_pct` and `person_id`
+  — "full time" is 100% of one person; "partial" takes a 25%-step percentage.
+
+The 100% weekly rule is enforced **server-side** via `validate_assignment()` and
+the refusal names the clashing weeks:
+
+```
+100% would push Abhishek Verma over 100% in 52 week(s).
+First clash: Jan-02 would reach 200.0%.
+```
+
+The submission is rolled back on refusal, so a project is never half-created, and
+the conflict list is returned so the dialog renders it **inline** under the
+allocation field — the weeks ARE the explanation.
+
+### GH-35 — the bulk Excel upload now enforces the capacity rule
+
+Rijoy: _"if in the upload a resource is utilized for more than 100 hours in total
+then the upload should fail giving the reason for the fails."_
+
+`_validate_import_capacity()` runs **before any write**, on a simulation of the
+resulting state, so a rejected file leaves the database exactly as it was. It
+groups by person **name** — the key `compute_utilization` and the 100% rule use —
+because a spreadsheet has no person ids and a person legitimately holds one row
+per project.
+
+**The rule is "the upload must not introduce or worsen an over-capacity week",
+NOT "nobody may ever exceed capacity".** That distinction is load-bearing: the
+live book already has **103 person-weeks over capacity** (Deepak Kumar at 130%
+and 160%), because the app deliberately never retro-breaks existing bookings. A
+blanket rule refused **every** upload — including a round-trip of the untouched
+export — which testing on real data caught and review did not.
+
+Real output for a 100h week against a 40h capacity:
+
+```
+Import rejected — 1 week(s) exceed a person's weekly capacity. Nothing was saved.
+Sunil Antharvedi @ Jan-02: planned 100.0h exceeds the 40h weekly capacity
+by 60.0h (250.0%)
+fix: reduce this week to 40h or less, raise the capacity, or move hours to another week
+```
+
+| Check | Result |
+|---|---|
+| 100h file | **400**, reason + fix named, nothing written |
+| Before / after hours | 63,190.3h — **unchanged** |
+| Untouched export | **200**, 64 rows updated, **+40h** exactly |
+| Problems capped at 60 | with a total count returned |
+| Both repo test suites | **ALL PASSED** |
+
+---
+
 ## 2026-10-01 — Dashboard visibility, Active flag, popup formatting (GH-32, GH-33)
 
 Commits `43be591` (**GH-32**) and `aab483e` (**GH-33**).
