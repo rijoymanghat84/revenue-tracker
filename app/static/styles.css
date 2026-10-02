@@ -1488,13 +1488,13 @@ td.week .a-inp { text-align: center; }
    actually have — no sideways scroll to reach the load column, which is half the
    point of this screen. Content wraps rather than pushing the table wider. */
 #wbTeamTable { width: 100%; max-width: 100%; table-layout: fixed; }
-#wbTeamTable col.c-person { width: 19%; }
-#wbTeamTable col.c-title { width: 18%; }
-#wbTeamTable col.c-alloc { width: 8%; }
-#wbTeamTable col.c-period { width: 17%; }
-#wbTeamTable col.c-hrs { width: 8%; }
-#wbTeamTable col.c-load { width: 20%; }
-#wbTeamTable col.c-act { width: 10%; }
+#wbTeamTable col.c-person { width: 20%; }
+#wbTeamTable col.c-title { width: 16%; }
+#wbTeamTable col.c-alloc { width: 7%; }
+#wbTeamTable col.c-period { width: 16%; }
+#wbTeamTable col.c-hrs { width: 7%; }
+#wbTeamTable col.c-load { width: 19%; }
+#wbTeamTable col.c-act { width: 15%; }
 #wbTeamTable .wb-loadcell { white-space: normal; }
 #wbTeamTable .wb-loadcell .bar { min-width: 46px; width: 54px; max-width: 54px; }
 #wbTeamTable .wb-role, #wbTeamTable .wb-person b { overflow-wrap: anywhere; }
@@ -1539,14 +1539,17 @@ td.week .a-inp { text-align: center; }
 #wbTeamTable .wb-dates { white-space: nowrap; font-variant-numeric: tabular-nums; }
 #wbTeamTable .wb-dates .wb-dash { color: var(--muted); padding: 0 3px; }
 /* Row actions are real buttons, spaced apart so Edit and Remove are not one
-   blob — the same problem the compare panel had. */
-#wbTeamTable .wb-rowactions { padding-right: 14px; white-space: nowrap; }
+   blob — the same problem the compare panel had.
+   `flex-wrap` matters: at 10% width the pair did not fit and Remove was clipped
+   (measured). Wrapping lets them sit side by side when there is room and stack
+   when there is not, at any window width, without a media query per breakpoint. */
+#wbTeamTable .wb-rowactions { padding-right: 12px; white-space: normal; }
 #wbTeamTable .wb-rowactions .btn {
-  padding: 5px 11px; border-radius: 8px; font-size: 12px;
+  padding: 5px 10px; border-radius: 8px; font-size: 12px;
   border: 1px solid var(--border-strong); background: var(--surface-3);
   color: var(--text); cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,0.22);
 }
-#wbTeamTable .wb-rowactions .btn + .btn { margin-left: 7px; }
+#wbTeamTable .wb-rowactions { display: flex; flex-wrap: wrap; gap: 6px; }
 #wbTeamTable .wb-rowactions .btn:hover { background: var(--surface-6); border-color: var(--accent); color: var(--accent); }
 #wbTeamTable .wb-rowactions .btn[data-act=del]:hover {
   color: var(--red); border-color: rgba(var(--red-rgb), 0.6); background: rgba(var(--red-rgb), 0.10);
