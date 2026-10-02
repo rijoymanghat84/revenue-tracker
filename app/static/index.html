@@ -296,6 +296,15 @@
           <span class="wb-eyebrow">Projects assigned to you</span>
           <input type="search" id="wbFilter" placeholder="Filter projects…" class="search">
         </div>
+        <!-- GH-37: Rijoy — "The PM should be able to add project too - not the
+             pricing, but create a project add resource and PM just like admin can
+             do but no the revenue or dollar value". Creating here writes the PM
+             as owner, so the project lands in this list immediately and shows on
+             the admin Dashboard as a "no team" row. The PM can also delete what
+             they created (a 🗑 on the project row). -->
+        <div class="wb-master-actions">
+          <button class="btn primary" id="btnWbNewProject" title="Create a client / project and own it">+ New project</button>
+        </div>
         <div class="wb-plist" id="wbProjects"></div>
       </div>
       <div class="wb-detail">

@@ -2847,6 +2847,17 @@ function initRail() {
 }
 
 function renderDashboard() {
+  // GH-37: who may delete a project from the Dashboard. The Dashboard tab itself
+  // is admin-only, so this is really "does this admin hold the projects
+  // permission" — a read-only admin sees the table without the delete column.
+  const canDelete = (() => {
+    try {
+      const me = state.me || {};
+      if ((me.role || "") !== "admin") return false;
+      if (me.super_admin) return true;
+      return (me.permissions || []).includes("projects");
+    } catch (_) { return false; }
+  })();
   api(`/api/dashboard?${dashQs()}`).then((data) => {
     const groups = data.rows.groups, totals = data.rows.totals;
     const byCur = {};
@@ -2909,8 +2920,9 @@ function renderDashboard() {
     bindDashFilters();
     syncExportLinks();
     initRefreshButtons();
+    bindDashDelete();
 
-    let rows = `<thead><tr><th>Country</th><th>Client</th><th>Project</th><th>Resource(s)</th><th>Planned Revenue</th><th>Planned Expense</th><th>Planned Savings</th><th>Revenue till date</th><th>Expense till date</th><th>Savings till date</th></tr></thead><tbody>`;
+    let rows = `<thead><tr><th>Country</th><th>Client</th><th>Project</th><th>Resource(s)</th><th>Planned Revenue</th><th>Planned Expense</th><th>Planned Savings</th><th>Revenue till date</th><th>Expense till date</th><th>Savings till date</th><th></th></tr></thead><tbody>`;
     for (const g of groups) {
       const pSavings = g.revenue - g.expense;
       const aSavings = (g.actual_rev || 0) - (g.actual_exp || 0);
@@ -2927,12 +2939,23 @@ function renderDashboard() {
       const emptyTag = g.empty
         ? ` <span class="dash-empty" title="This project exists but has no resources assigned yet">no team</span>`
         : "";
+      /* GH-37: delete a project from the Dashboard. Rijoy: "there should be an
+         option to delete the project from the Admin login Dashboard."
+         The button only renders for someone who may actually act: renderDashboard
+         is admin-only, and `canDelete` narrows it to the projects permission.
+         Deleting is the only way to undo a project added by mistake, and it used
+         to be reachable only through the Planned tab. */
+      const delCell = canDelete
+        ? `<td class="dash-actions"><button class="btn mini dash-del"
+             data-del-client="${esc(g.client)}" data-del-project="${esc(g.project === "—" ? "" : g.project)}"
+             title="Delete this project (${esc(g.client)} · ${esc(g.project)})">🗑</button></td>`
+        : "<td></td>";
       rows += `<tr${g.empty ? ' class="dash-empty-row"' : ""}>
         <td>${esc(g.country)}</td><td>${esc(g.client)}</td><td>${esc(g.project)}${emptyTag}</td><td>${resCell}</td>
         <td>${money(g.revenue, cur)}</td><td>${money(g.expense, cur)}</td>
         <td style="color:${pSavings >= 0 ? "var(--green)" : "var(--red)"}">${money(pSavings, cur)}</td>
         <td>${money(g.actual_rev || 0, cur)}</td><td>${money(g.actual_exp || 0, cur)}</td>
-        <td style="color:${aSavings >= 0 ? "var(--green)" : "var(--red)"}">${money(aSavings, cur)}</td></tr>`;
+        <td style="color:${aSavings >= 0 ? "var(--green)" : "var(--red)"}">${money(aSavings, cur)}</td>${delCell}</tr>`;
     }
     for (const t of totals) {
       const pSavings = t.revenue - t.expense;
@@ -2943,12 +2966,65 @@ function renderDashboard() {
         <td>${money(t.revenue, cur)}</td><td>${money(t.expense, cur)}</td>
         <td style="color:${pSavings >= 0 ? "var(--green)" : "var(--red)"}">${money(pSavings, cur)}</td>
         <td>${money(t.actual_rev || 0, cur)}</td><td>${money(t.actual_exp || 0, cur)}</td>
-        <td style="color:${aSavings >= 0 ? "var(--green)" : "var(--red)"}">${money(aSavings, cur)}</td></tr>`;
+        <td style="color:${aSavings >= 0 ? "var(--green)" : "var(--red)"}">${money(aSavings, cur)}</td><td></td></tr>`;
     }
     rows += "</tbody>";
     $("#dashTable").innerHTML = rows;
     markUpdated("#dashUpdated");
   }).catch((e) => toast(`Dashboard failed: ${e.message}`, true));
+}
+
+/* GH-37: delete a project straight from the Dashboard row.
+
+   Two-step on purpose. The API refuses a project that still has people on it
+   (409, naming who and how many weeks), because deleting one silently discards
+   real planned + actual hours. So: try the delete, and if the server says the
+   project is still staffed, re-ask with the exact damage spelled out and only
+   then retry with ?force=true. A wrong click can never destroy a team. */
+function bindDashDelete() {
+  $$("#dashTable .dash-del").forEach((b) => {
+    if (b.dataset.bound === "1") return;
+    b.dataset.bound = "1";
+    b.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const client = b.dataset.delClient || "";
+      const project = b.dataset.delProject || "";
+      const label = `${client}${project ? " · " + project : ""}`;
+      // Find the id — the dashboard row carries names, not ids.
+      let target = null;
+      try {
+        const list = await api("/api/projects");
+        target = (list || []).find((x) =>
+          (x.client || "").toUpperCase() === client.toUpperCase() &&
+          (x.project || "").toUpperCase() === project.toUpperCase());
+      } catch (err) { toast(`Could not load projects: ${err.message}`, true); return; }
+      if (!target) { toast(`${label} is not a Project entry (nothing to delete)`, true); return; }
+
+      const doDelete = async (force) => {
+        b.disabled = true;
+        try {
+          const res = await api(`/api/projects/${target.id}${force ? "?force=true" : ""}`, { method: "DELETE" });
+          const d = (res && res.deleted) || {};
+          toast(`Deleted ${d.client || client} · ${d.project || project}` +
+                (d.people ? ` — removed ${d.people} assignment(s), ${d.planned_weeks} planned week(s)` : ""));
+          loadActivity();
+          renderDashboard();
+          return true;
+        } catch (err) {
+          const det = err && err.detail ? err.detail : null;
+          if (det && det.code === "has_assignments") {
+            if (confirm(`${det.message}\n\nDelete it and discard those hours permanently?`)) return doDelete(true);
+            return false;
+          }
+          toast((det && det.message) || err.message || "Delete failed", true);
+          return false;
+        } finally { b.disabled = false; }
+      };
+      if (confirm(`Delete ${label}?\n\nThis removes the project and its assignments. It cannot be undone.`)) {
+        await doDelete(false);
+      }
+    });
+  });
 }
 
 /* Feature #10.2: popup listing who is on a client/project, with rates and

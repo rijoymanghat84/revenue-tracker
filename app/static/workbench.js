@@ -97,6 +97,12 @@ function renderWbProjects() {
         <span>${p.people} ${p.people === 1 ? "person" : "people"}</span>
         <span>${fmtH(p.booked_hours)} h</span>
         ${over ? `<span class="over">${over} over capacity</span>` : ""}
+        <!-- GH-37: "The PM should be able to delete the project he created as
+             well." Everything in this list is owned by the signed-in PM, so the
+             button is always safe to offer; the API re-checks ownership anyway. -->
+        <button class="btn mini wb-pdel" data-del-k="${esc(wbKey(p.client, p.project))}"
+          data-del-client="${esc(p.client || "")}" data-del-project="${esc(p.project || "")}"
+          title="Delete ${esc(p.client)} · ${esc(p.project)}">🗑</button>
       </div>
     </div>`;
   }).join("");
@@ -104,6 +110,98 @@ function renderWbProjects() {
     WB.selKey = el.dataset.k;
     renderWorkbench();
   }));
+  // Delete must not also select the project, hence stopPropagation.
+  $$("#wbProjects .wb-pdel").forEach((b) => b.addEventListener("click", (e) => {
+    e.stopPropagation();
+    deleteWbProject(b.dataset.delClient || "", b.dataset.delProject || "");
+  }));
+}
+
+/* GH-37: create a project as a PM (client + project name only — no rates, no
+   money; those live on the Rate Card and are admin-only). The server writes this
+   PM as the owner, so the project appears in the list behind the dialog and on
+   the admin Dashboard straight away. */
+function openWbNewProject() {
+  const body = `
+    <p class="muted-note">You become the project manager of what you create, and it
+    appears on the Dashboard immediately. Rates and titles are admin-owned — add your
+    team afterwards with <b>+ Add team member</b>.</p>
+    <div class="assign-grid">
+      <div><label class="f">Client</label><input id="wpClient" placeholder="e.g. Doxim"></div>
+      <div><label class="f">Project</label><input id="wpName" placeholder="e.g. Support"></div>
+    </div>
+    <div class="assign-grid">
+      <div><label class="f">Start date <span class="muted-note">(optional)</span></label><input id="wpStart" type="date"></div>
+      <div><label class="f">End date <span class="muted-note">(optional)</span></label><input id="wpEnd" type="date"></div>
+    </div>`;
+  showModalHTML("New project", body);
+  const ok = $("#modalOk");
+  if (ok) ok.textContent = "Create";
+  setModalOk(async () => {
+    const client = ($("#wpClient").value || "").trim();
+    const project = ($("#wpName").value || "").trim();
+    if (!client || !project) { toast("Client and project are required", true); return; }
+    ok.disabled = true;
+    try {
+      await api("/api/projects", { method: "POST", body: JSON.stringify({
+        client, project,
+        start_date: $("#wpStart").value || "", end_date: $("#wpEnd").value || "",
+      }) });
+      closeModal();
+      toast(`Created ${client} · ${project} — you are its PM`);
+      WB.selKey = wbKey(client, project);
+      await refreshWorkbenchProjects();
+    } catch (e) {
+      const det = e && e.detail ? e.detail : null;
+      toast((det && det.message) || e.message || "Could not create the project", true);
+    } finally { ok.disabled = false; }
+  });
+}
+
+/* GH-37: delete a project the PM owns. Mirrors the Dashboard's two-step flow:
+   the API refuses a staffed project and names the loss, so the second confirm
+   carries the real numbers rather than a generic warning. */
+async function deleteWbProject(client, project) {
+  const label = `${client}${project ? " · " + project : ""}`;
+  let target = null;
+  try {
+    const list = await api("/api/projects");
+    target = (list || []).find((x) =>
+      (x.client || "").toUpperCase() === client.toUpperCase() &&
+      (x.project || "").toUpperCase() === project.toUpperCase());
+  } catch (e) { toast(`Could not load projects: ${e.message}`, true); return; }
+  if (!target) { toast(`${label} is not a Project entry`, true); return; }
+
+  const go = async (force) => {
+    try {
+      const res = await api(`/api/projects/${target.id}${force ? "?force=true" : ""}`, { method: "DELETE" });
+      const d = (res && res.deleted) || {};
+      toast(`Deleted ${d.client || client} · ${d.project || project}` +
+            (d.people ? ` — removed ${d.people} assignment(s), ${d.planned_weeks} planned week(s)` : ""));
+      if (WB.selKey === wbKey(client, project)) WB.selKey = "";
+      await refreshWorkbenchProjects();
+    } catch (e) {
+      const det = e && e.detail ? e.detail : null;
+      if (det && det.code === "has_assignments") {
+        if (confirm(`${det.message}\n\nDelete it and discard those hours permanently?`)) return go(true);
+        return;
+      }
+      toast((det && det.message) || e.message || "Delete failed", true);
+    }
+  };
+  if (confirm(`Delete ${label}?\n\nThis removes the project and its assignments. It cannot be undone.`)) {
+    await go(false);
+  }
+}
+
+/* Reload the workbench after a project create/delete.
+
+   `loadWorkbench()` is the single source of WB.projects/people/load (it calls
+   /api/pm/load, which already returns the caller's projects), so re-running it is
+   the whole refresh — there is no separate /api/workbench/projects endpoint. */
+async function refreshWorkbenchProjects() {
+  try { await loadWorkbench(); } catch (e) { toast(`Reload failed: ${e.message}`, true); }
+  renderWorkbench();
 }
 
 const fmtH = (v) => (v == null ? "—" : Number(v).toLocaleString(undefined, { maximumFractionDigits: 1 }));
@@ -1105,4 +1203,11 @@ function bindPeopleAndOt() {
       await loadOt();
     } catch (e) { toast(e.message || "Failed", true); }
   });
+  // GH-37: the PM's own "New project". Bound once; the server decides who may
+  // actually create one (this is admin-or-PM), and writes the creator as owner.
+  const np = $("#btnWbNewProject");
+  if (np && np.dataset.bound !== "1") {
+    np.dataset.bound = "1";
+    np.addEventListener("click", () => openWbNewProject());
+  }
 }
