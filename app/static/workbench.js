@@ -405,9 +405,9 @@ function renderWbTeam() {
     — ${p.people} ${p.people === 1 ? "person" : "people"}, ${fmtH(p.booked_hours)} h booked. Dates: ${esc(window_)}.`;
 
   head.innerHTML = `<tr>
-    <th>Person</th><th>Title</th><th class="num">Allocation</th>
-    <th>Period</th><th class="num">Weekly hrs</th>
-    <th>Load (all projects)</th><th>Status</th><th></th>
+    <th>Person</th><th>Title</th><th class="num">Alloc</th>
+    <th>Period</th><th class="num">Hrs/wk</th>
+    <th>Load across all projects</th><th></th>
   </tr>`;
   if (!p.team.length) {
     body.innerHTML = `<tr><td colspan="8"><div class="wb-empty">Nobody on this project yet. Use <b>+ Add team member</b>.</div></td></tr>`;
@@ -448,8 +448,7 @@ function renderWbTeam() {
       <td class="num">${allocCell}</td>
       <td class="wb-dates">${fmtRange(t.start_date, t.end_date)}</td>
       <td class="num">${weekly == null ? "—" : fmtH(weekly)}</td>
-      <td>${peak == null ? "—" : loadBarHTML(peak)}</td>
-      <td>${status}</td>
+      <td class="wb-loadcell">${peak == null ? `<span class="pill">no load data</span>` : loadBarHTML(peak) + " " + status}</td>
       <td class="wb-rowactions">
         <button class="btn mini" data-act="edit">Edit</button>
         <button class="btn mini" data-act="del">Remove</button>
