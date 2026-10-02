@@ -2657,6 +2657,14 @@ def api_dashboard(request: Request, month: str = "", client: str = "",
                 arch_rows = [g for g in arch_rows if _ok(g)]
             rows["groups"] = rows["groups"] + arch_rows
 
+        # Who manages each project. Rijoy, 2026-10-02: the Dashboard project row
+        # should tell you the PM and, on click, open that PM's My Projects screen.
+        # Computed for EVERY row (live, empty, archived) so the PM column is never
+        # blank where a PM actually exists.
+        for _g in rows["groups"]:
+            _g["pm"] = owners.get(((_g.get("client") or "").strip(),
+                                   (_g.get("project") or "").strip())) or ""
+
         # Currency selector. When a single currency is chosen, drop the other
         # currency's rows/totals entirely so the KPI tiles and table agree.
         cur = (currency or "").strip().upper()
@@ -6125,14 +6133,30 @@ def api_assignment_remove(rid: int, body: AssignmentRemoveBody, request: Request
 
 
 @app.get("/api/my-projects")
-def api_my_projects(request: Request):
-    """Projects this PM owns, with team counts/hours — the workbench's left list."""
+def api_my_projects(request: Request, as_pm: str = ""):
+    """Projects this PM owns, with team counts/hours — the workbench's left list.
+
+    Rijoy, 2026-10-02: an admin should be able to click a project on the Dashboard
+    and see the SAME screen its PM sees, including who that PM is. So the admin
+    can pass `?as_pm=<username>` to view one PM's workbench read-only. It is a
+    VIEW, not an impersonation: every value comes from the DB via the same
+    scoping the PM would get, no session is handed over, and the caller must be
+    an admin holding `people` (via _require_people). A non-PM `as_pm` (e.g. an
+    admin username) owns nothing, so the list is honestly empty rather than
+    falling back to "everything", which a bare admin call would return.
+    """
     user = _require_people(request)
+    as_pm = (as_pm or "").strip()
     conn = get_db()
     try:
         weeks, _ = _load_layout()
         arch = _archived_project_keys(conn)      # GH-38: no longer theirs
-        projs = _pm_projects(user["u"], conn) if user.get("r") == "pm" else None
+        if as_pm:
+            _require_admin(request)              # only an admin may view AS someone
+            projs = _pm_projects(as_pm, conn)
+        else:
+            projs = _pm_projects(user["u"], conn) if user.get("r") == "pm" else None
+        owners = _project_owners(conn)           # (client, project) -> pm username
         rows = conn.execute(
             "SELECT TRIM(client) client, TRIM(project) project, COUNT(*) n, "
             "COALESCE(SUM(h.h),0) hrs FROM resources r "
@@ -6178,6 +6202,7 @@ def api_my_projects(request: Request):
                 })
             out.append({
                 "client": r["client"], "project": r["project"],
+                "pm": owners.get(((r["client"] or "").strip(), (r["project"] or "").strip())) or "",
                 "people": r["n"], "booked_hours": round(r["hrs"] or 0, 1),
                 "start_date": (meta["start_date"] if meta else "") or "",
                 "end_date": (meta["end_date"] if meta else "") or "",
@@ -6201,12 +6226,14 @@ def api_my_projects(request: Request):
                     continue          # owned but not defined (legacy row) — skip
                 out.append({
                     "client": (cl or "").strip(), "project": pr.strip(),
+                    "pm": owners.get(((cl or "").strip(), pr.strip())) or "",
                     "people": 0, "booked_hours": 0.0,
                     "start_date": meta["start_date"] or "", "end_date": meta["end_date"] or "",
                     "team": [], "empty": True,
                 })
             out.sort(key=lambda x: ((x["client"] or "").lower(), (x["project"] or "").lower()))
-        return {"projects": out, "role": user.get("r"), "weeks": len(weeks)}
+        return {"projects": out, "role": user.get("r"), "weeks": len(weeks),
+                "as_pm": as_pm}
     finally:
         conn.close()
 
