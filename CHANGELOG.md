@@ -9,6 +9,63 @@ wasn't one) and the commit.
 
 ---
 
+## 2026-10-02 — PM project delete is recoverable: red strip, Reactivate or Delete (GH-38)
+
+Commit `4d7addf` — **GH-38**. Rijoy: _"if PM delete the project, then it will go
+away from the PMs view, it should still be there for admin with a red strip on it
+so that if PM delete by accident the admin can revert … reactivate will show it
+back for the PM and delete will delete it from the app permanently."_
+
+**A PM delete is now an ARCHIVE, not a removal.** Nothing is destroyed — the row,
+its team, its planned hours and its actuals all stay. The project leaves:
+
+- the PM's workbench and `/api/projects`
+- the Dashboard's rows **and its totals**
+- Utilization, the PM load rail, the Planned grid, exports
+
+…while the admin keeps it under a **red strip** reading `DELETED BY <pm>` with
+exactly two actions: **↺ Reactivate** and **🗑 Delete**. An **admin** delete stays
+permanent, so the two acts are distinct: PM = recoverable, admin = final.
+
+Schema: `projects` gains `archived_at` / `archived_by` / `archived_note` through
+the existing idempotent migration. Existing rows untouched (0 archived after).
+
+The hide rule lives in **`_all_resources()`**, which every live read path already
+shares — so a future reader inherits it instead of forgetting it, rather than
+patching each call site.
+
+### Two bugs found by testing, not by review
+
+1. **The buttons were dead.** `bindDashDelete()` / `bindDashReactivate()` were
+   called near the *top* of `renderDashboard`, **before** the table's
+   `innerHTML` was assigned. `querySelectorAll` therefore matched nothing and no
+   handler was ever attached — the API was correct but clicking did nothing.
+   Caught by clicking one and seeing `dataset.bound` was `undefined`. Both now
+   bind after the rows exist.
+2. **The archived project rendered twice** — a plain "no team" row *plus* the
+   flagged one, because `_empty_project_groups()` treats a project with no live
+   resource rows as empty. It now skips archived keys, so exactly one row shows.
+
+| Check (throwaway PMs, created and removed) | Result |
+|---|---|
+| PM archives | 200, `archived: True`; DB row still present with its stamp |
+| PM's workbench + `/api/projects` | project gone |
+| Admin Dashboard | exactly **one** row, red strip, `deleted by zz_vis`, $0.00, excluded from TOTAL |
+| **Reactivate clicked in the browser** | row un-flagged, toast confirms, API `archived: false`, PM sees it again |
+| **Delete clicked on the archived row** | permanently removed; `include_archived=1` returns nothing |
+| PM calls reactivate | **403** — only an admin can undo |
+| Money | untouched by my operations (2,743,311.02 before and after) |
+| DB | 17 projects, **0 orphaned resources**, integrity `ok` |
+
+**Concurrent-writer note:** the tree was being edited throughout by another agent
+(Rijoy's column-sorting request, `e2b0d5f`), which also swept up my UI files into
+its own commit. I verified my work was nonetheless fully present at HEAD, that the
+live tree matched HEAD byte-for-byte, and that **0 of 11** remaining DB diffs were
+mine — all 11 were one edit on `resource 215` (Bhupesh Nandan, IMS/Quadient: ten
+weeks 32h→40h and a new week 52), which I deliberately did **not** revert.
+
+---
+
 ## 2026-10-01 — Delete projects from the Dashboard; PMs create/delete their own (GH-37)
 
 Commit `814387b` — **GH-37**. Rijoy asked for two things: a delete option on the
