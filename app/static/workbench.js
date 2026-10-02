@@ -876,8 +876,8 @@ function renderWbCompare() {
       <td>${allocHtml}</td>
       ${rates}
       <td class="wb-cmp-act">
-        <button class="btn mini" data-act="move" data-pid="${x.id}" title="Propose moving part of this person to another project">Move…</button>
-        <button class="btn mini" data-act="unpick" data-pid="${x.id}" title="Remove from comparison">✕</button>
+        <button class="btn mini primary" data-act="move" data-pid="${x.id}" title="Propose moving part of this person to another project">Move…</button>
+        <button class="btn mini" data-act="unpick" data-pid="${x.id}" title="Remove from comparison">Remove</button>
       </td>
     </tr>`;
   }).join("");
