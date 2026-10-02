@@ -1977,3 +1977,44 @@ textarea.fb-inp { min-height: 72px; resize: vertical; }
   .wb-svg { height: 190px; }
   .wb-prog-legend { gap: 10px; font-size: 11px; }
 }
+/* ============================================================================
+   GH-45 fix (2026-10-02): "the tabs and the columns are not aligned properly"
+
+   ROOT CAUSE — a CSS specificity/order conflict, not a maths error:
+     styles.css:462   td.sticky-l, th.sticky-h { position: sticky; ... }
+     styles.css:1768  th.ts-sortable         { position: relative; ... }
+
+   `th.ts-sortable` is (0,1,1) and comes LATER, so it beats
+   `thead th.sticky-h` (0,1,1, earlier). tablesort.js adds `.ts-sortable` to
+   every non-blank single-column header — including the six FROZEN Actuals
+   headers. That flipped those <th> from `sticky` to `relative`.
+
+   Consequence, measured in a live browser before the fix (scrollLeft = 0):
+     head-row "Title"        rendered at left 345   (wrong — overlapping)
+     week-row / body "Title" rendered at left 185   (correct)
+   The frozen HEADER cells therefore sat one column-width adrift from their own
+   week-row and from every body cell below them. That is exactly what the PM
+   saw as "the tabs and the columns are not aligned properly".
+
+   FIX: re-assert the sticky positioning with a selector that is more specific
+   than `th.ts-sortable`, so the frozen headers stay pinned. Only `position`
+   and `left` are re-asserted — the sort affordance (cursor, arrow, padding) is
+   untouched, so those headers remain clickable-to-sort.
+   ========================================================================== */
+
+thead th.sticky-h.ts-sortable,
+thead th.ts-sortable.sticky-h {
+  position: sticky;
+}
+
+/* The per-column `left` offsets are set inline by alignActualsSticky(), so the
+   inline style wins over the .sc1..sc8 `left: 0` fallbacks in either order.
+   Re-asserting position is what matters here. */
+
+/* Guard the same trap on the sortable week headers: they are not frozen, but a
+   `position: relative` there would break the sticky month band above them if a
+   future change ever freezes them. Cheap and explicit. */
+thead .month-row th.ts-sortable,
+thead .week-row th.ts-sortable {
+  position: sticky;
+}

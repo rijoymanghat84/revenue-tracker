@@ -3281,8 +3281,31 @@ let actualsData = { resources: [], weeks: [], months: [] };
 async function loadActuals() {
   try {
     actualsData = await api("/api/actuals");
+    normalizeActualNotes(actualsData.resources);
     renderActuals();
   } catch (e) { toast(`Actuals failed: ${e.message}`, true); }
+}
+
+/* GH-45 (2026-10-02): JSON object keys are ALWAYS strings, so `actual_notes`
+   arrives as {"5": {...}}. Every reader in this file indexes it with an INTEGER
+   week (`notes[w]`, `notes[i]`), which never matches the string key — so stored
+   notes and OT verdicts appeared to vanish. Worse, the prompts WRITE with an
+   integer key, leaving both "5" and 5 in the object; the server persists both
+   and the UI reads neither reliably.
+   Normalising once here, at the single load chokepoint, means every downstream
+   reader and writer agrees. The PUT serialises keys back to strings anyway, so
+   the wire format is unchanged. */
+function normalizeActualNotes(resources) {
+  for (const r of resources || []) {
+    const src = r.actual_notes;
+    if (!src) continue;
+    const out = {};
+    for (const k of Object.keys(src)) {
+      const n = parseInt(k, 10);
+      if (!isNaN(n) && n >= 0) out[n] = src[k];
+    }
+    r.actual_notes = out;
+  }
 }
 
 function actualsHeadHTML() {
@@ -3520,7 +3543,17 @@ async function aFlush() {
     // if even that is empty, send NO `edited` at all rather than an empty list —
     // the server then applies that same diff rule itself, which is stricter than
     // claiming "nothing was edited" and refusing to write a real change.
-    const dirtyWeeks = Array.from((aDirty.get(rid) || {}).weeks || []);
+    //
+    // BUG FIXED 2026-10-02 (GH-45): this read `aDirty.get(rid)`, but aDirty was
+    // CLEARED at the top of this loop — so `dirtyWeeks` was ALWAYS empty and
+    // `edited` was ALWAYS undefined. The consequence was the bug saloni
+    // reported: with no `edited`, the server fell back to diffing every week,
+    // which re-raised the OT / shortfall prompts for weeks the PM never touched.
+    // Cancelling one of those prompts aborted the save with "Actuals not
+    // saved", so her typed hours never persisted and the screen looked stale.
+    // The weeks are already carried on the loop variable `d` (captured in
+    // `pending` before the clear) — read them from there.
+    const dirtyWeeks = Array.from((d && d.weeks) || []);
     const edited = dirtyWeeks.length ? dirtyWeeks : undefined;
     try {
       const res = await api(`/api/resources/${rid}/actuals`, { method: "PUT", body: JSON.stringify({ hours, notes, edited }) });
@@ -3528,7 +3561,7 @@ async function aFlush() {
         // OT flow: prompt the PM for each week needing input
         const ed = edited ? edited.slice() : [];
         for (const w of res.weeks) {
-          const ok = await actualsPrompt(rid, w, hours);
+          const ok = await actualsPrompt(rid, w.week, hours);
           if (!ok) { toast("Actuals not saved — resolve the flagged weeks", true); return; }
           // A resolved week may be one the PM did not TYPE in (a carried-over
           // overage they just answered for): add it so the verdict is written.
