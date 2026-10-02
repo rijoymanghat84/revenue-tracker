@@ -147,6 +147,25 @@
         <button class="btn primary" id="btnAdd">+ Add/Edit Resource</button>
         <button class="btn ghost" id="btnAddProject">+ Add/Edit Client Project</button>
 
+        <!-- GH-53: the notification bell. Rijoy: "there should be a notiication
+             bell icon on the top right hand side when a notification which when
+             i clcik would know what it as and I can approve or reject". Carries
+             pending resource-reallocation decisions; the badge counts ONLY what
+             this user can actually decide. -->
+        <button class="btn ghost bell-btn" id="btnBell" title="Notifications">
+          <span class="bell-ico" aria-hidden="true">🔔</span>
+          <span class="bell-badge hidden" id="bellBadge">0</span>
+        </button>
+
+        <div class="bell-panel glass hidden" id="bellPanel">
+          <div class="bell-head">
+            <b>Notifications</b>
+            <button class="btn mini" id="bellRefresh" title="Refresh">⟳</button>
+            <button class="btn mini" id="bellClose" title="Close">✕</button>
+          </div>
+          <div class="bell-body" id="bellBody"></div>
+        </div>
+
         <!-- Feature #9: the user section is the ONLY home for the repo links and
              sign-out. GitHub + Report issue were originally loose buttons in the
              topbar; they were hidden (not removed) when #9 landed, and on
@@ -412,6 +431,21 @@
       <span class="muted-note">· hover a block for its week &amp; month, click it for detail</span>
     </div>
   </section>
+
+  <!-- ============ REALLOCATION REQUEST (GH-53) =============================
+       Rijoy: "lets say I want to move Deepak who is allocated 100% to FOP and I
+       want to take his 50% from fop to a new project ... but the allocation
+       happen once FOP PM approved". Proposing writes a request; nothing moves
+       until the releasing PM (or an admin) approves it in the bell. -->
+  <div class="modal hidden" id="moveModal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <b id="moveTitle">Move a resource</b>
+        <button class="btn mini" id="moveClose" title="Close">✕</button>
+      </div>
+      <div class="modal-body" id="moveBody"></div>
+    </div>
+  </div>
 
   <!-- ============ WEEK SHEET (week-centric actuals entry, 2026-10-01) ========
        Rijoy's ask: "on a weekly basis they should be able to update the hours
