@@ -894,6 +894,21 @@ def init_db() -> None:
     rcols = {r[1] for r in conn.execute("PRAGMA table_info(resources)").fetchall()}
     if "capacity" not in rcols:
         conn.execute("ALTER TABLE resources ADD COLUMN capacity REAL NOT NULL DEFAULT 40")
+    # ---- Soft delete / archive (GH-38) ----
+    # Rijoy: "if PM delete the project, then it will go away from the PMs view,
+    # it should still be there for admin with a red strip on it so that if PM
+    # delete by accident the admin can revert ... reactive will show it back for
+    # the PM and delete will delete it from the app permanently".
+    # A PM delete is therefore an ARCHIVE, not a removal: nothing is destroyed and
+    # the admin can reactivate. Only an explicit purge drops the data for good.
+    pcols2 = {r[1] for r in conn.execute("PRAGMA table_info(projects)").fetchall()}
+    for col, ddl in (
+        ("archived_at", "ALTER TABLE projects ADD COLUMN archived_at TEXT NOT NULL DEFAULT ''"),
+        ("archived_by", "ALTER TABLE projects ADD COLUMN archived_by TEXT NOT NULL DEFAULT ''"),
+        ("archived_note", "ALTER TABLE projects ADD COLUMN archived_note TEXT NOT NULL DEFAULT ''"),
+    ):
+        if col not in pcols2:
+            conn.execute(ddl)
     # Migration: add project column if the table predates it
     cols = {r[1] for r in conn.execute("PRAGMA table_info(resources)").fetchall()}
     if "project" not in cols:
@@ -1069,10 +1084,27 @@ def _resource_dict(row: sqlite3.Row, hours: dict[int, float], weeks: list[str],
     }
 
 
-def _all_resources(conn: sqlite3.Connection, weeks: list[str]) -> list[dict]:
+def _all_resources(conn: sqlite3.Connection, weeks: list[str],
+                   include_archived: bool = False) -> list[dict]:
+    """Every resource row, with per-week hours attached.
+
+    GH-38: rows belonging to an ARCHIVED project are excluded unless asked for.
+    Archiving is the reversible form of delete, so an archived project must not
+    contribute to any live figure — the Planned grid, Actuals, Utilization, the
+    Dashboard, exports or the pricing popups. Filtering here rather than at each
+    call site means every current and future reader inherits the rule; only the
+    Dashboard's admin view opts in, and even that filters the archived keys out of
+    its totals and re-adds them as flagged rows.
+    """
     rows = conn.execute(
         "SELECT * FROM resources ORDER BY sort_order, id"
     ).fetchall()
+    if not include_archived:
+        arch = _archived_project_keys(conn)
+        if arch:
+            rows = [r for r in rows
+                    if ((r["client"] or "").strip().upper(),
+                        (r["project"] or "").strip().upper()) not in arch]
     # OT settings, resolved once per call (not per row).
     ot_by_title = {
         r["title"]: (r["ot_multiplier"] or 1.0)
@@ -1792,7 +1824,7 @@ class ProjectBody(BaseModel):
 
 
 @app.get("/api/projects")
-def api_projects(request: Request):
+def api_projects(request: Request, include_archived: int = 0):
     """List (client, project) entries with their start/end dates.
 
     GH-37: a PM sees only the projects they OWN rather than a 403. Without this a
@@ -1800,26 +1832,41 @@ def api_projects(request: Request):
     Add/Edit dialog and the delete path both depend on) failed for them. The
     filter is on ownership, so this exposes nothing beyond what the workbench
     already shows.
+
+    GH-38: archived projects are hidden by default — to a PM they are deleted.
+    An admin passes `include_archived=1` to get them with their archive stamp, which
+    is what the Dashboard's red strip needs. A PM never gets them, even if they ask.
     """
     user = getattr(request.state, "user", None)
     if not user:
         raise HTTPException(401, "Unauthorized")
     conn = get_db()
     try:
-        if user.get("r") == "pm":
-            mine = _pm_projects(user["u"], conn)
-            want = {((c or "").strip().upper(), (p or "").strip().upper()) for c, p in mine}
-            rows = [r for r in conn.execute(
-                "SELECT id, client, project, start_date, end_date FROM projects ORDER BY client, project"
-            ).fetchall()
-                if ((r["client"] or "").strip().upper(),
-                    (r["project"] or "").strip().upper()) in want]
-            return [dict(r) for r in rows]
-        _require_perm(request, "projects")
+        arch = _archived_project_keys(conn)
+        is_pm = user.get("r") == "pm"
+        if is_pm:
+            want = {((c or "").strip().upper(), (p or "").strip().upper())
+                    for c, p in _pm_projects(user["u"], conn)}
+        else:
+            _require_perm(request, "projects")
+            want = None
         rows = conn.execute(
-            "SELECT id, client, project, start_date, end_date FROM projects ORDER BY client, project"
-        ).fetchall()
-        return [dict(r) for r in rows]
+            "SELECT id, client, project, start_date, end_date, "
+            "TRIM(COALESCE(archived_at,'')) archived_at, "
+            "TRIM(COALESCE(archived_by,'')) archived_by FROM projects "
+            "ORDER BY client, project").fetchall()
+        out = []
+        for r in rows:
+            key = ((r["client"] or "").strip().upper(), (r["project"] or "").strip().upper())
+            if want is not None and key not in want:
+                continue
+            archived = bool(r["archived_at"])
+            if archived and (is_pm or not include_archived):
+                continue
+            d = dict(r)
+            d["archived"] = archived
+            out.append(d)
+        return out
     finally:
         conn.close()
 
@@ -1972,26 +2019,30 @@ def api_project_update(pid: int, body: ProjectBody, request: Request):
 
 
 @app.delete("/api/projects/{pid}")
-def api_project_delete(pid: int, request: Request, force: bool = False):
-    """Delete a project — and its assignments/hours with it.
+def api_project_delete(pid: int, request: Request, force: bool = False,
+                       purge: bool = False):
+    """Remove a project — as an ARCHIVE by default, permanently only on demand.
 
-    GH-37. Two problems this fixes at once:
+    GH-38 (Rijoy): "if PM delete the project, then it will go away from the PMs
+    view, it should still be there for admin with a red strip on it so that if PM
+    delete by accident the admin can revert — reactivate will show it back for the
+    PM and delete will delete it from the app permanently".
 
-    1. **It used to orphan data.** The old body was a bare
-       `DELETE FROM projects WHERE id=?`, which removed the definition while
-       leaving every `resources` row (and its `weekly_hours` / `actual_hours`
-       children) pointing at a project that no longer existed. Those rows still
-       appeared in the Planned grid and still counted in Utilization and the
-       Dashboard. Measured before the fix: 17 projects but several resource rows
-       referencing deleted ones.
-    2. **A PM may delete their OWN project.** Rijoy: "The PM should be able to
-       delete the project he created as well." Ownership comes from
-       `user_projects`, so `_pm_may_touch` decides it; a PM can never reach a
-       project they do not own.
+    So there are two different acts, and who may do which depends on the role:
 
-    Refuses while people are still assigned, unless `?force=true`. Deleting a
-    project with a team on it silently discards real bookings, so the caller has
-    to say so explicitly — and the response reports exactly what went.
+      * **A PM deleting their own project ARCHIVES it.** Nothing is destroyed:
+        the row, its team, its planned and actual hours all stay. The project
+        disappears from the PM's workbench and from every total, and the admin
+        keeps it visible under a red "deleted by <pm>" strip with Reactivate and
+        Delete available. This is the whole point — a PM mistake is recoverable.
+      * **An admin deleting** does it for real (purge). The admin already has
+        Reactivate for the recoverable case, so a delete from the admin side is
+        meant to be final.
+
+    Purging clears children → riders → PM assignment → the definition, in one
+    transaction. A project that still has people on it is REFUSED unless
+    `force=true`, and the refusal names exactly what would be lost — deleting a
+    staffed project silently discards real bookings.
     """
     user = _may_manage_projects(request)
     conn = get_db()
@@ -2001,6 +2052,7 @@ def api_project_delete(pid: int, request: Request, force: bool = False):
             raise HTTPException(404, "project not found")
         client, project = (row["client"] or "").strip(), (row["project"] or "").strip()
         _pm_may_touch(conn, user, client, project)
+        is_pm = user.get("r") == "pm"
 
         # `TRIM(UPPER(...))` to match how the rest of the app keys projects — a
         # case/space difference would otherwise leave orphans behind again.
@@ -2027,6 +2079,25 @@ def api_project_delete(pid: int, request: Request, force: bool = False):
             f"TRIM(UPPER(up.client))=TRIM(UPPER(?)) AND TRIM(UPPER(up.project))=TRIM(UPPER(?))",
             (client, project)).fetchone()[0]
 
+        # ---- a PM delete is an ARCHIVE -----------------------------------
+        if is_pm and not purge:
+            if (row["archived_at"] or ""):
+                return {"ok": True, "archived": True, "already": True,
+                        "deleted": {"client": client, "project": project,
+                                    "people": n_people, "planned_weeks": n_weeks,
+                                    "actual_weeks": n_actual, "pm_assignments": n_assign}}
+            conn.execute("UPDATE projects SET archived_at=datetime('now'), archived_by=? WHERE id=?",
+                         (user.get("u") or "", pid))
+            conn.commit()
+            _log_activity(conn, request, "project.archive", target=f"{client} · {project}",
+                          details=(f"deleted by PM {user.get('u')} — archived, not purged: "
+                                   f"{n_people} assignment(s) and their {n_weeks} planned / "
+                                   f"{n_actual} actual week(s) are recoverable"))
+            return {"ok": True, "archived": True,
+                    "deleted": {"client": client, "project": project,
+                                "people": n_people, "planned_weeks": n_weeks,
+                                "actual_weeks": n_actual, "pm_assignments": n_assign}}
+
         if n_people and not force:
             names = ", ".join(r["name"] for r in riders[:5])
             more = f" (+{n_people - 5} more)" if n_people > 5 else ""
@@ -2039,6 +2110,7 @@ def api_project_delete(pid: int, request: Request, force: bool = False):
                 "people": n_people, "planned_weeks": n_weeks, "actual_weeks": n_actual,
             })
 
+        # ---- permanent delete --------------------------------------------
         # Children first, then the rider rows, then the definition. actual_notes /
         # actual_hours are keyed on resource_id and have no FK cascade, so they
         # must be cleared explicitly or they become unreachable rows.
@@ -2061,12 +2133,41 @@ def api_project_delete(pid: int, request: Request, force: bool = False):
         conn.execute("DELETE FROM projects WHERE id=?", (pid,))
         conn.commit()
         _log_activity(conn, request, "project.delete", target=f"{client} · {project}",
-                      details=(f"{n_people} assignment(s), {n_weeks} planned week(s), "
+                      details=(f"PERMANENT — {n_people} assignment(s), {n_weeks} planned week(s), "
                                f"{n_actual} actual week(s) removed"))
-        return {"ok": True, "deleted": {"client": client, "project": project,
-                                        "people": n_people, "planned_weeks": n_weeks,
-                                        "actual_weeks": n_actual,
-                                        "pm_assignments": n_assign}}
+        return {"ok": True, "purged": True,
+                "deleted": {"client": client, "project": project,
+                            "people": n_people, "planned_weeks": n_weeks,
+                            "actual_weeks": n_actual, "pm_assignments": n_assign}}
+    finally:
+        conn.close()
+
+
+@app.post("/api/projects/{pid}/reactivate")
+def api_project_reactivate(pid: int, request: Request):
+    """Bring an archived project back — the admin's undo for a PM's accident.
+
+    Clears the archive stamp only. Nothing else about the project was ever
+    touched, so the team, planned hours and actuals all reappear exactly as they
+    were, and the PM sees it in their workbench again.
+    """
+    user = _may_manage_projects(request)
+    conn = get_db()
+    try:
+        row = conn.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
+        if not row:
+            raise HTTPException(404, "project not found")
+        if user.get("r") == "pm":
+            raise HTTPException(403, "Only an admin can reactivate a deleted project")
+        client, project = (row["client"] or "").strip(), (row["project"] or "").strip()
+        if not (row["archived_at"] or ""):
+            return {"ok": True, "reactivated": False, "reason": "not archived"}
+        conn.execute("UPDATE projects SET archived_at='', archived_by='' WHERE id=?", (pid,))
+        conn.commit()
+        _log_activity(conn, request, "project.reactivate", target=f"{client} · {project}",
+                      details="restored to the PM's view")
+        return {"ok": True, "reactivated": True,
+                "project": {"client": client, "project": project}}
     finally:
         conn.close()
 
@@ -2265,6 +2366,11 @@ def api_dashboard(request: Request, month: str = "", client: str = "",
         weeks, months = _load_layout()
         all_res = _all_resources(conn, weeks)
         owners = _project_owners(conn)
+        # The Dashboard is admin-only, so this is "admin" in practice; read it from
+        # the request anyway rather than assuming, so the archived-row branch below
+        # can never leak a deleted project to a non-admin caller.
+        _u = getattr(request.state, "user", None) or {}
+        user_role = _u.get("r") or "admin"
 
         resources = _dash_filter(all_res, _split_csv(client), _split_csv(project),
                                  _split_csv(pm), owners)
@@ -2274,9 +2380,46 @@ def api_dashboard(request: Request, month: str = "", client: str = "",
         # and then it contributes no resource rows and so no dashboard row at all.
         # Adding one silently vanished, which read as "it didn't get added"
         # (Rijoy, 2026-10-01). Surface it as an explicit zero row instead.
+        # GH-38: an ARCHIVED project is excluded from the live rows entirely (it is
+        # "deleted" as far as the numbers go) but added back below as a flagged row
+        # so the admin can reactivate it.
+        arch_keys = _archived_project_keys(conn)
+        rows["groups"] = [g for g in rows["groups"]
+                          if ((g.get("client") or "").strip().upper(),
+                              (g.get("project") or "").strip().upper()) not in arch_keys]
         rows["groups"] = rows["groups"] + _empty_project_groups(
             conn, all_res, _split_csv(client), _split_csv(project),
             _split_csv(pm), owners)
+        # Flagged, archived rows — admin only; a PM must not see what they deleted.
+        if user_role == "admin":
+            keep_keys = arch_keys
+            arch_rows = [g for g in _archived_project_rows(conn)
+                         if ((g.get("client") or "").strip().upper(),
+                             (g.get("project") or "").strip().upper()) in keep_keys]
+            # Honour the live filters so an archived row behaves like any other.
+            if _split_csv(client) or _split_csv(project) or _split_csv(pm):
+                cset = {_norm(c) for c in _split_csv(client) if c.strip()}
+                pset = _split_csv(project)
+                pmset = {_norm(p) for p in _split_csv(pm) if p.strip()}
+                def _ok(g):
+                    c = _norm(g["client"])
+                    p = _norm(g["project"])
+                    if cset and c not in cset:
+                        return False
+                    if pset and not any(
+                        ((" · " in x and _norm(x.split(" · ", 1)[1]) == p and _norm(x.split(" · ", 1)[0]) == c)
+                         or (" · " not in x and _norm(x) == p)) for x in pset):
+                        return False
+                    if pmset or UNASSIGNED_PM in _split_csv(pm):
+                        owner = owners.get(((g["client"] or "").strip(), (g["project"] or "").strip()))
+                        hit = bool(UNASSIGNED_PM in _split_csv(pm) and not owner)
+                        if owner and _norm(owner) in pmset:
+                            hit = True
+                        if not hit:
+                            return False
+                    return True
+                arch_rows = [g for g in arch_rows if _ok(g)]
+            rows["groups"] = rows["groups"] + arch_rows
 
         # Currency selector. When a single currency is chosen, drop the other
         # currency's rows/totals entirely so the KPI tiles and table agree.
@@ -2459,6 +2602,62 @@ def _actuals_financials(r: dict, week_range: tuple[int, int] | None = None,
     }
 
 
+def _archived_project_keys(conn: sqlite3.Connection) -> set[tuple[str, str]]:
+    """(CLIENT, PROJECT) keys of archived projects, folded for comparison.
+
+    GH-38: an archived project is "deleted" from the PM's world — it must not
+    appear in their workbench, in the Dashboard rows/totals, in Utilization, or in
+    the project filter. The admin still sees it in a flagged row so it can be
+    reactivated. One helper so every read path agrees on the same definition.
+    """
+    try:
+        rows = conn.execute(
+            "SELECT client, project FROM projects WHERE TRIM(COALESCE(archived_at,''))<>''"
+        ).fetchall()
+    except sqlite3.Error:
+        return set()
+    return {((r["client"] or "").strip().upper(), (r["project"] or "").strip().upper())
+            for r in rows}
+
+
+def _archived_project_rows(conn: sqlite3.Connection) -> list[dict]:
+    """Archived projects as Dashboard rows, carrying their archive stamp.
+
+    Counted from the resource rows that still belong to them (nothing was deleted
+    when they were archived), so the admin can see how big the thing they are
+    about to reactivate actually is.
+    """
+    out: list[dict] = []
+    try:
+        rows = conn.execute(
+            "SELECT id, client, project, archived_at, archived_by FROM projects "
+            "WHERE TRIM(COALESCE(archived_at,''))<>'' ORDER BY client, project").fetchall()
+    except sqlite3.Error:
+        return out
+    for r in rows:
+        c, p = (r["client"] or "").strip(), (r["project"] or "").strip()
+        if not c:
+            continue
+        agg = conn.execute(
+            "SELECT COUNT(*) n, COALESCE(SUM((SELECT COALESCE(SUM(hours),0) FROM weekly_hours "
+            "WHERE resource_id=res.id)),0) hrs FROM resources res WHERE "
+            "TRIM(UPPER(res.client))=TRIM(UPPER(?)) AND TRIM(UPPER(res.project))=TRIM(UPPER(?))",
+            (c, p)).fetchone()
+        out.append({
+            "country": "—", "client": c, "project": p,
+            "revenue": 0.0, "expense": 0.0, "actual_rev": 0.0, "actual_exp": 0.0,
+            "difference": 0.0, "add_rev": 0.0, "add_exp": 0.0, "adj_rev": 0.0, "adj_exp": 0.0,
+            "currency": "EUR" if _norm(c) in EU_COUNTRIES else "USD",
+            "resources": int(agg["n"] or 0),
+            "archived": True,
+            "archived_at": r["archived_at"] or "",
+            "archived_by": r["archived_by"] or "",
+            "project_id": r["id"],
+            "archived_hours": round(float(agg["hrs"] or 0), 1),
+        })
+    return out
+
+
 def _empty_project_groups(conn: sqlite3.Connection, all_res: list[dict],
                           clients: list[str], projects: list[str],
                           pms: list[str], owners: dict) -> list[dict]:
@@ -2485,6 +2684,11 @@ def _empty_project_groups(conn: sqlite3.Connection, all_res: list[dict],
 
     have = {(_norm((r.get("client") or "")), _norm((r.get("project") or "")))
             for r in all_res if (r.get("project") or "").strip()}
+    # GH-38: an archived project gets exactly ONE row — the flagged one from
+    # _archived_project_rows(). Without this skip it was also picked up here as a
+    # "no team" row, because archiving leaves it with no live resource rows, so the
+    # Dashboard showed the same project twice (once plain, once red-striped).
+    arch = _archived_project_keys(conn)
 
     out: list[dict] = []
     try:
@@ -2498,6 +2702,8 @@ def _empty_project_groups(conn: sqlite3.Connection, all_res: list[dict],
         c, p = _norm(raw_c), _norm(raw_p)
         if (c, p) in have:
             continue                      # real rows already cover it
+        if (c, p) in arch:
+            continue                      # archived: only the flagged row should show
         if not raw_c:
             continue                      # build_dashboard_rows skips client-less rows
         if cset and c not in cset:
@@ -2699,6 +2905,12 @@ def api_utilization(request: Request, month: str = "", client: str = "",
     try:
         weeks, months = _load_layout()
         resources = _all_resources(conn, weeks)
+        # GH-38: an archived project is deleted as far as any live figure goes.
+        _arch = _archived_project_keys(conn)
+        if _arch:
+            resources = [r for r in resources
+                         if ((r.get("client") or "").strip().upper(),
+                             (r.get("project") or "").strip().upper()) not in _arch]
         if user.get("r") == "pm":
             projs = _pm_projects(user["u"], conn)
             resources = [r for r in resources
@@ -5126,6 +5338,7 @@ def api_my_projects(request: Request):
     conn = get_db()
     try:
         weeks, _ = _load_layout()
+        arch = _archived_project_keys(conn)      # GH-38: no longer theirs
         projs = _pm_projects(user["u"], conn) if user.get("r") == "pm" else None
         rows = conn.execute(
             "SELECT TRIM(client) client, TRIM(project) project, COUNT(*) n, "
@@ -5139,6 +5352,8 @@ def api_my_projects(request: Request):
             if projs is not None and not _pm_owns(projs, r["client"], r["project"]):
                 continue
             key = ((r["client"] or "").upper(), (r["project"] or "").upper())
+            if key in arch:
+                continue          # archived == deleted, from every live view
             seen.add(key)
             meta = conn.execute(
                 "SELECT start_date, end_date FROM projects WHERE TRIM(UPPER(client))=? AND TRIM(UPPER(project))=?",
@@ -5163,7 +5378,7 @@ def api_my_projects(request: Request):
         if projs is not None:
             for cl, pr in projs:
                 key = ((cl or "").strip().upper(), (pr or "").strip().upper())
-                if not pr or key in seen:
+                if not pr or key in seen or key in arch:
                     continue
                 meta = conn.execute(
                     "SELECT start_date, end_date FROM projects WHERE "

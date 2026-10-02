@@ -174,22 +174,29 @@ async function deleteWbProject(client, project) {
 
   const go = async (force) => {
     try {
+      // GH-38: a PM's delete ARCHIVES. The project leaves their view but nothing
+      // is destroyed, and an admin can reactivate it — so the wording must not
+      // promise permanence, and a staffed project is refused the same way.
       const res = await api(`/api/projects/${target.id}${force ? "?force=true" : ""}`, { method: "DELETE" });
       const d = (res && res.deleted) || {};
-      toast(`Deleted ${d.client || client} · ${d.project || project}` +
-            (d.people ? ` — removed ${d.people} assignment(s), ${d.planned_weeks} planned week(s)` : ""));
+      if (res && res.archived) {
+        toast(`Removed ${d.client || client} · ${d.project || project} — an admin can restore it if this was a mistake`);
+      } else {
+        toast(`Deleted ${d.client || client} · ${d.project || project}` +
+              (d.people ? ` — removed ${d.people} assignment(s), ${d.planned_weeks} planned week(s)` : ""));
+      }
       if (WB.selKey === wbKey(client, project)) WB.selKey = "";
       await refreshWorkbenchProjects();
     } catch (e) {
       const det = e && e.detail ? e.detail : null;
       if (det && det.code === "has_assignments") {
-        if (confirm(`${det.message}\n\nDelete it and discard those hours permanently?`)) return go(true);
+        if (confirm(`${det.message}\n\nRemove it anyway? An admin can still restore it.`)) return go(true);
         return;
       }
       toast((det && det.message) || e.message || "Delete failed", true);
     }
   };
-  if (confirm(`Delete ${label}?\n\nThis removes the project and its assignments. It cannot be undone.`)) {
+  if (confirm(`Remove ${label} from your projects?\n\nIt disappears from your view. Your admin can restore it, and it is not deleted from the company's records.`)) {
     await go(false);
   }
 }
