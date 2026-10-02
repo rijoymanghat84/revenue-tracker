@@ -311,16 +311,21 @@ async function saveWeekSheet() {
     // CHAIN (is this OT? -> approved? -> billed? -> why not billed?), and each
     // answer unlocks the next question, so a single retry is not enough.
     try {
+      const edited = [WK.week];
       let res = await api(`/api/resources/${r.rid}/actuals`, {
-        method: "PUT", body: JSON.stringify({ hours: full, notes }),
+        method: "PUT", body: JSON.stringify({ hours: full, notes, edited }),
       });
       let rounds = 0;
       while (res.status === "needs_input" && rounds < 8) {
         rounds++;
         const ok = await wkResolve(r, res.weeks, full, notes);
         if (!ok) break;
+        // A resolved week may be one the PM did not TYPE in (a carried-over
+        // overage they just answered for), so add it to `edited` — otherwise the
+        // verdict would be validated but never written.
+        for (const n of res.weeks) if (edited.indexOf(n.week) < 0) edited.push(n.week);
         res = await api(`/api/resources/${r.rid}/actuals`, {
-          method: "PUT", body: JSON.stringify({ hours: full, notes }),
+          method: "PUT", body: JSON.stringify({ hours: full, notes, edited }),
         });
       }
       if (res.status !== "ok") {
