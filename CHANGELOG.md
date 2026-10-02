@@ -9,6 +9,68 @@ wasn't one) and the commit.
 
 ---
 
+## 2026-10-02 — Availability is averaged over the window, not the worst week (GH-51)
+
+**the owner, on the Resources tab:** *"the list should have all the resources not just
+few all available, non available ones too. and the percentage free should be
+properly updated."* Both halves were real bugs.
+
+### The % free was measuring the wrong thing
+
+`wbAvailability` reported `100 − worst week in the window`. That collapses *busy
+this week* into *no capacity at all*. Measured on live data:
+
+| person | per-week booked % over 12 weeks | old | new |
+|---|---|---|---|
+| Aiden Brooks | `[100,0,0,0,0,0,0,0,0,0,0,0]` | **0% free, hidden as unavailable** | **92% free** |
+| Sophia Ellis | `[100,0,0,0,0,0,0,0,0,0,0,0]` | **0% free, hidden as unavailable** | **92% free** |
+| Nathan Rowe | `[100] × 12` | 0% free | 0% free (correct) |
+
+Two people who were free eleven weeks out of twelve were being listed as having no
+capacity. The metric is now two numbers, because a PM asks two questions:
+
+- **`free%` = 100 − AVERAGE booked% over the window** — the headline, and what
+  the 100 / 75–99 / 50–74 / under-50 buckets use. *How much of this person can I
+  use over this period?*
+- **`fullSlot` = 100 − WORST week** — surfaced as **"part-time only"** plus the
+  reason line (*"No full-time capacity — fully booked Sep-28 (Google/Support)"*).
+  *Can they take a full-time slot?* The worst-week signal is kept, just not as
+  the headline.
+
+Effect on live data: **17 available / 32 fully booked → 41 / 8.**
+
+### The unavailable group looked missing
+
+It was a collapsed `<details>`, so more than half the roster sat one click away
+and read as absent. It is now **open by default** (still collapsible), and the tab
+states the count up front: *"49 of 49 resources — 41 with free capacity, 8 fully
+booked."* Each row also shows **`free N/12 wks`** so the average is auditable at a
+glance, and unbooked people read "no project work booked" rather than a bare dash.
+
+### Verified
+
+24-assertion Node harness over the shipped functions against the live payload —
+the whole roster is accounted for in every window mode, every listed row has
+`free% > 0`, every fully-booked row is 0% free, ranking stays monotonic, and
+widening the window never invents new fully-booked people (the old peak metric
+did exactly that). Then driven live: 49 of 49 rendered, 41 open / 8 in an expanded
+group, Aiden and Sophia at 92% free.
+
+Commit `ba49edf`, branch `feat/51b_availability_metric`, deployed 2026-10-02 18:45 UTC.
+
+### Root cause of the deploy pipeline's silent failures (found here)
+
+Chasing why the 🚀 event still did not post uncovered it: there are **two deploy
+scripts**. `revenue-safe-upgrade.sh` was calling the legacy
+`revenue-deploy.sh` — which still used the `Fix #N` merge message (that is what
+auto-closed GH-50 *and* GH-51) and had **no notify step at all**. Every fix
+applied to `repo-deploy.sh` was therefore never exercised by a single deploy made
+through the wrapper. The wrapper now calls
+`repo-deploy.sh deploy revenue-tracker …`, and the legacy script carries a
+SUPERSEDED banner.
+
+---
+
 ## 2026-10-02 — Resources tab: the whole roster, unavailable people included (GH-51)
 
 **GH-51**, stage 1 of the Resources/reallocation plan (the feature came from the owner):
