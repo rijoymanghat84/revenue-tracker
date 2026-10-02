@@ -328,6 +328,20 @@ body {
    order. */
 #dashTable td.dash-actions, #dashTable th:last-child { text-align: right; white-space: nowrap; }
 #dashTable td.dash-actions { width: 46px; }
+/* Dashboard → My Projects (2026-10-02). The project name is a real button so it
+   is keyboard-reachable and reads as clickable; it inherits the row's own text
+   colour so the table does not turn into a wall of blue. The PM column sits next
+   to it so "who runs this" is answered without leaving the Dashboard. */
+#dashTable .proj-link {
+  background: none; border: 0; padding: 0; margin: 0; font: inherit; color: inherit;
+  text-align: left; cursor: pointer; text-decoration: underline;
+  text-decoration-color: rgba(var(--accent-rgb, 90,160,255), 0.45);
+  text-underline-offset: 3px; border-radius: 4px;
+}
+#dashTable .proj-link:hover { color: var(--accent, #6fd0ff); text-decoration-color: currentColor; }
+#dashTable .proj-link:focus-visible { outline: 2px solid var(--accent, #6fd0ff); outline-offset: 2px; }
+#dashTable td.dash-pm { white-space: nowrap; }
+#dashTable td.dash-pm, #dashTable th:nth-child(4) { width: 1%; }
 #dashTable td.dash-arch-actions { width: 1%; padding-right: 12px; }
 #dashTable .dash-arch-actions .btn {
   display: inline-flex; align-items: center; gap: 5px;
@@ -1460,6 +1474,21 @@ td.week .a-inp { text-align: center; }
    100% rule prevents a clash instead of reporting one afterwards.
    ========================================================================== */
 .wb-grid { display: grid; grid-template-columns: 288px 1fr; gap: 14px; align-items: start; }
+/* "Viewing as PM" banner — an admin looking at someone else's My Projects screen.
+   Sits above the grid, names the PM, and carries the way back. Amber accent so
+   it is unmistakably a MODE, not part of the screen being viewed. */
+.wb-viewas {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  flex-wrap: wrap; margin-bottom: 12px; padding: 10px 14px;
+  border-left: 3px solid #d9a12b;
+}
+.wb-viewas .wva-text { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.wb-viewas .wva-badge {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+  color: #f0c05a; background: rgba(217, 161, 43, 0.16);
+  border: 1px solid rgba(217, 161, 43, 0.5); border-radius: 999px; padding: 3px 9px;
+}
+.wb-viewas .wva-actions { display: flex; gap: 8px; }
 .wb-master { overflow: hidden; display: flex; flex-direction: column; max-height: calc(100vh - 190px); }
 .wb-master-head { padding: 12px 13px 10px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 9px; }
 .wb-eyebrow { font-size: 10.5px; letter-spacing: 1.1px; text-transform: uppercase; color: var(--muted); font-weight: 700; }

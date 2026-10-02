@@ -39,10 +39,56 @@ let WB = {
 };
 const wbKey = (cl, pr) => `${cl}||${pr}`;
 
+/* ---------------- View-as-PM from the Dashboard (2026-10-02) ----------------
+
+   the owner: "I want those projects to be clickable and clicking it should show me
+   the my project screen that the PM see for those projects. and that will also
+   tell me who the PM is."
+
+   So an admin clicks a project row on the Dashboard and lands HERE, on the My
+   Projects screen, showing what that project's PM sees: their project list,
+   their team, their load and their progress chart, with the PM's name in a
+   banner that says whose screen this is.
+
+   It is READ-ONLY on purpose — a look, not a takeover. Every write control
+   (new project, add team member, Edit, Remove, the project 🗑) is hidden in this
+   mode, so there is nothing to click and nothing the server has to refuse. The
+   PM themself never enters this mode; for them the workbench is their own screen
+   and renders normally.
+*/
+let WB_VIEW_AS = null;      // {pm, client, project} while an admin is looking
+
+function wbReadOnly() { return !!WB_VIEW_AS; }
+
+/* Called by the Dashboard project button (see renderDashboard in app.js). */
+function openProjectWorkbench(client, project) {
+  WB_VIEW_AS = { pm: "", client: client || "", project: project || "" };
+  // Drop the cached list so loadWorkbench cannot skip the scope fetch, and let
+  // loadWorkbench decide the selection (it knows what the PM actually owns).
+  WB.projects = [];
+  WB.selKey = null;
+  WB.progCache = {};
+  state.view = "workbench";
+  if (typeof switchView === "function") switchView("workbench");
+  else renderView();
+}
+
+/* Leaving the workbench leaves the preview. Called from switchView so clicking
+   any other tab cannot strand the admin inside someone else's screen. */
+function wbExitViewAs() {
+  if (!WB_VIEW_AS) return;
+  WB_VIEW_AS = null;
+  WB.projects = [];
+  WB.selKey = null;
+  WB.progCache = {};
+}
+
 /* ---------------- load the workbench ---------------- */
 async function loadWorkbench() {
+  const asPm = WB_VIEW_AS ? (WB_VIEW_AS.pm || "") : "";
+  const projUrl = "/api/my-projects" + (asPm ? `?as_pm=${encodeURIComponent(asPm)}` : "");
   const [proj, people, load] = await Promise.all([
-    api("/api/my-projects"), api("/api/people"), api("/api/pm/load"),
+    api(projUrl), api("/api/people"), api("/api/pm/load"),
   ]);
   WB.projects = proj.projects || [];
   WB.people = people.people || [];
@@ -54,7 +100,15 @@ async function loadWorkbench() {
   WB.titles = load.titles || WB.titles || [];
   WB.weekMonth = load.week_month || [];
   WB.current = load.current || {};
-  if (!WB.selKey && WB.projects.length) {
+  if (WB_VIEW_AS) {
+    // The server echoes the PM it scoped to, so the banner names who this is
+    // even before /api/project-owners says anything.
+    WB_VIEW_AS.pm = WB_VIEW_AS.pm || proj.as_pm || "";
+    const want = wbKey(WB_VIEW_AS.client, WB_VIEW_AS.project);
+    WB.selKey = WB.projects.some((p) => wbKey(p.client, p.project) === want)
+      ? want
+      : (WB.projects.length ? wbKey(WB.projects[0].client, WB.projects[0].project) : null);
+  } else if (!WB.selKey && WB.projects.length) {
     WB.selKey = wbKey(WB.projects[0].client, WB.projects[0].project);
   }
   renderWorkbench();
@@ -65,12 +119,44 @@ function wbSel() {
 }
 
 function renderWorkbench() {
+  const ro = wbReadOnly();
+  // The two write entry points live in the master column; hide rather than
+  // disable so a read-only look has no dead controls.
+  const np = $("#btnWbNewProject");
+  if (np) np.style.display = ro ? "none" : "";
+  renderWbViewAs();
   renderWbProjects();
   renderWbTeam();
   renderWbProgress();
   // GH-51: the load rail lives on the Resources tab now, so only re-render it
   // when that view is the one on screen (renderWbLoad guards on #wbLoad).
   if (state.view === "resources") renderWbLoad();
+}
+
+/* The "whose screen is this" banner. Names the PM and offers the way back —
+   without it, an admin in read-only mode would reasonably think the buttons
+   had broken. */
+function renderWbViewAs() {
+  const box = $("#wbViewAs");
+  if (!box) return;
+  if (!WB_VIEW_AS) { box.innerHTML = ""; box.classList.add("hidden"); return; }
+  const pm = WB_VIEW_AS.pm;
+  const sel = wbSel();
+  const label = sel ? `${sel.client} · ${sel.project}` : `${WB_VIEW_AS.client} · ${WB_VIEW_AS.project}`;
+  box.classList.remove("hidden");
+  box.innerHTML = `<div class="wva-text">
+      <span class="wva-badge">Viewing as PM</span>
+      <b>${pm ? esc(pm) : "(no PM assigned)"}</b>
+      <span class="muted-note">— ${esc(label)}${sel ? `, ${sel.people} ${sel.people === 1 ? "person" : "people"}` : ""}. This is the screen ${pm ? esc(pm) : "the PM"} sees; it is read-only.</span>
+    </div>
+    <div class="wva-actions">
+      <button class="btn mini" id="wvaBack">← Back to Dashboard</button>
+    </div>`;
+  const back = $("#wvaBack");
+  if (back) back.addEventListener("click", () => {
+    WB_VIEW_AS = null; WB.projects = []; WB.selKey = null; WB.progCache = {};
+    if (typeof switchView === "function") switchView("dash"); else renderView();
+  });
 }
 
 /* GH-51: the Resources tab. Ensures the roster is loaded (the tab can be the
@@ -247,10 +333,11 @@ function renderWbProjects() {
         ${over ? `<span class="over">${over} over capacity</span>` : ""}
         <!-- GH-37: "The PM should be able to delete the project he created as
              well." Everything in this list is owned by the signed-in PM, so the
-             button is always safe to offer; the API re-checks ownership anyway. -->
-        <button class="btn mini wb-pdel" data-del-k="${esc(wbKey(p.client, p.project))}"
+             button is always safe to offer; the API re-checks ownership anyway.
+             View-as-PM mode is read-only, so the button is not rendered. -->
+        ${wbReadOnly() ? "" : `<button class="btn mini wb-pdel" data-del-k="${esc(wbKey(p.client, p.project))}"
           data-del-client="${esc(p.client || "")}" data-del-project="${esc(p.project || "")}"
-          title="Delete ${esc(p.client)} · ${esc(p.project)}">🗑</button>
+          title="Delete ${esc(p.client)} · ${esc(p.project)}">🗑</button>`}
       </div>
     </div>`;
   }).join("");
@@ -399,10 +486,11 @@ function renderWbTeam() {
     $("#wbHead").innerHTML = `<span class="dot off"></span>Pick a project on the left.`;
     return;
   }
-  if (addBtn) addBtn.disabled = false;
+  if (addBtn) addBtn.disabled = wbReadOnly();
   const window_ = [p.start_date, p.end_date].filter(Boolean).map(fmtDMY).join(" → ") || "full year";
+  const pmNote = (WB_VIEW_AS && WB_VIEW_AS.pm) ? ` <span class="muted-note">· PM: <b>${esc(WB_VIEW_AS.pm)}</b></span>` : "";
   $("#wbHead").innerHTML = `<span class="dot on"></span><b>${esc(p.client)} · ${esc(p.project)}</b>
-    — ${p.people} ${p.people === 1 ? "person" : "people"}, ${fmtH(p.booked_hours)} h booked. Dates: ${esc(window_)}.`;
+    — ${p.people} ${p.people === 1 ? "person" : "people"}, ${fmtH(p.booked_hours)} h booked. Dates: ${esc(window_)}.${pmNote}`;
 
   head.innerHTML = `<colgroup>
       <col class="c-person"><col class="c-title"><col class="c-alloc">
@@ -452,9 +540,9 @@ function renderWbTeam() {
       <td class="wb-dates">${fmtRange(t.start_date, t.end_date)}</td>
       <td class="num">${weekly == null ? "—" : fmtH(weekly)}</td>
       <td class="wb-loadcell">${peak == null ? `<span class="pill">no load data</span>` : loadBarHTML(peak) + " " + status}</td>
-      <td class="wb-rowactions">
+      <td class="wb-rowactions">${wbReadOnly() ? `<span class="muted-note">view only</span>` : `
         <button class="btn mini" data-act="edit">Edit</button>
-        <button class="btn mini" data-act="del">Remove</button>
+        <button class="btn mini" data-act="del">Remove</button>`}
       </td>
     </tr>`;
   }).join("");

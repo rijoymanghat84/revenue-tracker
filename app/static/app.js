@@ -262,6 +262,11 @@ function showApp() {
     // Must be an explicit early return — can() only grants admin-held
     // permissions, so a `null` permission would hide the tab from admins too.
     if (t.dataset.tab === "logs") return isAdmin;
+    // Dashboard → My Projects (2026-10-02). An admin holding the `people`
+    // capability may open the workbench — it IS the PM's screen, and the API
+    // behind it (_require_people) gates on exactly that. Opening it from a
+    // Dashboard project row lands in the read-only "viewing as PM" mode.
+    if (t.dataset.tab === "workbench" && isAdmin) return can("people");
     const p = tabPerm[t.dataset.tab];
     // A PM gets their OWN two tabs: the workbench (their projects + team load)
     // and Actuals. They never see Dashboard/Planned/Rate Card/Team & Access.
@@ -3086,7 +3091,7 @@ function renderDashboard() {
     syncExportLinks();
     initRefreshButtons();
 
-    let rows = `<thead><tr><th>Country</th><th>Client</th><th>Project</th><th>Resource(s)</th><th>Planned Revenue</th><th>Planned Expense</th><th>Planned Savings</th><th>Revenue till date</th><th>Expense till date</th><th>Savings till date</th><th></th></tr></thead><tbody>`;
+    let rows = `<thead><tr><th>Country</th><th>Client</th><th>Project</th><th>PM</th><th>Resource(s)</th><th>Planned Revenue</th><th>Planned Expense</th><th>Planned Savings</th><th>Revenue till date</th><th>Expense till date</th><th>Savings till date</th><th></th></tr></thead><tbody>`;
     for (const g of groups) {
       const pSavings = g.revenue - g.expense;
       const aSavings = (g.actual_rev || 0) - (g.actual_exp || 0);
@@ -3139,7 +3144,10 @@ function renderDashboard() {
           : "<td></td>");
       const rowCls = g.archived ? "dash-arch-row" : (g.empty ? "dash-empty-row" : "");
       rows += `<tr${rowCls ? ` class="${rowCls}"` : ""}>
-        <td>${esc(g.country)}</td><td>${esc(g.client)}</td><td>${esc(g.project)}${emptyTag}${archTag}</td><td>${resCell}</td>
+        <td>${esc(g.country)}</td><td>${esc(g.client)}</td>
+        <td><button type="button" class="proj-link" data-pclient="${esc(g.client)}" data-pproject="${esc(g.project === "—" ? "" : g.project)}"
+             title="Open ${esc(g.client)} · ${esc(g.project)} in the My Projects screen its PM sees">${esc(g.project)}</button>${emptyTag}${archTag}</td>
+        <td class="dash-pm">${g.pm ? esc(g.pm) : `<span class="muted-note">no PM</span>`}</td><td>${resCell}</td>
         <td>${money(g.revenue, cur)}</td><td>${money(g.expense, cur)}</td>
         <td style="color:${pSavings >= 0 ? "var(--green)" : "var(--red)"}">${money(pSavings, cur)}</td>
         <td>${money(g.actual_rev || 0, cur)}</td><td>${money(g.actual_exp || 0, cur)}</td>
@@ -3150,7 +3158,7 @@ function renderDashboard() {
       const aSavings = (t.actual_rev || 0) - (t.actual_exp || 0);
       const cur = t.currency || "USD";
       rows += `<tr class="total-row">
-        <td>TOTAL ${esc(cur)}</td><td>—</td><td>—</td><td>—</td>
+        <td>TOTAL ${esc(cur)}</td><td>—</td><td>—</td><td>—</td><td>—</td>
         <td>${money(t.revenue, cur)}</td><td>${money(t.expense, cur)}</td>
         <td style="color:${pSavings >= 0 ? "var(--green)" : "var(--red)"}">${money(pSavings, cur)}</td>
         <td>${money(t.actual_rev || 0, cur)}</td><td>${money(t.actual_exp || 0, cur)}</td>
@@ -3164,8 +3172,26 @@ function renderDashboard() {
     // though the API was correct. (Found by clicking one — `bound` was undefined.)
     bindDashDelete();
     bindDashReactivate();
+    bindDashProjectLinks();
     markUpdated("#dashUpdated");
   }).catch((e) => toast(`Dashboard failed: ${e.message}`, true));
+}
+
+/* Dashboard → My Projects (2026-10-02). Bound after the rows exist, like the
+   delete/reactivate buttons — the earlier handlers in this file were called
+   before render and silently did nothing (see bindDashDelete below). */
+function bindDashProjectLinks() {
+  $$("#dashTable .proj-link").forEach((b) => {
+    if (b.dataset.bound === "1") return;
+    b.dataset.bound = "1";
+    b.addEventListener("click", () => {
+      if (typeof openProjectWorkbench !== "function") {
+        toast("My Projects is unavailable — workbench.js did not load", true);
+        return;
+      }
+      openProjectWorkbench(b.dataset.pclient || "", b.dataset.pproject || "");
+    });
+  });
 }
 
 /* GH-37: delete a project straight from the Dashboard row.
@@ -4777,6 +4803,9 @@ $("#fileInput").addEventListener("change", async (e) => {
 /* ---------------- tabs ---------------- */
 async function switchView(view) {
   state.view = view;
+  // Leaving My Projects ends an admin's "viewing as PM" preview, so opening any
+  // other tab cannot strand them inside someone else's screen (workbench.js).
+  if (view !== "workbench" && typeof wbExitViewAs === "function") wbExitViewAs();
   await flush();
   await pFlush();
   await aFlush();
