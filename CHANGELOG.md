@@ -81,6 +81,58 @@ active), with every touched table restored to baseline (66 resources / 49 people
 
 ---
 
+## 2026-10-02 — PM landing page, and the compare panel's buttons (GH-53)
+
+**Rijoy, 2026-10-02:**
+> "first the default page the PM login should be my projects"
+> "second, The move button and the x out butoon in the compare panel is not
+> properly displayed it should be proper button"
+
+### 1. A PM now lands on My Projects
+
+`showApp()` opened the **Week sheet** for a PM (data entry). It now opens the
+**workbench**. Two details worth keeping:
+
+- The old branch carried **two contradictory comments stacked on top of each
+  other** — one asserting the PM lands on the workbench, the next asserting the
+  week sheet — each claiming to be the rule. That is exactly how a default drifts
+  without anyone noticing a change. There is now ONE statement of it.
+- The first attempt set `state.view` by hand, which rendered the workbench but
+  left the top-strip title reading **"Dashboard"**. The tab said *My Projects*
+  while the heading above it said *Dashboard* — worse than the original bug,
+  because the app contradicted itself. The branch now routes through
+  `switchView()`, which owns tab highlight, visibility **and** the page title.
+
+Verified live as a throwaway PM: view=`workbenchView`, active tab **My Projects**,
+title **My Projects**, sub *"Your projects, your team, and their week-by-week
+load"*. Throwaway PM deleted afterwards.
+
+### 2. The compare panel's buttons are proper buttons
+
+**Same root cause as the bell panel earlier the same day.** `.wb-compare` wore
+`.glass`, and `.glass` is `--panel: rgba(255,255,255,0.05)` — five percent white.
+The table inside had no background of its own, so the resource list showed
+straight through the rows and both controls read as floating glyphs.
+
+- The panel is now opaque: `--surface-1` + `--border-strong`, no backdrop blur,
+  and the dead `glass` class dropped from the markup so the bug cannot return.
+- `.wb-cmp-act .btn` gets a real button box — border, `--surface-3` fill, padding,
+  radius, weight, shadow, hover/active. Tokens are theme-aware (every theme in
+  `main.py`'s `THEMES` overrides them), so it holds on light themes.
+- The bare **`✕` became `Remove`**. An unlabelled glyph in a table cell is a
+  puzzle, not a control; Move keeps primary styling and Remove turns red on hover.
+
+**A second defect caught by measuring, not looking.** `Move…` carried `.primary`
+but computed the **same** background as `Remove` — `rgb(60,56,54)` for both.
+`.wb-cmp-act .btn` and `.wb-cmp-act .btn.primary` tie on specificity (0,2,0), so
+source order decides and the flat fill won. The primary rule is now declared after
+it: Move is `rgba(34,211,238,0.16)` with an accent border, Remove is
+`rgb(26,34,56)` muted. Measured live.
+
+Reference GH-53.
+
+---
+
 ## 2026-10-02 — Reallocation requests: propose → releasing-PM approval → 🔔 → trail (GH-53)
 
 **Rijoy's spec**, stage 3 of the Resources plan:
