@@ -1999,7 +1999,19 @@ textarea.fb-inp { min-height: 72px; resize: vertical; }
 .wb-pick { flex: 0 0 auto; display: flex; align-items: center; padding-right: 2px; }
 .wb-pick input { width: 15px; height: 15px; accent-color: var(--accent, #22d3ee); cursor: pointer; }
 .wb-load .h .wb-id { flex: 1 1 auto; min-width: 0; }
-.wb-compare { margin: 12px 0; padding: 12px 14px; }
+/* The compare panel sits over the page like the bell panel did, so it must be
+   OPAQUE for the same reason: `.glass` is `--panel: rgba(255,255,255,0.05)` —
+   five percent white — and the table inside it has no background of its own, so
+   the resource list showed straight through the rows and the two action buttons
+   read as floating glyphs rather than controls. Rijoy, 2026-10-02: "the move
+   button and the x out button in the compare panel is not properly displayed, it
+   should be proper button". */
+.wb-compare {
+  margin: 12px 0; padding: 12px 14px;
+  background: var(--surface-1);
+  border: 1px solid var(--border-strong);
+  backdrop-filter: none; -webkit-backdrop-filter: none;
+}
 .wb-cmp-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
 .wb-cmp-head b { font-size: 13px; }
 .wb-cmp-head .btn { margin-left: auto; }
@@ -2069,7 +2081,29 @@ table.wb-cmp td.num { text-align: right; white-space: nowrap; }
 .mv-note { margin-top: 12px; padding: 8px 10px; border-radius: 8px; background: var(--surface-1); }
 .mv-note.mv-warn { background: var(--pill-red-bg); color: var(--red); }
 .mv-actions { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
-.wb-cmp-act { display: flex; gap: 5px; white-space: nowrap; }
+.wb-cmp-act { display: flex; gap: 6px; white-space: nowrap; align-items: center; }
+/* The row's action buttons, made to look like buttons. Inside a table cell the
+   default `.btn` reads as flat text, and the bare "✕" gave no hint it was
+   clickable at all — it needs the same box, padding and hover as any other
+   control. `Remove` replaces the bare glyph: an ✕ with no label is a puzzle. */
+.wb-cmp-act .btn {
+  border: 1px solid var(--border-strong);
+  background: var(--surface-3);
+  color: var(--text);
+  padding: 4px 10px;
+  border-radius: 8px;
+  font-size: 12px; font-weight: 600; line-height: 1.4;
+  white-space: nowrap; cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+.wb-cmp-act .btn:hover { background: var(--surface-6); border-color: var(--accent); color: var(--accent); }
+.wb-cmp-act .btn:active { transform: translateY(1px); }
+/* Destructive on purpose: removing someone from the comparison. */
+.wb-cmp-act .btn[data-act=unpick] { color: var(--muted); }
+.wb-cmp-act .btn[data-act=unpick]:hover {
+  color: var(--red); border-color: rgba(var(--red-rgb), 0.6);
+  background: rgba(var(--red-rgb), 0.10);
+}
 /* GH-53: the self-explaining guide at the top of Resources. */
 .wb-guide { padding: 10px 14px; margin-bottom: 12px; }
 .wb-guide > summary { cursor: pointer; font-size: 13px; list-style: none; }

@@ -293,18 +293,21 @@ function showApp() {
   $("#subLine").textContent = isAdmin
     ? (names ? names : "No permissions assigned")
     : `Weekly entry · My Projects · Actuals — signed in as ${esc(state.me.username)}`;
-  // PMs land on Actuals. Admins land on their first permitted tab so they
-  // never see a view they lack permission for.
+  // PMs land on MY PROJECTS (the workbench): their projects, their team and the
+  // load rail are the screen they actually work in. Rijoy, 2026-10-02: "the
+  // default page the PM login should be my projects".
+  //
+  // History: this pointed at "week" because the week sheet is the recurring
+  // data-entry job. Note there were TWO contradictory comments left here from
+  // earlier edits — both claiming to be the landing rule — which is exactly how
+  // a default drifts without anyone noticing. Keep ONE statement of it.
+  // Actuals/Week remain one click away in the nav.
   if (!isAdmin) {
-    // A PM lands on the WORKBENCH (their projects + the load rail), which is the
-    // screen they live in. Actuals stays reachable from the nav.
-    // A PM lands on the WEEK SHEET: entering the week's hours is the recurring
-    // job, and the workbench is one click away.
-    state.view = "week";
-    $$(".tab").forEach((x) => x.classList.toggle("active", x.dataset.tab === "week"));
+    state.view = "workbench";
+    $$(".tab").forEach((x) => x.classList.toggle("active", x.dataset.tab === "workbench"));
     $$(".view").forEach((v) => v.classList.add("hidden"));
-    $("#weekView").classList.remove("hidden");
-    loadWeekSheet();
+    $("#workbenchView").classList.remove("hidden");
+    loadWorkbench();
   } else {
     // Admins land on the first tab they actually have permission for. The
     // markup's default active tab is Dashboard, which an admin with no
