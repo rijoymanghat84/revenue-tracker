@@ -360,8 +360,10 @@
              with the search box pushed to the far right of the toolbar. The note
              is now on its own line and the search starts at the left edge. -->
         <div class="toolbar glass wb-load-bar">
-          <div class="sheet-note"><span class="dot on"></span><b>Load across all projects</b> — booked % of each person's weekly capacity. Red = over 100%; those people cannot take new work.</div>
+          <div class="sheet-note"><span class="dot on"></span><b>Find a person</b> — filter by title, ranked by who is free for <span id="wbLoadScope" class="wb-scope">the rest of the year</span>. Red = over 100%; those people cannot take new work.</div>
           <div class="wb-load-search">
+            <label class="muted-note wb-load-lbl">Title</label>
+            <select id="wbLoadTitle" class="cur-sel" title="Show only people who hold this title"><option value="">— all titles —</option></select>
             <input type="search" id="wbLoadFilter" placeholder="Find a person…" class="search">
           </div>
         </div>
