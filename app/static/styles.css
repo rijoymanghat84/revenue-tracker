@@ -1472,7 +1472,32 @@ td.week .a-inp { text-align: center; }
 .wb-legend .sw.free { background: var(--surface-4); border: 1px solid var(--border); }
 
 /* load rail */
-.wb-loadlist { display: flex; flex-direction: column; gap: 10px; max-height: 420px; overflow-y: auto; padding: 2px; }
+/* GH-53 follow-up: the list used to be capped at a fixed 420px, so a
+   full-height screen showed three cards and left a large dead space below
+   (Rijoy: "I can only [see] 3 resources and there is a lot of space at the
+   bottom"). It now grows with the viewport, minus the chrome actually above it
+   on this tab: the ~130px app shell (padding, topbar, page title) + the
+   how-it-works strip + the filter bar. `dvh` rather than `vh` so mobile
+   browser chrome collapsing doesn't leave it short.
+   min-height keeps it usable on a very short window instead of squashing to
+   nothing and hiding the content behind a 60px scroller. */
+.wb-loadlist {
+  display: flex; flex-direction: column; gap: 10px;
+  height: calc(100dvh - 250px);
+  min-height: 300px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 2px;
+}
+/* Very short windows: the 250px of chrome is proportionally too much, so give
+   back as much as fits without dropping below a workable list. */
+@media (max-height: 700px) {
+  .wb-loadlist { height: calc(100dvh - 200px); }
+}
+/* On a narrow screen the guide + filters wrap onto more lines, so reserve more. */
+@media (max-width: 900px) {
+  .wb-loadlist { height: calc(100dvh - 300px); }
+}
 .wb-load { border: 1px solid var(--border); border-radius: 11px; padding: 11px 13px; background: var(--surface-1); }
 .wb-load .h { display: flex; align-items: center; gap: 10px; justify-content: space-between; margin-bottom: 7px; flex-wrap: wrap; }
 .wb-load .h b { font-size: 13px; }
