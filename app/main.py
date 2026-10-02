@@ -3759,12 +3759,18 @@ class JoinBody(BaseModel):
 
 
 class PersonBody(BaseModel):
-    name: str
-    country: str | None = ""
-    home_title: str | None = ""
+    # Every field defaults to None, NOT "", so "omitted" is distinguishable from
+    # "explicitly cleared" (GH-33). With `country: str | None = ""` a request
+    # carrying only {active} arrived with country="" and home_title="" — the
+    # endpoint then wrote those blanks, so toggling someone's status silently
+    # ERASED their home title (caught by test: 'QA' -> ''). `None` = not
+    # supplied (keep stored), `""` = clear it.
+    name: str | None = None
+    country: str | None = None
+    home_title: str | None = None
     capacity: float | None = None
-    active: int | None = 1
-    notes: str | None = ""
+    active: int | None = None
+    notes: str | None = None
     titles: list[str] | None = None
 
 
@@ -4048,12 +4054,38 @@ def api_person_update(pid: int, body: PersonBody, request: Request):
         if not row:
             raise HTTPException(404, "Person not found")
         name = " ".join((body.name or "").split()) or row["name"]
+        # PARTIAL UPDATE (GH-33). Every field falls back to the STORED value when
+        # the caller omits it — `None` means "not supplied", while an explicit ""
+        # means "clear it". This matters because the People list's Active toggle
+        # sends only {active}, and the previous code wrote `body.country or ""`
+        # for absent keys, which silently BLANKED home_title on every toggle
+        # (caught by test: 'QA' -> '').
+        def _keep(v, stored):
+            return stored if v is None else v
+
+        home_title = _keep(body.home_title, row["home_title"] or "")
+        canonical = home_title.strip()
+        if canonical:
+            # Match the rate card case/space-insensitively and store the CARD's
+            # spelling, so a person is never pinned to a title nobody can price.
+            try:
+                match = conn.execute(
+                    "SELECT title FROM pricing WHERE TRIM(LOWER(title))=?",
+                    (" ".join(canonical.split()).lower(),)).fetchone()
+            except sqlite3.Error:
+                match = None
+            if match:
+                canonical = match["title"]
+
         conn.execute(
             "UPDATE people SET name=?, country=?, home_title=?, capacity=?, active=?, notes=? WHERE id=?",
-            (name, (body.country or "").strip(), (body.home_title or "").strip(),
+            (name,
+             _keep(body.country, row["country"] or "").strip(),
+             canonical.strip(),
              float(body.capacity if body.capacity is not None else row["capacity"] or CAP_WEEK_HOURS),
              int(body.active if body.active is not None else row["active"]),
-             (body.notes or "").strip(), pid),
+             _keep(body.notes, row["notes"] or "").strip(),
+             pid),
         )
         if body.titles is not None:
             keep = [t.strip() for t in body.titles if (t or "").strip()]

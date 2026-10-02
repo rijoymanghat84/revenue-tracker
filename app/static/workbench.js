@@ -750,9 +750,15 @@ async function loadPeople() {
 function renderPeople() {
   const head = $("#peopleHead"), body = $("#peopleBody");
   if (!head || !body) return;
+  // GH-35: Active/Inactive is the FIRST column (Rijoy: "the active or inactive
+  // flag ... should be the first flag to make sure that the resource is
+  // available — if inactive then they are no longer in the company"). It is a
+  // button, so the status is changed from where it is read instead of two clicks
+  // away inside Edit.
   head.innerHTML = `<tr>
+    <th title="Is this person still with the company? Inactive = left, so they are excluded from resourcing.">Active</th>
     <th>Person</th><th>Home title</th><th>Approved titles</th>
-    <th class="num">Capacity</th><th class="num">Projects</th><th>Load</th><th>Status</th><th></th>
+    <th class="num">Capacity</th><th class="num">Projects</th><th>Load</th><th></th>
   </tr>`;
   if (!WB.people.length) {
     body.innerHTML = `<tr><td colspan="8"><div class="wb-empty">No people yet.</div></td></tr>`;
@@ -762,11 +768,13 @@ function renderPeople() {
   body.innerHTML = sorted.map((p) => {
     const l = WB.load.find((x) => x.id === p.id);
     const peak = l ? l.peak_pct : null;
-    const status = p.active === 0 ? `<span class="pill">inactive</span>`
-      : peak == null ? `<span class="pill">—</span>`
-      : peak > 100 ? `<span class="pill wb-pill-over">over ${peak}%</span>`
-      : peak >= 80 ? `<span class="pill wb-pill-ok">${peak}%</span>`
-      : `<span class="pill wb-pill-warn">${peak}%</span>`;
+    const inactive = p.active === 0;
+    // The status cell is a BUTTON: flipping someone to Inactive (they have left)
+    // or back is a one-click judgement made from the list you are reading.
+    const actCell = `<button class="btn mini p-act${inactive ? " off" : " on"}"
+        data-act="toggle-active"
+        title="${inactive ? "Inactive — they have left the company. Click to mark active." : "Active — click to mark inactive (left the company)"}"
+        aria-pressed="${inactive ? "false" : "true"}">${inactive ? "Inactive" : "Active"}</button>`;
     const titles = (p.titles || []).length
       ? p.titles.map((t) => esc(t)).join("<br>")
       : `<span class="muted-note">none</span>`;
@@ -778,14 +786,14 @@ function renderPeople() {
     const ownerFlag = myOrphans.length
       ? `<div class="noowner-chip" title="No PM owns this project">⚠ ${esc(myOrphans.map((m) => m.project).join(", "))}</div>`
       : "";
-    return `<tr data-pid="${p.id}">
+    return `<tr data-pid="${p.id}"${inactive ? ' class="p-inactive-row"' : ""}>
+      <td class="p-act-cell">${actCell}</td>
       <td><b>${esc(p.name)}</b>${p.country ? `<div class="muted-note">${esc(p.country)}</div>` : ""}${ownerFlag}</td>
       <td>${esc(p.home_title || "—")}</td>
       <td>${titles}</td>
       <td class="num">${fmtH(p.capacity)}</td>
       <td class="num">${p.project_count}</td>
       <td>${peak == null ? "—" : loadBarHTML(peak)}</td>
-      <td>${status}</td>
       <td class="wb-rowactions">
         <button class="btn mini" data-act="edit">Edit</button>
         <button class="btn mini" data-act="merge">Merge</button>
@@ -799,6 +807,19 @@ function renderPeople() {
     tr.querySelectorAll("button[data-act]").forEach((b) => b.addEventListener("click", async () => {
       if (b.dataset.act === "edit") return openPersonModal(p);
       if (b.dataset.act === "merge") return openMergeModal(p);
+      if (b.dataset.act === "toggle-active") {
+        const next = p.active === 0 ? 1 : 0;
+        b.disabled = true;
+        try {
+          // Send only the status: api_person_update keeps every other field when
+          // it is omitted, so a toggle can never blank a name or capacity.
+          await api(`/api/people/${pid}`, { method: "PUT", body: JSON.stringify({ active: next }) });
+          toast(`${p.name} is now ${next ? "active" : "inactive (left the company)"}`);
+          loadActivity();
+          await loadPeople(); await refreshLoadOnly();
+        } catch (e) { toast(e.message || "Could not change status", true); b.disabled = false; }
+        return;
+      }
       // Names the person AND what is lost. A bare "Delete X?" hid the fact that
       // their planned + actual hours go too.
       const lost = (p.assignments || []).map((a) => `${a.client} · ${a.project}`).join(", ") || "no assignments";
