@@ -1481,13 +1481,23 @@ td.week .a-inp { text-align: center; }
  * being rendered at grid density. It now gets its own rules: real padding,
  * left-aligned text, a hierarchy between name and title, and right-aligned
  * numbers so figures line up down the column instead of floating. */
-#wbTeamTable { width: 100%; table-layout: auto; }
-/* The load cell must never force the table wider than its pane. Measured before
-   this: table 1067px inside a 715px container, so Load and Status were cut off
-   and had to be scrolled to. The bar may shrink; the label stays readable. */
-#wbTeamTable .wb-loadcell { white-space: nowrap; }
-#wbTeamTable .wb-loadcell .bar { min-width: 54px; max-width: 150px; }
-#wbTeamTable th:last-child, #wbTeamTable td:last-child { width: 1%; }
+/* `table-layout: fixed` so the table can NEVER exceed its pane.
+   Measured twice before this: 1067px then still 958px inside a 715px container,
+   because `auto` lets every column size to its content and the sum won. Fixed
+   layout honours the widths below instead, so the columns share the space they
+   actually have — no sideways scroll to reach the load column, which is half the
+   point of this screen. Content wraps rather than pushing the table wider. */
+#wbTeamTable { width: 100%; max-width: 100%; table-layout: fixed; }
+#wbTeamTable col.c-person { width: 19%; }
+#wbTeamTable col.c-title { width: 18%; }
+#wbTeamTable col.c-alloc { width: 8%; }
+#wbTeamTable col.c-period { width: 17%; }
+#wbTeamTable col.c-hrs { width: 8%; }
+#wbTeamTable col.c-load { width: 20%; }
+#wbTeamTable col.c-act { width: 10%; }
+#wbTeamTable .wb-loadcell { white-space: normal; }
+#wbTeamTable .wb-loadcell .bar { min-width: 46px; width: 54px; max-width: 54px; }
+#wbTeamTable .wb-role, #wbTeamTable .wb-person b { overflow-wrap: anywhere; }
 /* `.bar` / `.bar i` had NO CSS AT ALL (found 2026-10-02). loadBarHTML() emits
    <div class="bar"><i class="hot|warn|booked">, and both tables that use it were
    rendering a zero-height, background-less element — so the Load column showed a
