@@ -303,12 +303,18 @@ function showApp() {
   // a default drifts without anyone noticing. Keep ONE statement of it.
   // Actuals/Week remain one click away in the nav.
   if (!isAdmin) {
-    state.view = "workbench";
-    $$(".tab").forEach((x) => x.classList.toggle("active", x.dataset.tab === "workbench"));
-    $$(".view").forEach((v) => v.classList.add("hidden"));
-    $("#workbenchView").classList.remove("hidden");
-    loadWorkbench();
-  } else {
+    // Route through switchView so the top-strip title, tab highlight and view
+    // visibility all come from the ONE place that owns them (renderView).
+    // Setting state.view by hand left the title reading "Dashboard" above the
+    // workbench — the tab was right and the heading was lying.
+    // PMs land on MY PROJECTS: the owner, 2026-10-02 — "the default page the PM login
+    // should be my projects". (This previously opened the Week sheet; keep ONE
+    // statement of the rule, since stacked contradictory comments here are how
+    // the default drifted unnoticed before.)
+    switchView("workbench");
+    return;
+  }
+  {
     // Admins land on the first tab they actually have permission for. The
     // markup's default active tab is Dashboard, which an admin with no
     // `dashboard` permission cannot see — in that case fall through to the
