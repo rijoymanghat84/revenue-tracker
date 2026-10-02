@@ -262,6 +262,15 @@ async function wkPreFlight(row, notes) {
     return true;
   }
 
+  /* ---- ON TARGET: there is nothing to ask ---- */
+  // `d === 0` used to fall THROUGH into the under-delivery block below, because
+  // that block was guarded only by the overage `return` above — so entering
+  // exactly the planned hours asked "Why the shortfall?" and printed
+  // "Planned 40h, actual 40h (0h under)". Rijoy's report: "it asks why there is
+  // a short fall. This is been asked even if the hours are not less."
+  // A week that matches its plan is not a shortfall and never was.
+  if (d === 0) return true;
+
   /* ---- UNDER-DELIVERY: reason, then does the client still pay ---- */
   const note = note0;
   const w = w0;
@@ -277,18 +286,18 @@ async function wkPreFlight(row, notes) {
   }
   if (note.under_billed === 0 || note.under_billed === 1) return true;  // already answered
   const ans = await askOt(
-    `${esc(row.name)} — ${wkWeekLabel(WK.week)}<br>${Math.abs(d)}h under plan.<br><br>Will the client still be billed the <b>planned</b> hours?`,
+    `${esc(row.name)} — ${wkWeekLabel(w)}<br>${Math.abs(d)}h under plan.<br><br>Will the client still be billed the <b>planned</b> hours?`,
     { title: "Under-delivery — billing", yesLabel: "Yes — billed in full", noLabel: "No — revenue drops" });
   if (ans === "cancel") return false;
   note.under_billed = (ans === "yes") ? 0 : 1;
   if (note.under_billed === 1) {
     const why = await askOt(
-      `${esc(row.name)} — ${wkWeekLabel(WK.week)}<br>Marked <b>not billed</b> — the shortfall becomes lost revenue.<br><br>Note (optional).`,
+      `${esc(row.name)} — ${wkWeekLabel(w)}<br>Marked <b>not billed</b> — the shortfall becomes lost revenue.<br><br>Note (optional).`,
       { title: "Not billed", input: true, inputPlaceholder: "Optional note", buttons: false, allowCancel: true });
     if (why === "cancel") return false;
     if (String(why || "").trim()) note.comment = String(why).trim();
   }
-  notes[WK.week] = note;
+  notes[w] = note;
   return true;
 }
 
