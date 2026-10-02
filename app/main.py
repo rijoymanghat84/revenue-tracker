@@ -4816,10 +4816,26 @@ def _snap_quarter(pct: float) -> float:
     """Floor a percentage onto the 25% allocation grid (0/25/50/75/100).
 
     Floor, not round: the grid is a CEILING on how much someone owns, so 112%
-    must read as 100% (fully booked) and never 125% (over-allocated).
+    must read as 100% (fully booked) and never 125% (over-allocated). Used where
+    being conservative matters — benching must never claim more free time than
+    the person actually has.
     """
     p = max(0.0, min(100.0, float(pct or 0.0)))
     return float(int(p / 25.0) * 25)
+
+
+def _pct_from_peak(peak_pct: float) -> float:
+    """Turn a peak booked % into the % to SHOW for a resource, on the 25% grid.
+
+    Nearest quarter, with a floor of 25% for any positive plan. The floor matters:
+    flooring instead would render a person planned 4h/week (10%) as **0%**, which
+    reads as "not allocated at all" — the exact "comes up empty" complaint this
+    exists to fix. A row with NO planned hours still derives 0 (genuinely empty).
+    """
+    p = max(0.0, min(100.0, float(peak_pct or 0.0)))
+    if p <= 0:
+        return 0.0
+    return float(max(25.0, min(100.0, round(p / 25.0) * 25)))
 
 
 def _derived_allocation(res: dict) -> float:
@@ -4831,7 +4847,7 @@ def _derived_allocation(res: dict) -> float:
     stored = res.get("allocation_pct")
     if stored is not None and float(stored) > 0:
         return float(stored)
-    return _snap_quarter(_allocation_peak(res))
+    return _pct_from_peak(_allocation_peak(res))
 
 
 def _load_plan_stats(conn: sqlite3.Connection, rids: list[int]) -> dict[int, dict]:
