@@ -34,6 +34,7 @@ let WB = {
   loadFilter: "",
   loadTitle: "",         // GH-50: title selected in the Find-a-person dropdown
   loadWindow: "auto",    // GH-51: window selector — auto | 12w | 26w | year
+  compare: [],           // GH-52: person ids ticked for comparison
 };
 const wbKey = (cl, pr) => `${cl}||${pr}`;
 
@@ -79,6 +80,7 @@ async function renderResources() {
     try { await loadWorkbench(); } catch (e) { /* rail renders its own empty state */ }
   }
   renderWbLoad();
+  renderWbCompare();
 }
 
 /* ---------------- project progress chart (GH-49) ----------------
@@ -604,13 +606,144 @@ function wbLoadCard(x, r, opts) {
     : "";
   return `<div class="wb-load" data-pid="${x.id}">
       <div class="h">
-        <div><b>${esc(x.name)}</b> <span class="sub">${esc(x.home_title || "—")}</span></div>
+        <label class="wb-pick" title="Add ${esc(x.name)} to the comparison">
+          <input type="checkbox" data-act="pick" data-pid="${x.id}"${WB.compare.includes(x.id) ? " checked" : ""}>
+        </label>
+        <div class="wb-id"><b>${esc(x.name)}</b> <span class="sub">${esc(x.home_title || "—")}</span></div>
         <div>${pill}${partTime} <span class="sub">free ${r.freeWeeks}/${r.weeks} wks</span> <button class="btn mini" data-act="view">Assign…</button></div>
       </div>
       <div class="sub">${projs}</div>
       ${why}
       ${weekGridHTML(x)}
     </div>`;
+}
+
+/* ---------------------------------------------------------------------------
+   GH-52 — compare selected resources.
+
+   Rijoy: "there should be a way to select multiple resource to compare and see
+   their availability and while doing that we should know where they are
+   currently allocated for which project".
+
+   The allocation shown here is derived from the per-week `detail` array the PM
+   already receives (the same numbers the hard block uses), NOT from
+   `resources.allocation_pct` — that column is NULL on the 62 of 66 legacy rows,
+   so reading it would show "—" for almost everyone. Collapsing detail across the
+   window gives the real share per project AND the weeks it spans.
+   Money never enters this payload (CHARTER clause 1); the admin-only rate column
+   is fetched separately and only when /api/state is available.
+   --------------------------------------------------------------------------- */
+function wbAllocations(x, win) {
+  const by = {};
+  win.idx.forEach((i) => {
+    ((x.detail || [])[i] || []).forEach((d) => {
+      const key = (d.label || `${d.client}/${d.project}`);
+      const a = by[key] || (by[key] = { label: key, client: d.client, project: d.project,
+                                        resourceId: d.resource_id, peak: 0, weeks: 0,
+                                        first: i, last: i, hours: 0 });
+      // peak% = the most of this person this project ever takes in the window;
+      // weeks = how many weeks it touches. Together they describe the booking
+      // honestly even when it varies week to week (Deepak Kumar: 100% on
+      // FOP/Support, then a 50/50 split, then 100% on Print Mail — a phased
+      // handover, which only the week span shows).
+      a.peak = Math.max(a.peak, d.pct || 0);
+      a.hours += d.hours || 0;
+      a.weeks += 1;
+      a.first = Math.min(a.first, i);
+      a.last = Math.max(a.last, i);
+    });
+  });
+  const list = Object.values(by).sort((a, b) => b.peak - a.peak);
+  // Over-allocation: a person whose projects SUM past 100% in some week. It
+  // cannot be created through the UI (the 100% hard block refuses it) but it
+  // exists in imported data — measured live 2026-10-02, Ritik Kango is at 125%
+  // (TSG/Quadient 100% + Vision Direct/Quadient 25%). A staffing view that hides
+  // that is a staffing view that lies, so it is flagged on the row.
+  let worst = 0, worstWeek = "";
+  win.idx.forEach((i) => {
+    const tot = ((x.detail || [])[i] || []).reduce((s, d) => s + (d.pct || 0), 0);
+    if (tot > worst) { worst = tot; worstWeek = (WB.weekLabels || [])[i] || ""; }
+  });
+  list.over = worst > 100.5 ? { pct: Math.round(worst), week: worstWeek } : null;
+  return list;
+}
+
+/* Rate lookup for ADMINS only. state.resources is admin-gated; PMs get nothing
+   here and the column is not rendered for them. */
+function wbRateFor(resourceId) {
+  const res = (typeof state !== "undefined" && state.resources) || [];
+  const r = res.find((q) => q.id === resourceId);
+  return r ? { rate: r.rate, offshore: r.offshore_rate } : null;
+}
+
+function renderWbCompare() {
+  const box = $("#wbCompare");
+  if (!box) return;
+  const win = wbLoadWindow();
+  const ids = WB.compare || [];
+  if (!ids.length) {
+    box.innerHTML = `<div class="muted-note" style="padding:10px 2px">Tick <b>Compare</b> on any resource below to line them up side by side.</div>`;
+    return;
+  }
+  const isAdmin = !!(state.me && state.me.role === "admin" && (state.resources || []).length);
+  const people = ids.map((id) => WB.load.find((x) => x.id === id)).filter(Boolean);
+
+  const head = `<tr>
+    <th>Resource</th><th>Title</th><th>% free</th><th>Full slot?</th>
+    <th>Booked in window</th><th>Current allocations (project · % of capacity)</th>
+    ${isAdmin ? "<th>Rate</th><th>Offshore</th>" : ""}
+    <th></th></tr>`;
+  const rows = people.map((x) => {
+    const r = wbAvailability(x, win);
+    const allocs = wbAllocations(x, win);
+    const allocHtml = (allocs.length
+      ? allocs.map((a) => {
+          const span = win.idx.length > 1
+            ? `${(WB.weekLabels[a.first] || "")}–${(WB.weekLabels[a.last] || "")}` : "";
+          return `<div class="wb-alloc"><b>${esc(a.label)}</b> · ${a.peak}% `
+            + `<span class="muted-note">(${a.weeks} wk${a.weeks === 1 ? "" : "s"}${span ? ", " + esc(span) : ""}, ${Math.round(a.hours)}h)</span></div>`;
+        }).join("")
+      : `<span class="wb-note">no project work booked</span>`)
+      + (allocs.over
+          ? `<div class="wb-why">Over-allocated ${allocs.over.pct}% in ${esc(allocs.over.week)} — the projects above add up past a full week</div>`
+          : "");
+    const rates = isAdmin ? (() => {
+      const any = allocs.map((a) => wbRateFor(a.resourceId)).find(Boolean);
+      return any ? `<td class="num">${any.rate ?? "—"}</td><td class="num">${any.offshore ?? "—"}</td>`
+                 : `<td class="num">—</td><td class="num">—</td>`;
+    })() : "";
+    const slot = r.fullSlot > 0
+      ? `<span class="pill wb-pill-ok">yes</span>`
+      : (r.free > 0 ? `<span class="pill wb-pill-warn">part-time only</span>`
+                    : `<span class="pill wb-pill-over">no</span>`);
+    const cls = r.free >= 75 ? "wb-pill-ok" : r.free >= 50 ? "wb-pill-warn" : "wb-pill-over";
+    return `<tr>
+      <td><b>${esc(x.name)}</b></td>
+      <td>${esc(x.home_title || "—")}</td>
+      <td class="num"><span class="pill ${cls}">${r.free}%</span></td>
+      <td>${slot}</td>
+      <td class="num">${r.avg}% avg <span class="muted-note">/ ${r.peak}% peak</span></td>
+      <td>${allocHtml}</td>
+      ${rates}
+      <td><button class="btn mini" data-act="unpick" data-pid="${x.id}" title="Remove from comparison">✕</button></td>
+    </tr>`;
+  }).join("");
+
+  box.innerHTML = `
+    <div class="wb-cmp-head">
+      <b>Comparing ${people.length} resource${people.length === 1 ? "" : "s"}</b>
+      <span class="muted-note">over ${esc(win.label)}</span>
+      <button class="btn mini" id="wbCmpClear">Clear</button>
+    </div>
+    <div class="table-wrap glass"><table class="wb-cmp">${head}${rows}</table></div>
+    <div class="muted-note" style="margin-top:6px">% free = 100 − average booked% across the window. “Full slot?” = is there any week with a full 100% free.</div>`;
+
+  $$("#wbCompare button[data-act=unpick]").forEach((b) => b.addEventListener("click", () => {
+    WB.compare = WB.compare.filter((i) => i !== +b.dataset.pid);
+    renderWbLoad(); renderWbCompare();
+  }));
+  const clr = $("#wbCmpClear");
+  if (clr) clr.addEventListener("click", () => { WB.compare = []; renderWbLoad(); renderWbCompare(); });
 }
 
 /* The Resources tab's own bindings. Kept separate from bindWorkbench() so the
@@ -702,6 +835,14 @@ function renderWbLoad() {
   $$("#wbLoad .wb-load button[data-act=view]").forEach((b) => b.addEventListener("click", () => {
     const pid = +b.closest(".wb-load").dataset.pid;
     openAssignModal(wbSel(), pid, null);
+  }));
+  // GH-52: the compare checkbox. Kept out of the Assign path on purpose — ticking
+  // a box must not open a dialog.
+  $$("#wbLoad input[data-act=pick]").forEach((cb) => cb.addEventListener("change", () => {
+    const pid = +cb.dataset.pid;
+    if (cb.checked) { if (!WB.compare.includes(pid)) WB.compare.push(pid); }
+    else WB.compare = WB.compare.filter((i) => i !== pid);
+    renderWbCompare();
   }));
   // Any week cell opens the detail popup for that person+week.
   $$("#wbLoad .wb-wk").forEach((el) => el.addEventListener("click", () => {
