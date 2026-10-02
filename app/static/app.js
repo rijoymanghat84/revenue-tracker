@@ -3145,7 +3145,7 @@ function renderDashboard() {
       const rowCls = g.archived ? "dash-arch-row" : (g.empty ? "dash-empty-row" : "");
       rows += `<tr${rowCls ? ` class="${rowCls}"` : ""}>
         <td>${esc(g.country)}</td><td>${esc(g.client)}</td>
-        <td><button type="button" class="proj-link" data-pclient="${esc(g.client)}" data-pproject="${esc(g.project === "—" ? "" : g.project)}"
+        <td><button type="button" class="proj-link" data-pclient="${esc(g.client)}" data-pproject="${esc(g.project === "—" ? "" : g.project)}" data-ppmpm="${esc(g.pm || "")}"
              title="Open ${esc(g.client)} · ${esc(g.project)} in the My Projects screen its PM sees">${esc(g.project)}</button>${emptyTag}${archTag}</td>
         <td class="dash-pm">${g.pm ? esc(g.pm) : `<span class="muted-note">no PM</span>`}</td><td>${resCell}</td>
         <td>${money(g.revenue, cur)}</td><td>${money(g.expense, cur)}</td>
@@ -3189,7 +3189,7 @@ function bindDashProjectLinks() {
         toast("My Projects is unavailable — workbench.js did not load", true);
         return;
       }
-      openProjectWorkbench(b.dataset.pclient || "", b.dataset.pproject || "");
+      openProjectWorkbench(b.dataset.pclient || "", b.dataset.pproject || "", b.dataset.ppmpm || "");
     });
   });
 }

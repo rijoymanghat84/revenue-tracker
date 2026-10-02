@@ -61,8 +61,8 @@ let WB_VIEW_AS = null;      // {pm, client, project} while an admin is looking
 function wbReadOnly() { return !!WB_VIEW_AS; }
 
 /* Called by the Dashboard project button (see renderDashboard in app.js). */
-function openProjectWorkbench(client, project) {
-  WB_VIEW_AS = { pm: "", client: client || "", project: project || "" };
+function openProjectWorkbench(client, project, pm) {
+  WB_VIEW_AS = { pm: (pm || "").trim(), client: client || "", project: project || "" };
   // Drop the cached list so loadWorkbench cannot skip the scope fetch, and let
   // loadWorkbench decide the selection (it knows what the PM actually owns).
   WB.projects = [];
@@ -86,6 +86,20 @@ function wbExitViewAs() {
 /* ---------------- load the workbench ---------------- */
 async function loadWorkbench() {
   const asPm = WB_VIEW_AS ? (WB_VIEW_AS.pm || "") : "";
+  /* GUARD (hit live 2026-10-02). In view-as mode with NO PM there is nobody's
+     screen to show, and the tempting fallback — calling /api/my-projects with no
+     `as_pm` — is WRONG: an admin's unscoped call returns EVERY project, so the
+     read-only screen would list all 16 projects under a heading saying they
+     belong to a PM who does not exist. That is precisely the misleading state
+     this mode exists to prevent, and it is what shipped in the first cut (found
+     by clicking through: banner read "(no PM assigned)" above 16 projects).
+     Show an honest empty state instead. */
+  if (WB_VIEW_AS && !asPm) {
+    WB.projects = [];
+    WB.selKey = null;
+    renderWorkbench();
+    return;
+  }
   const projUrl = "/api/my-projects" + (asPm ? `?as_pm=${encodeURIComponent(asPm)}` : "");
   const [proj, people, load] = await Promise.all([
     api(projUrl), api("/api/people"), api("/api/pm/load"),
