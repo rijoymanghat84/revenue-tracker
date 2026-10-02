@@ -2023,26 +2023,24 @@ def api_project_delete(pid: int, request: Request, force: bool = False,
                        purge: bool = False):
     """Remove a project — as an ARCHIVE by default, permanently only on demand.
 
-    GH-38 (the owner): "if PM delete the project, then it will go away from the PMs
-    view, it should still be there for admin with a red strip on it so that if PM
-    delete by accident the admin can revert — reactivate will show it back for the
-    PM and delete will delete it from the app permanently".
+    GH-38/GH-39 (the owner): "if PM delete the project, then it will go away from the
+    PMs view, it should still be there for admin with a red strip on it so that if
+    PM delete by accident the admin can revert — reactivate will show it back for
+    the PM and delete will delete it from the app permanently." And then, on the
+    admin side: "if a admin delete the project that also will go to the same
+    process, it will show up on the dashboard with red tint and get the options to
+    reactivate or delete."
 
-    So there are two different acts, and who may do which depends on the role:
+    So there is ONE recoverable delete, for everyone:
 
-      * **A PM deleting their own project ARCHIVES it.** Nothing is destroyed:
-        the row, its team, its planned and actual hours all stay. The project
-        disappears from the PM's workbench and from every total, and the admin
-        keeps it visible under a red "deleted by <pm>" strip with Reactivate and
-        Delete available. This is the whole point — a PM mistake is recoverable.
-      * **An admin deleting** does it for real (purge). The admin already has
-        Reactivate for the recoverable case, so a delete from the admin side is
-        meant to be final.
-
-    Purging clears children → riders → PM assignment → the definition, in one
-    transaction. A project that still has people on it is REFUSED unless
-    `force=true`, and the refusal names exactly what would be lost — deleting a
-    staffed project silently discards real bookings.
+      * **Any delete with no `purge` ARCHIVES.** Nothing is destroyed: the row,
+        its team, its planned hours and its actuals all stay. The project
+        disappears from the PM's workbench and from every live total, and the
+        admin keeps it under a red strip with Reactivate and Delete. An admin's
+        mistake is now as recoverable as a PM's.
+      * **`purge=true` deletes for real.** That is what the Delete button on an
+        already-archived row does — the second, deliberate step. It is also why
+        archiving never has to warn about losing hours: nothing is lost yet.
     """
     user = _may_manage_projects(request)
     conn = get_db()
@@ -2052,7 +2050,7 @@ def api_project_delete(pid: int, request: Request, force: bool = False,
             raise HTTPException(404, "project not found")
         client, project = (row["client"] or "").strip(), (row["project"] or "").strip()
         _pm_may_touch(conn, user, client, project)
-        is_pm = user.get("r") == "pm"
+        actor = user.get("u") or ""
 
         # `TRIM(UPPER(...))` to match how the rest of the app keys projects — a
         # case/space difference would otherwise leave orphans behind again.
@@ -2079,18 +2077,18 @@ def api_project_delete(pid: int, request: Request, force: bool = False,
             f"TRIM(UPPER(up.client))=TRIM(UPPER(?)) AND TRIM(UPPER(up.project))=TRIM(UPPER(?))",
             (client, project)).fetchone()[0]
 
-        # ---- a PM delete is an ARCHIVE -----------------------------------
-        if is_pm and not purge:
+        # ---- a recoverable delete: ANY role, unless a purge was asked for ----
+        if not purge:
             if (row["archived_at"] or ""):
                 return {"ok": True, "archived": True, "already": True,
                         "deleted": {"client": client, "project": project,
                                     "people": n_people, "planned_weeks": n_weeks,
                                     "actual_weeks": n_actual, "pm_assignments": n_assign}}
             conn.execute("UPDATE projects SET archived_at=datetime('now'), archived_by=? WHERE id=?",
-                         (user.get("u") or "", pid))
+                         (actor, pid))
             conn.commit()
             _log_activity(conn, request, "project.archive", target=f"{client} · {project}",
-                          details=(f"deleted by PM {user.get('u')} — archived, not purged: "
+                          details=(f"deleted by {actor} — archived, not purged: "
                                    f"{n_people} assignment(s) and their {n_weeks} planned / "
                                    f"{n_actual} actual week(s) are recoverable"))
             return {"ok": True, "archived": True,

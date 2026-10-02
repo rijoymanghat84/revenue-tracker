@@ -298,16 +298,48 @@ body {
   border: 1px solid rgba(255, 90, 90, 0.5);
   border-radius: 999px; padding: 1px 7px; margin-left: 6px; white-space: nowrap;
 }
-.dash-arch-actions { white-space: nowrap; display: flex; gap: 5px; justify-content: flex-end; }
-.dash-reactivate { color: var(--green); border-color: rgba(60, 200, 120, 0.45); }
-.dash-reactivate:hover { background: rgba(60, 200, 120, 0.14); }
-/* GH-37: the Dashboard delete column. Quiet until hovered — it must not compete
-   with the numbers, but it has to be findable when wanted. */
-#dashTable th:last-child, #dashTable td.dash-actions { width: 46px; text-align: right; }
-.dash-arch-actions .dash-del { opacity: 1; }   /* the choice must be obvious here */
-.dash-del { opacity: 0.35; padding: 3px 7px; line-height: 1; }
+/* GH-37/GH-39: the Dashboard action column.
+
+   GH-37 gave this cell `width: 46px` for a single 🗑 icon. GH-38 then put TWO
+   labelled buttons in it, and the result looked broken: 168px of buttons in a
+   46px cell, squeezed to 14px tall, with `display:flex` on a `<td>` (which kills
+   table-cell layout).
+
+   NOTE ON SPECIFICITY: every rule below is scoped with `#dashTable` on purpose.
+   This block sits BEFORE the base `.btn` rules in the file, and `.btn` also sets
+   `color`/`padding` at the same (0,1,0) specificity — so a plain `.dash-reactivate`
+   lost to `.btn` and the buttons rendered in the default text colour with the
+   Delete icon still at 35% opacity. The id prefix (1,1,0) settles it regardless of
+   order. */
+#dashTable td.dash-actions, #dashTable th:last-child { text-align: right; white-space: nowrap; }
+#dashTable td.dash-actions { width: 46px; }
+#dashTable td.dash-arch-actions { width: 1%; padding-right: 12px; }
+#dashTable .dash-arch-actions .btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  vertical-align: middle; white-space: nowrap; line-height: 1.2;
+  padding: 5px 12px; font-size: 12px; border-radius: 8px;
+}
+#dashTable .dash-arch-actions .btn + .btn { margin-left: 6px; }
+
+#dashTable .dash-reactivate {
+  color: var(--green); border-color: rgba(60, 200, 120, 0.55);
+  background: rgba(60, 200, 120, 0.12); opacity: 1;
+}
+#dashTable .dash-reactivate:hover { background: rgba(60, 200, 120, 0.24); }
+/* Permanent delete on an archived row: red and at FULL strength — here it is the
+   deliberate second step, not a quiet inline icon. Must out-rank `#dashTable
+   .dash-del` below, which sets opacity 0.35 at the same id-level specificity and
+   would otherwise win purely by appearing later in the file. */
+#dashTable .dash-arch-actions .btn.dash-del-final {
+  color: #ff9a9a; border-color: rgba(255, 90, 90, 0.55);
+  background: rgba(255, 90, 90, 0.12); opacity: 1;
+}
+#dashTable .dash-arch-actions .btn.dash-del-final:hover { background: rgba(255, 90, 90, 0.24); }
+/* The single 🗑 on a live row stays quiet until hovered so it never competes
+   with the numbers. */
+#dashTable .dash-del { opacity: 0.35; padding: 4px 8px; line-height: 1; }
 #dashTable tr:hover .dash-del { opacity: 1; }
-.dash-del:hover { color: #ff8b8b; border-color: rgba(255,139,139,0.5); }
+#dashTable .dash-del:hover { color: #ff8b8b; border-color: rgba(255,139,139,0.55); }
 
 /* ---------- GH-36: refresh + "last updated" stamp ---------- */
 .util-refreshbar {
