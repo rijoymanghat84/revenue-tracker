@@ -2098,6 +2098,16 @@ table.wb-cmp td.num { text-align: right; white-space: nowrap; }
 }
 .wb-cmp-act .btn:hover { background: var(--surface-6); border-color: var(--accent); color: var(--accent); }
 .wb-cmp-act .btn:active { transform: translateY(1px); }
+/* Move is the primary action and must not look like Remove. This rule has to
+   come AFTER `.wb-cmp-act .btn` — they tie on specificity (0,2,0), so source
+   order decides, and without it the flat fill above wins and both buttons
+   rendered identically (measured: both rgb(60,56,54)). */
+.wb-cmp-act .btn.primary {
+  background: rgba(var(--accent-rgb), 0.16);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.wb-cmp-act .btn.primary:hover { background: rgba(var(--accent-rgb), 0.28); color: var(--accent); }
 /* Destructive on purpose: removing someone from the comparison. */
 .wb-cmp-act .btn[data-act=unpick] { color: var(--muted); }
 .wb-cmp-act .btn[data-act=unpick]:hover {
