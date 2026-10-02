@@ -1482,6 +1482,27 @@ td.week .a-inp { text-align: center; }
  * left-aligned text, a hierarchy between name and title, and right-aligned
  * numbers so figures line up down the column instead of floating. */
 #wbTeamTable { width: 100%; table-layout: auto; }
+/* The load cell must never force the table wider than its pane. Measured before
+   this: table 1067px inside a 715px container, so Load and Status were cut off
+   and had to be scrolled to. The bar may shrink; the label stays readable. */
+#wbTeamTable .wb-loadcell { white-space: nowrap; }
+#wbTeamTable .wb-loadcell .bar { min-width: 54px; max-width: 150px; }
+#wbTeamTable th:last-child, #wbTeamTable td:last-child { width: 1%; }
+/* `.bar` / `.bar i` had NO CSS AT ALL (found 2026-10-02). loadBarHTML() emits
+   <div class="bar"><i class="hot|warn|booked">, and both tables that use it were
+   rendering a zero-height, background-less element — so the Load column showed a
+   silent gap where the bar should be, on the workbench AND on the resource list.
+   Styled to match the app's existing bar idiom (.wb-strip i.booked/…). */
+.bar {
+  display: inline-block; vertical-align: middle;
+  width: 92px; height: 7px; border-radius: 99px;
+  background: var(--surface-4); border: 1px solid var(--border);
+  overflow: hidden;
+}
+.bar i { display: block; height: 100%; border-radius: 99px; }
+.bar i.booked { background: var(--accent); }
+.bar i.warn { background: var(--amber); }
+.bar i.hot { background: var(--red); }
 #wbTeamTable thead th {
   text-align: left; padding: 9px 12px;
   font-size: 10.5px; letter-spacing: .06em;
