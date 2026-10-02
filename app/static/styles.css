@@ -1526,6 +1526,12 @@ td.week .a-inp { text-align: center; }
   text-align: left; vertical-align: middle;
   border-bottom: 1px solid var(--border);
   line-height: 1.45;
+  /* MUST be re-stated: the generic `tbody td { white-space: nowrap; height: 30px }`
+     at line ~513 exists for the dense week grid and still applies here. Without
+     this the name is clipped mid-word ("Ryan Verr") instead of wrapping —
+     measured. Height is released for the same reason: 30px is a grid row. */
+  white-space: normal;
+  height: auto;
 }
 #wbTeamTable tbody tr:last-child td { border-bottom: 0; }
 #wbTeamTable tbody tr:hover td { background: var(--surface-2); }
@@ -1585,6 +1591,32 @@ td.week .a-inp { text-align: center; }
   .wb-loadlist { height: calc(100dvh - 300px); }
 }
 .wb-load { border: 1px solid var(--border); border-radius: 11px; padding: 11px 13px; background: var(--surface-1); }
+/* Admin controls ON the card (2026-10-02). The master list is this card, so the
+   admin's edit surface has to sit inside it rather than on a separate page.
+   A tinted inset bar reads as "this is the control strip" without competing with
+   the person's name, and it uses theme tokens only — a hardcoded wash vanished
+   on the light themes. */
+.wb-admin { display: flex; flex-direction: column; gap: 5px; margin-top: 8px;
+  padding: 8px 10px; border-radius: 9px; background: var(--surface-3);
+  border: 1px dashed var(--border); }
+.wb-admin-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 11.5px; }
+.wb-adm-kv { display: inline-flex; align-items: center; gap: 4px; color: var(--text); }
+.wb-adm-kv b { font-weight: 700; }
+.wb-admin-actions { margin-left: auto; display: inline-flex; gap: 5px; }
+.wb-adm-projects { flex-wrap: wrap; }
+/* One chip per project the person is in, carrying the title booked there. */
+.wb-ptag { display: inline-block; padding: 1px 7px; border-radius: 999px;
+  background: var(--surface-4); border: 1px solid var(--border);
+  color: var(--muted); font-size: 11px; }
+.wb-ptag b { color: var(--text); font-weight: 700; }
+/* The Assign… project picker: a radio list, one row per project. */
+.wb-apick { display: flex; flex-direction: column; gap: 4px; max-height: 46vh; overflow-y: auto;
+  border: 1px solid var(--border); border-radius: 9px; padding: 6px; }
+.wb-apick-row { display: flex; align-items: center; gap: 9px; padding: 7px 9px;
+  border-radius: 7px; cursor: pointer; font-size: 12.5px; }
+.wb-apick-row:hover { background: var(--surface-3); }
+.wb-apick-row.on { opacity: .55; cursor: not-allowed; }
+.wb-apick-name { flex: 1 1 auto; }
 .wb-load .h { display: flex; align-items: center; gap: 10px; justify-content: space-between; margin-bottom: 7px; flex-wrap: wrap; }
 .wb-load .h b { font-size: 13px; }
 .wb-load .sub { font-size: 11px; color: var(--muted); }
