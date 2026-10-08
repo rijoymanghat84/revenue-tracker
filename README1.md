@@ -129,13 +129,13 @@ Columns: `Country | Client | Project | Resource(s) | Revenue (Onsite) | Expense 
   3. Principal Architect — (blank)
   4. Platform Developer — REDACTED / REDACTED
   5. Sr. Platform Developer — (blank)
-  6. Java Developer — 75 / 12
+  6. Java Developer — REDACTED / REDACTED
   7. Sr. Java Developer — (blank)
   8. Open text developer — REDACTED / REDACTED
   9. Sr. Open text developer — (blank)
-  10. PhP Developer — 52 / 52
+  10. PhP Developer — REDACTED / REDACTED
   11. Sr. PHP Developer — (blank)
-  12. BCC — 70 / 70
+  12. BCC — REDACTED / REDACTED
   13. QA — REDACTED / REDACTED
   14. QA Lead — (blank)
 - Columns: `Title | Rate | Offshore Rate | Currency | Used By | actions`

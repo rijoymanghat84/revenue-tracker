@@ -83,7 +83,7 @@ python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8802
   (health → silent; unhealthy → kill + relaunch + log to
   `logs/revenue-tracker-watchdog.log`)
 - **Data:** SQLite at `data/revenue.db`. Backed up with the regular Sunday
-  full-backup (it's under /opt/data).
+  full-backup (it's under <server-data-dir>).
 - **Run manually:** `cd <repo-dir> && /usr/bin/python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8802`
 
 ## API

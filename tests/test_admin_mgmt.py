@@ -13,7 +13,7 @@ import app.main as m
 # --- isolate DB ---
 tmp = tempfile.mkdtemp(prefix="rt-admin-test-")
 print("TMP:", tmp)
-os.environ["REVENUE_AUTH_USER"] = "admin"
+os.environ["REVENUE_AUTH_USER"] = "testadmin"
 os.environ["REVENUE_AUTH_PASSWORD"] = "super-secret"
 os.environ["REVENUE_DB_PASSWORD"] = ""          # plain DB for test
 m.DATA_DIR = Path(tmp)
@@ -50,7 +50,7 @@ def check(name, cond, extra=""):
         failures.append(name)
 
 # 1. super-admin login
-r = login("admin", "super-secret")
+r = login("testadmin", "super-secret")
 check("super-admin login 200", r.status_code == 200, f"got {r.status_code}")
 sa = cookie(r)
 me = client.get("/api/me", cookies=sa).json()

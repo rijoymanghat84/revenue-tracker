@@ -5,7 +5,7 @@ Covers:
   * /api/users returns PMs and admins in one list (as before), but the
     frontend now splits them; here we verify the role/super_admin flags drive
     that split.
-  * super_admin flag: True for admin, False for a regular admin.
+  * super_admin flag: True for testadmin, False for a regular admin.
   * A regular admin WITH the 'users' permission CAN create/edit/delete PMs.
   * A regular admin (even with 'users' perm) CANNOT create/edit/delete ADMINS
     (403) — only the owner can.
@@ -20,7 +20,7 @@ import app.main as m
 
 tmp = tempfile.mkdtemp(prefix="rt-issue4-test-")
 print("TMP:", tmp)
-os.environ["REVENUE_AUTH_USER"] = "admin"
+os.environ["REVENUE_AUTH_USER"] = "testadmin"
 os.environ["REVENUE_AUTH_PASSWORD"] = "super-secret"
 os.environ["REVENUE_DB_PASSWORD"] = ""
 m.DATA_DIR = Path(tmp)
@@ -52,17 +52,17 @@ def check(name, cond, extra=""):
     if not cond:
         failures.append(name)
 
-# --- setup: admin (super) + a regular admin (alice, with users perm) ---
-r = login("admin", "super-secret")
-check("admin login 200", r.status_code == 200, f"got {r.status_code}")
+# --- setup: testadmin (super) + a regular admin (alice, with users perm) ---
+r = login("testadmin", "super-secret")
+check("testadmin login 200", r.status_code == 200, f"got {r.status_code}")
 sa = cookie(r)
 me = client.get("/api/me", cookies=sa).json()
-check("admin is super_admin", me.get("super_admin") is True, f"super_admin={me.get('super_admin')}")
+check("testadmin is super_admin", me.get("super_admin") is True, f"super_admin={me.get('super_admin')}")
 
 r = client.post("/api/users", cookies=sa, json={
     "username": "alice", "password": "alicepw", "role": "admin",
     "permissions": ["users"], "projects": []})
-check("admin creates admin alice 200", r.status_code == 200, f"got {r.status_code} body={r.text}")
+check("testadmin creates admin alice 200", r.status_code == 200, f"got {r.status_code} body={r.text}")
 alice_id = r.json()["id"]
 
 r = login("alice", "alicepw")
@@ -104,7 +104,7 @@ r = client.put(f"/api/users/{pm_id}", cookies=alice, json={"role": "admin"})
 check("alice blocked from promoting a PM to admin", r.status_code == 403, f"got {r.status_code} body={r.text}")
 
 # --- 5. alice CANNOT delete an admin (403) ---
-# create a second admin first (by admin) so alice isn't the last admin
+# create a second admin first (by testadmin) so alice isn't the last admin
 r = client.post("/api/users", cookies=sa, json={
     "username": "bob", "password": "bobpw", "role": "admin", "permissions": []})
 bob_id = r.json()["id"]
@@ -122,15 +122,15 @@ r = client.post("/api/users", cookies=sa, json={
     "username": "dual", "password": "pw", "role": "admin", "permissions": []})
 check("'dual' as admin rejected 409 (one role per user)", r.status_code == 409, f"got {r.status_code} body={r.text}")
 
-# --- 7. admin (super-admin) CAN still do it all ---
+# --- 7. testadmin (super-admin) CAN still do it all ---
 r = client.post("/api/users", cookies=sa, json={
     "username": "dave", "password": "davepw", "role": "admin", "permissions": []})
-check("admin creates admin dave 200", r.status_code == 200, f"got {r.status_code}")
+check("testadmin creates admin dave 200", r.status_code == 200, f"got {r.status_code}")
 dave_id = r.json()["id"]
 r = client.put(f"/api/users/{dave_id}", cookies=sa, json={"permissions": ["dashboard"]})
-check("admin edits admin 200", r.status_code == 200, f"got {r.status_code}")
+check("testadmin edits admin 200", r.status_code == 200, f"got {r.status_code}")
 r = client.delete(f"/api/users/{dave_id}", cookies=sa)
-check("admin deletes admin 200", r.status_code == 200, f"got {r.status_code}")
+check("testadmin deletes admin 200", r.status_code == 200, f"got {r.status_code}")
 
 # --- user list splits correctly: roles present ---
 r = client.get("/api/users", cookies=sa).json()

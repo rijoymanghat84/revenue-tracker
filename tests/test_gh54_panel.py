@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import app.main as m
 
 tmp = tempfile.mkdtemp(prefix="rt-gh54-")
-os.environ["REVENUE_AUTH_USER"] = "admin"
+os.environ["REVENUE_AUTH_USER"] = "testadmin"
 os.environ["REVENUE_AUTH_PASSWORD"] = "super-secret"
 os.environ["REVENUE_DB_PASSWORD"] = ""
 m.DATA_DIR = Path(tmp)
@@ -44,7 +44,7 @@ def check(name, cond, extra=""):
         failures.append(name)
 
 
-r = client.post("/api/login", json={"username": "admin", "password": "super-secret"})
+r = client.post("/api/login", json={"username": "testadmin", "password": "super-secret"})
 check("login", r.status_code == 200 and r.json().get("super_admin"), str(r.status_code))
 cookie = {"rt_session": r.cookies["rt_session"]}
 weeks, _ = m._load_layout()
