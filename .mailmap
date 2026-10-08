@@ -1,0 +1,9 @@
+# Attribute agent-generated commits to the repository owner.
+# Without this, a commit authored as "Friday <friday@users.noreply.github.com>"
+# is credited by GitHub to the unrelated account github.com/friday (Albin Larsson).
+Rijoy Manghat <rijoymanghat@users.noreply.github.com> Friday <friday@users.noreply.github.com>
+Rijoy Manghat <rijoymanghat@users.noreply.github.com> Hermes Agent <hermes@users.noreply.github.com>
+Rijoy Manghat <rijoymanghat@users.noreply.github.com> Hermes <hermes@users.noreply.github.com>
+Rijoy Manghat <rijoymanghat@users.noreply.github.com> <friday@rijoybmanghat.com>
+Rijoy Manghat <rijoymanghat@users.noreply.github.com> <hermes@rijoybmanghat.com>
+Rijoy Manghat <rijoymanghat@users.noreply.github.com> <hermes@localhost>
